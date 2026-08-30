@@ -557,5 +557,13 @@
             android:exported="true"
             android:permission="android.permission.BIND_VOICE_INTERACTION" />
 
+        <!-- 3) MinisRecognitionService — satisfies the framework requirement
+             that a default assistant declare a recognitionService; delegates
+             to the system SpeechRecognizer. -->
+        <service
+            android:name=".assist.MinisRecognitionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_RECOGNITION_SERVICE" />
+
     </application>
 </manifest>

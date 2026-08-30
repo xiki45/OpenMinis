@@ -4,11 +4,13 @@
   Declares the assistant's capabilities:
    - supportsAssist=true → system calls AssistSession.onHandleAssist() with
      the current screen's AssistStructure + AssistContent.
-   - recognitionService → optional custom ASR. We leave it unset and reuse the
-     system SpeechRecognizer, so the system's default recognition is used.
+   - recognitionService → required by the framework for the ASSISTANT role
+     qualification; points at MinisRecognitionService, which delegates to the
+     system SpeechRecognizer (no self-built ASR).
 -->
 <voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:supportsAssist="true"
     android:supportsLaunchVoiceAssistFromKeyguard="false"
     android:supportsLocalInteraction="true"
-    android:sessionService=".assist.AssistSessionService" />
+    android:sessionService=".assist.AssistSessionService"
+    android:recognitionService=".assist.MinisRecognitionService" />
