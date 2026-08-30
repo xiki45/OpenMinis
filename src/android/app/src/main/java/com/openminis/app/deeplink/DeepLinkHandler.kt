@@ -93,6 +93,17 @@ sealed class DeepLinkAction {
         val title: String,
     ) : DeepLinkAction()
 
+    /**
+     * System-level Assist (default assistant): open a fresh chat and consume
+     * the pending assist context (screen snapshot) as the first user message.
+     *
+     * Encoded as `minis://assist`. The actual screen context rides
+     * [com.openminis.app.deeplink.DeepLinkCoordinator.pendingAssist] — the
+     * deep link itself carries no payload, it just lands the user in a new
+     * chat that then auto-sends the assist context.
+     */
+    data object OpenAssist : DeepLinkAction()
+
     data object Unknown : DeepLinkAction()
 }
 
@@ -120,6 +131,7 @@ object DeepLinkHandler {
                 "camera_chat" -> DeepLinkAction.NewCameraChat
                 else -> DeepLinkAction.Unknown
             }
+            "assist" -> DeepLinkAction.OpenAssist
             "settings" -> parseSettingsPath(uri)
             "session" -> {
                 // minis://session/<sessionId>                → OpenSession

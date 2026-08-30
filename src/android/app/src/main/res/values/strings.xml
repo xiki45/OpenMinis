@@ -1678,4 +1678,9 @@
     <string name="browser_downloads_failed">Failed</string>
     <string name="browser_downloads_open">Open</string>
     <string name="provider_no_key_required">No key required</string>
+
+    <!-- System-level Assist (default assistant) -->
+    <string name="minis_assistant_label">Minis 助理</string>
+    <string name="assist_service_summary">在系统里把 Minis 设为默认数字助理后，长按 Home / 上滑手势即可唤起，Minis 会读取当前屏幕并给出智能响应。</string>
+    <string name="assist_service_description">作为 Android 系统默认助理，Minis 能读取当前屏幕上下文（AssistStructure）并交给 AI 智能体处理。</string>
 </resources>

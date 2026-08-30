@@ -881,6 +881,21 @@ fun ChatScreen(
         }
     }
 
+    // System-level Assist: when minis was invoked as the default assistant
+    // (long-press Home / gesture), the VoiceInteraction session stashed the
+    // current screen context in DeepLinkCoordinator.pendingAssist and opened
+    // this fresh chat. Consume it exactly once and send it as the user message
+    // so the agent responds to what the user was looking at.
+    LaunchedEffect(sessionId) {
+        val assist = com.openminis.app.deeplink.DeepLinkCoordinator
+            .pendingAssist.value
+        if (!assist.isNullOrBlank()) {
+            com.openminis.app.deeplink.DeepLinkCoordinator
+                .consumePendingAssist()
+            viewModel.sendMessage(assist)
+        }
+    }
+
     // File picker launcher — T129: multi-select via OpenMultipleDocuments
     // (GetContent has no multi-select equivalent). The launch arg is now a
     // mime-type array; "*/*" stays as the wildcard. Selections above

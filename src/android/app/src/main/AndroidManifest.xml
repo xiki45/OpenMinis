@@ -525,5 +525,37 @@
                 android:resource="@xml/minis_accessibility_service" />
         </service>
 
+        <!-- ============================================================
+             System-level Assist (default assistant)
+             Lets the user set Minis as the system default assistant
+             (Settings → Apps → Default apps → Digital assistant).
+             Long-press Home / gesture → onShowSession + onHandleAssist,
+             which snapshots the current screen into the agent.
+             ============================================================ -->
+        <!-- 1) VoiceInteractionService — the "default assistant" entry point.
+             The system binds here and calls onShowSession() when the user
+             invokes the assistant gesture. BIND_VOICE_INTERACTION is what
+             makes the system treat it as a candidate default assistant. -->
+        <service
+            android:name=".assist.AssistService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:label="@string/minis_assistant_label">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service" />
+        </service>
+
+        <!-- 2) VoiceInteractionSessionService — creates an AssistSession per
+             invocation; receives the onHandleAssist(AssistStructure, ...)
+             callback with the current screen. -->
+        <service
+            android:name=".assist.AssistSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+
     </application>
 </manifest>

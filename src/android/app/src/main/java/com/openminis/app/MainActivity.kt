@@ -738,7 +738,8 @@ class MainActivity : ComponentActivity() {
             // the corresponding UI on first compose.
             is DeepLinkAction.NewChat,
             is DeepLinkAction.NewVoiceChat,
-            is DeepLinkAction.NewCameraChat -> {
+            is DeepLinkAction.NewCameraChat,
+            is DeepLinkAction.OpenAssist -> {
                 when (action) {
                     is DeepLinkAction.NewVoiceChat -> DeepLinkCoordinator
                         .setPendingChatAction(DeepLinkCoordinator.ChatAction.START_VOICE)
