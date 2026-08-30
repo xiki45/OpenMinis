@@ -482,9 +482,18 @@ class MainActivity : ComponentActivity() {
         // while inside a chat, synthesise an OpenSession deep-link so
         // the navigation stack lands on that chat instead of the
         // sessions list. T166.
+        //
+        // [T-system-assist] A VOICE_ASSIST / ASSIST activity entry (the
+        // .MainActivityVoiceAssist alias — ROM gesture/hardware-key route)
+        // carries no minis:// data, so DeepLinkHandler.parse yields Unknown.
+        // Route it to OpenAssist (new chat) explicitly, mirroring the runtime
+        // onNewIntent path, so a cold-start via the gesture also lands on a
+        // fresh chat that consumes any pendingAssist context.
         val explicitDeepLink = DeepLinkHandler.parse(intent?.data)
         val launchDeepLink = if (explicitDeepLink !is DeepLinkAction.Unknown) {
             explicitDeepLink
+        } else if (isAssistEntryIntent(intent)) {
+            DeepLinkAction.OpenAssist
         } else {
             restoredChatSessionId
                 ?.let { DeepLinkAction.OpenSession(it) }
@@ -689,12 +698,37 @@ class MainActivity : ComponentActivity() {
         if (intent.getBooleanExtra("shared_content", false)) {
             com.openminis.app.share.ShareCoordinator.processPendingShare(this)
         }
-        handleDeepLink(intent.data)
+        handleDeepLink(intent)
     }
 
-    private fun handleDeepLink(uri: Uri?) {
-        val action = DeepLinkHandler.parse(uri)
+    /**
+     * [T-system-assist] True when [intent] arrived through the
+     * `.MainActivityVoiceAssist` activity-alias — i.e. the system invoked us
+     * as the default assistant via `android.intent.action.VOICE_ASSIST` /
+     * `android.intent.action.ASSIST` (ROM gesture-bar / hardware-key route).
+     * Excludes genuine `minis://` deep-links so those keep their dedicated
+     * dispatch. Mirrors the iOS `ACTION_VOICE_ASSIST` / `ACTION_ASSIST`
+     * handling in AppDelegate.
+     */
+    private fun isAssistEntryIntent(intent: Intent?): Boolean {
+        val action = intent?.action
+        if (action != Intent.ACTION_ASSIST && action != Intent.ACTION_VOICE_ASSIST) return false
+        val uri = intent.data
+        return uri == null || uri.scheme != "minis"
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
         val nav = navController ?: return
+        // [T-system-assist] A VOICE_ASSIST / ASSIST activity entry carries no
+        // minis:// data; fold it into OpenAssist so it reuses the exact same
+        // "new chat" navigation path (ChatScreen consumes
+        // DeepLinkCoordinator.pendingAssist if the VIS path wrote context
+        // first, otherwise it's a plain new session).
+        val action = if (isAssistEntryIntent(intent)) {
+            DeepLinkAction.OpenAssist
+        } else {
+            DeepLinkHandler.parse(intent?.data)
+        }
         when (action) {
             is DeepLinkAction.OpenTerminal -> {
                 nav.navigate(Routes.terminal(action.initCommand))

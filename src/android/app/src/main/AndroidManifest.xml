@@ -250,6 +250,35 @@
                 android:resource="@xml/shortcuts" />
         </activity-alias>
 
+        <!-- [T-system-assist] System-assistant activity entry (ROM gesture /
+             hardware-key path). On ROMs such as HyperOS / Android 15 the long-
+             press gesture-bar invokes the default assistant via an *activity*
+             route: the framework resolves `android.intent.action.VOICE_ASSIST`
+             against the default-assistant package and startActivity's the
+             matching entry activity. The VIS (onHandleAssist) path is not
+             invoked on that gesture on these ROMs, so without a declared entry
+             activity the framework falls back to Google's (which may not even
+             run on the user's device — presenting as "nothing happens").
+             Declaring VOICE_ASSIST + ASSIST here lets Minis be that entry
+             activity; MainActivity treats both actions the same as
+             DeepLinkAction.OpenAssist (new chat, consuming any
+             DeepLinkCoordinator.pendingAssist context if the VIS path happened
+             to write one first). -->
+        <activity-alias
+            android:name=".MainActivityVoiceAssist"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
         <!-- Share receiver activity -->
         <activity
             android:name=".share.ShareReceiverActivity"
