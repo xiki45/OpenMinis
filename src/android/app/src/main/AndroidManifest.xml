@@ -581,10 +581,24 @@
         <!-- 2) VoiceInteractionSessionService — creates an AssistSession per
              invocation; receives the onHandleAssist(AssistStructure, ...)
              callback with the current screen. -->
+        <!-- T-system-assist: the framework binds the *session* service with
+             android.service.voice.VoiceInteractionService action too (in
+             addition to the AssistService itself). On Android 15 an intent-filter
+             declaring that action is required for the bind to resolve; without
+             it ActivityManager logs "Unable to start service ... not found" /
+             VoiceInteractionServiceManager "Failed binding to voice interaction
+             session service" and the gesture never opens a session. Mirrors how
+             Google's GsaVoiceInteractionSessionService declares the filter.
+             Only the action is needed — no BIND_VOICE_INTERACTION effect here,
+             it merely makes the service resolvable via that action. -->
         <service
             android:name=".assist.AssistSessionService"
             android:exported="true"
-            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
 
         <!-- 3) MinisRecognitionService — satisfies the framework requirement
              that a default assistant declare a recognitionService; delegates
