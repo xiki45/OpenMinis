@@ -94,7 +94,7 @@ object AssistContext {
             val label = when {
                 !text.isNullOrBlank() && !desc.isNullOrBlank() -> "$text ($desc)"
                 !text.isNullOrBlank() -> text
-                else -> desc
+                else -> desc!!
             }
             if (label.isNotBlank()) {
                 out.append("  ".repeat(depth.coerceAtMost(8)))
