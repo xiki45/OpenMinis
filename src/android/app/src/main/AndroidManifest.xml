@@ -608,5 +608,18 @@
             android:exported="true"
             android:permission="android.permission.BIND_RECOGNITION_SERVICE" />
 
+        <!-- [T-system-assist] AssistTriggerService —承接 OEM 私有手势配置的
+             startService 唤起。HyperOS 的手势条配置
+             `entity_config_key_voice_assistant`（Settings.Secure JSON）里
+             `pkgName`/`clazzName` 原本指向小米自家的
+             com.xiaomi.voiceassistant.VoiceService（一个被系统 startService
+             的服务）；改写为指向本服务后，系统以 startService 唤起它，再由它
+             打开 MainActivity 的 ACTION_ASSIST 入口（新会话）。
+             exported=true 且不加任何权限：系统进程要以 startService 方式调用，
+             签名权限会挡住系统；风险仅为第三方也可唤起 Minis 界面，属可接受。 -->
+        <service
+            android:name=".assist.AssistTriggerService"
+            android:exported="true" />
+
     </application>
 </manifest>
