@@ -712,7 +712,10 @@ class MainActivity : ComponentActivity() {
      */
     private fun isAssistEntryIntent(intent: Intent?): Boolean {
         val action = intent?.action
-        if (action != Intent.ACTION_ASSIST && action != Intent.ACTION_VOICE_ASSIST) return false
+        // ACTION_VOICE_ASSIST has no public Java constant on Intent
+        // (only ACTION_ASSIST does), so match the raw action string here —
+        // mirroring the value declared in the .MainActivityVoiceAssist alias.
+        if (action != Intent.ACTION_ASSIST && action != "android.intent.action.VOICE_ASSIST") return false
         val uri = intent.data
         return uri == null || uri.scheme != "minis"
     }
