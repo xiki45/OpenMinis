@@ -67,9 +67,19 @@ object AssistCapture {
         }
         val now = System.currentTimeMillis()
         if (now - lastRequestAt < REQUEST_DEDUPE_MS) return false  // 冷/热启动双入口与手势双击去重
-        if (!isA11yServiceEnabled(context)) {
-            AppLogger.warning(TAG, "a11y service not enabled in system settings; skip assist screenshot")
+        // [T-assist-screenshot] 判定放宽为「settings 认账 或 服务实例在手」：
+        // HyperOS 上 root 重写 enabled_accessibility_services 后，服务可能仍以
+        // 旧绑定存活（可正常 takeScreenshot），但 settings 读取与真实授权状态
+        // 分叉（实测：settings 查不到、截图却一直可用；反向亦然）。以实例为准
+        // 兜底，避免误杀可用路径；两者皆无才真正跳过。
+        val inSettings = isA11yServiceEnabled(context)
+        val hasInstance = MinisAccessibilityService.getInstance() != null
+        if (!inSettings && !hasInstance) {
+            AppLogger.warning(TAG, "a11y service not enabled and no live instance; skip assist screenshot")
             return false
+        }
+        if (!inSettings && hasInstance) {
+            AppLogger.warning(TAG, "a11y missing in settings but live instance exists; proceeding")
         }
         lastRequestAt = now
         val appContext = context.applicationContext
