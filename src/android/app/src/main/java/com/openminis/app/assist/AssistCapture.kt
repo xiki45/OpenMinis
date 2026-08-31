@@ -33,6 +33,13 @@ object AssistCapture {
     private const val KEEP_SHOTS = 3
     private const val REQUEST_DEDUPE_MS = 2_000L
 
+    /**
+     * 配套模块 [minis-assist-hook](https://github.com/xiki45/minis-assist-hook) v2.1+
+     * 拉起时附带的触发源判定：长按电源键（快速提问）= false，双击小白条等手势 = true。
+     * 无该 extra（旧模块 / 标准框架路线 / startService 路线）时默认截图。
+     */
+    const val EXTRA_ATTACH_SCREEN = "com.openminis.hook.attach_screen"
+
     fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .getBoolean(KEY_ATTACH_SCREEN, true)
@@ -45,10 +52,19 @@ object AssistCapture {
     @Volatile private var pending: CompletableDeferred<File?>? = null
     @Volatile private var lastRequestAt = 0L
 
-    /** HyperOS 路线：尽早发射一次无障碍截屏；返回是否真的发射了。 */
-    fun requestIfEnabled(context: Context): Boolean {
+    /** HyperOS 路线：尽早发射一次无障碍截屏；返回是否真的发射了。
+     *  [trigger] 为唤起 intent：配套模块可经 [EXTRA_ATTACH_SCREEN]=false
+     *  声明本次触发源不需要截图（如长按电源键）。无该 extra 时默认截图。 */
+    fun requestIfEnabled(context: Context, trigger: android.content.Intent? = null): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         if (!isEnabled(context)) return false
+        // [T-assist-screenshot] 触发源判定：配套模块已声明本次不截图则直接跳过。
+        if (trigger != null && trigger.hasExtra(EXTRA_ATTACH_SCREEN)
+            && !trigger.getBooleanExtra(EXTRA_ATTACH_SCREEN, true)
+        ) {
+            AppLogger.info(TAG, "trigger source opted out of screenshot (EXTRA_ATTACH_SCREEN=false)")
+            return false
+        }
         val now = System.currentTimeMillis()
         if (now - lastRequestAt < REQUEST_DEDUPE_MS) return false  // 冷/热启动双入口与手势双击去重
         if (!isA11yServiceEnabled(context)) {

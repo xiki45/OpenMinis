@@ -495,7 +495,7 @@ class MainActivity : ComponentActivity() {
         } else if (isAssistEntryIntent(intent)) {
             // [T-assist-screenshot] HyperOS 路线冷启动入口：窗口尚未上屏，
             // 在此尽早发射无障碍截屏，供 ChatScreen 首条消息附带。
-            com.openminis.app.assist.AssistCapture.requestIfEnabled(this)
+            com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
             // [T-assist-screenshot] HyperOS 路线没有 AssistSession 写 pendingAssist，
             // 这里放一个空占位作为"本次新会话是 assist 唤起"的消费门闩：
             // ChatScreen 见到它才会去等在途截图并注入，普通手开会话不受影响。
@@ -731,7 +731,7 @@ class MainActivity : ComponentActivity() {
         val nav = navController ?: return
         // [T-assist-screenshot] 热启动 assist 入口同样尽早发射截屏（窗口上屏前）。
         if (isAssistEntryIntent(intent)) {
-            com.openminis.app.assist.AssistCapture.requestIfEnabled(this)
+            com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
             // 空占位门闩，语义同冷启动路径。
             com.openminis.app.deeplink.DeepLinkCoordinator.setPendingAssist(null)
         }

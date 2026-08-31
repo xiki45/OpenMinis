@@ -27,7 +27,8 @@ class AssistTriggerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         AppLogger.info(TAG, "onStartCommand invoked by system startService")
         // [T-assist-screenshot] service 路径无窗口，这里发射截屏时机甚至比 activity 更早。
-        AssistCapture.requestIfEnabled(applicationContext)
+        // 透传触发 intent：若携带 EXTRA_ATTACH_SCREEN=false 则同样不截图。
+        AssistCapture.requestIfEnabled(applicationContext, intent)
         try {
             // 构造指向 MainActivity 的 Intent，action 用 ACTION_ASSIST：
             // MainActivity 的 isAssistEntryIntent 会按 assist 入口打开新会话。
@@ -38,6 +39,13 @@ class AssistTriggerService : Service() {
                         Intent.FLAG_ACTIVITY_SINGLE_TOP or
                         Intent.FLAG_ACTIVITY_CLEAR_TOP,
                 )
+            // 透传触发源的截图开关判定，避免 MainActivity 侧重复发射时丢失该信号。
+            if (intent != null && intent.hasExtra(AssistCapture.EXTRA_ATTACH_SCREEN)) {
+                launcher.putExtra(
+                    AssistCapture.EXTRA_ATTACH_SCREEN,
+                    intent.getBooleanExtra(AssistCapture.EXTRA_ATTACH_SCREEN, true),
+                )
+            }
             startActivity(launcher)
             AppLogger.info(TAG, "launched MainActivity assist entry")
         } catch (t: Throwable) {

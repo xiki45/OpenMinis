@@ -111,9 +111,11 @@ unzip -l app-debug.apk | grep -E "alpine-minirootfs|libproot"
 
 **HyperOS（小米/红米）注意**：
 - 手势派发被硬编码到小爱私有通道，改默认助理无效。
-  需配套 LSPosed 模块 **<https://github.com/xiki45/minis-assist-hook>**：
-  在系统手势唤起小爱时重定向到 Minis（双击小白条 / 长按电源键直接全屏打开，
-  并在窗口上屏前完成截屏）。
+  需配套 LSPosed 模块 **<https://github.com/xiki45/minis-assist-hook>**（v2.1+）：
+  在系统手势唤起小爱时重定向到 Minis（双击小白条 / 长按电源键直接全屏打开）。
+- **触发源差异化取屏**（hook v2.1 起）：双击小白条 = 屏幕即现场 → 自动附截图；
+  长按电源键 = 快速提问 → 不附截图。hook 经 `com.openminis.hook.attach_screen`
+  extra 传递判定，缺失时默认附截图（兼容旧模块 / 标准路线）。
 - **每次更新/重装/强行停止（force-stop）本应用后，HyperOS（及 Android 12+ 通用行为）
   会解除无障碍服务绑定**（设置项可能还在但实际未绑定，
   表现为唤起不再附带截图）。修复：系统无障碍设置里把 Minis 的开关关一次再打开
