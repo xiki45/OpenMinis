@@ -86,23 +86,28 @@ object DeepLinkCoordinator {
     }
 
     /**
-     * System-level Assist: screen context injected from AssistSession
-     * (VoiceInteractionSession). Set when the user invokes minis as the
-     * default assistant; a freshly-opened ChatScreen consumes it exactly
-     * once and sends it as a user message to the agent.
+     * System-level Assist: screen context (and optionally a screenshot path)
+     * injected from AssistSession (VoiceInteractionSession) or the HyperOS
+     * route. Set when the user invokes minis as the default assistant; a
+     * freshly-opened ChatScreen consumes it exactly once and sends it as a
+     * user message to the agent, attaching the screenshot if present.
      *
+     * [screenshotPath] is the absolute path of a cached screenshot the agent
+     * should attach so it can respond to what the user was looking at.
      * Mirrors the `pendingChatAction` pattern — the VoiceInteraction flow
      * (App→agent direction) rides the same "deep-link + pending side-effect"
      * mechanism the existing quick-actions use.
      */
-    private val _pendingAssist = MutableStateFlow<String?>(null)
-    val pendingAssist: StateFlow<String?> = _pendingAssist.asStateFlow()
+    data class PendingAssist(val text: String?, val screenshotPath: String? = null)
 
-    fun setPendingAssist(context: String) {
-        _pendingAssist.value = context
+    private val _pendingAssist = MutableStateFlow<PendingAssist?>(null)
+    val pendingAssist: StateFlow<PendingAssist?> = _pendingAssist.asStateFlow()
+
+    fun setPendingAssist(text: String?, screenshotPath: String? = null) {
+        _pendingAssist.value = PendingAssist(text, screenshotPath)
     }
 
-    fun consumePendingAssist(): String? {
+    fun consumePendingAssist(): PendingAssist? {
         val current = _pendingAssist.value
         _pendingAssist.value = null
         return current

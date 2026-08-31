@@ -881,18 +881,34 @@ fun ChatScreen(
         }
     }
 
-    // System-level Assist: when minis was invoked as the default assistant
-    // (long-press Home / gesture), the VoiceInteraction session stashed the
-    // current screen context in DeepLinkCoordinator.pendingAssist and opened
-    // this fresh chat. Consume it exactly once and send it as the user message
-    // so the agent responds to what the user was looking at.
+    // System-level Assist: when minis was invoked as the default assistant or via
+    // the HyperOS hook route, the entry stashed screen context (and possibly an
+    // in-flight accessibility screenshot) in DeepLinkCoordinator. Consume it
+    // exactly once; attach the screenshot (if any) and send as the first message
+    // so the agent responds to what the user was looking at. [T-assist-screenshot]
     LaunchedEffect(sessionId) {
-        val assist = com.openminis.app.deeplink.DeepLinkCoordinator
-            .pendingAssist.value
-        if (!assist.isNullOrBlank()) {
-            com.openminis.app.deeplink.DeepLinkCoordinator
-                .consumePendingAssist()
-            viewModel.sendMessage(assist)
+        val pending = com.openminis.app.deeplink.DeepLinkCoordinator
+            .pendingAssist.value ?: return@LaunchedEffect
+        // HyperOS 路线在入口发射了无障碍截屏，这里等它落盘（有界超时，失败得 null）。
+        val shot = pending.screenshotPath?.let { p -> java.io.File(p).takeIf { it.exists() } }
+            ?: com.openminis.app.assist.AssistCapture.awaitPendingShot()
+        com.openminis.app.deeplink.DeepLinkCoordinator.consumePendingAssist()
+        var attached = false
+        if (shot != null) {
+            attached = viewModel.addAttachmentFromStagedShare(shot) != null
+            com.openminis.app.logging.AppLogger.info(
+                "AssistInject", "screenshot attached=$attached file=${shot.name}",
+            )
+            shot.delete()  // addAttachmentFromStagedShare 内部已拷入私有目录，源文件可删
+        } else {
+            com.openminis.app.logging.AppLogger.info(
+                "AssistInject", "no screenshot available; text-only or empty",
+            )
+        }
+        val text = pending.text
+        when {
+            !text.isNullOrBlank() -> viewModel.sendMessage(text)
+            attached -> viewModel.sendMessage("")  // T180：纯附件发送
         }
     }
 

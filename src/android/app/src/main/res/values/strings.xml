@@ -303,6 +303,7 @@
     <string name="settings_storage_subtitle">Manage Alpine Linux rootfs and browse files</string>
     <string name="settings_section_permissions">Permissions</string>
     <string name="settings_permissions_subtitle">Control agent access to privacy-sensitive features</string>
+    <string name="settings_system_permissions_subtitle">Accessibility service status and assistant screenshot settings</string>
     <string name="settings_section_logs">Logs</string>
     <string name="settings_logs_subtitle">View and export app logs</string>
     <string name="settings_section_about">About</string>
@@ -1664,6 +1665,9 @@
     <string name="voice_correction_clear_title">Clear all collected voice correction data?</string>
     <string name="voice_correction_clear">Clear All</string>
     <string name="voice_correction_cleared">Voice correction data cleared</string>
+    <string name="assist_screenshot_section">System Assist</string>
+    <string name="assist_screenshot_toggle">Attach current screen when invoked</string>
+    <string name="assist_screenshot_footer">When launched as the system assistant (gesture / hardware key), automatically attach a screenshot of the current screen to the new conversation. Requires the accessibility service; secure screens (banking apps etc.) cannot be captured and silently fall back.</string>
     <string name="voice_provider_system">System</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — sign in with your Kimi account</string>
     <string name="kimi_login_title">Sign in with Kimi Code</string>

@@ -26,6 +26,8 @@ class AssistTriggerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         AppLogger.info(TAG, "onStartCommand invoked by system startService")
+        // [T-assist-screenshot] service 路径无窗口，这里发射截屏时机甚至比 activity 更早。
+        AssistCapture.requestIfEnabled(applicationContext)
         try {
             // 构造指向 MainActivity 的 Intent，action 用 ACTION_ASSIST：
             // MainActivity 的 isAssistEntryIntent 会按 assist 入口打开新会话。

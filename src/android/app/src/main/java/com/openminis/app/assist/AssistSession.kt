@@ -3,7 +3,10 @@ package com.openminis.app.assist
 import android.app.assist.AssistContent
 import android.app.assist.AssistStructure
 import android.content.Intent
+import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.service.voice.VoiceInteractionSession
 import com.openminis.app.deeplink.DeepLinkCoordinator
 import com.openminis.app.logging.AppLogger
@@ -23,15 +26,37 @@ import com.openminis.app.logging.AppLogger
  *   4. ChatScreen 首次 compose 消费 pendingAssist → ChatViewModel.sendMessage(ctx)
  *
  * 这样 agent 就能看到"用户此刻在看什么"，直接给出情境化响应。
+ *
+ * [T-assist-screenshot] 截图来源：系统以 SHOW_WITH_SCREENSHOT 展示会话时，
+ * [onHandleScreenshot] 会收到当前屏幕位图；[handoff] 里经
+ * [AssistCapture.saveFrameworkShot] 落盘后，路径一并放进 pendingAssist，
+ * 让新对话首条消息同时附带该图（HyperOS hook/startService 路线则改由
+ * [AssistCapture] 用无障碍服务自行截屏）。
  */
 class AssistSession(context: android.content.Context) :
     VoiceInteractionSession(context) {
 
     private val TAG = "AssistSession"
 
+    // [T-assist-screenshot] 标准路线：等待 onHandleScreenshot 的屏幕位图到达。
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var frameworkShot: Bitmap? = null
+    private var showWithScreenshot = false
+    private var handedOff = false
+    private val SCREENSHOT_WAIT_MS = 350L
+
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        // [T-assist-screenshot] 系统以 SHOW_WITH_SCREENSHOT 展示会话时，会随后
+        // 经 onHandleScreenshot 推送屏幕位图；据此决定是否在 handoff 前等待截图。
+        showWithScreenshot = (showFlags and VoiceInteractionSession.SHOW_WITH_SCREENSHOT) != 0
         AppLogger.info(TAG, "session shown")
+    }
+
+    override fun onHandleScreenshot(screenshot: Bitmap?) {
+        super.onHandleScreenshot(screenshot)
+        // [T-assist-screenshot] 标准框架路线：接收系统推送的当前屏幕位图。
+        if (screenshot != null) frameworkShot = screenshot
     }
 
     override fun onHandleAssist(
@@ -43,19 +68,32 @@ class AssistSession(context: android.content.Context) :
         AppLogger.info(TAG, "onHandleAssist called")
 
         val ctx = AssistContext.flatten(structure, content)
-        if (ctx.isBlank()) {
-            AppLogger.warning(TAG, "no usable assist context")
+        if (ctx.isBlank()) AppLogger.warning(TAG, "no usable assist context")
+
+        // [T-assist-screenshot] 不再立即 finish：若系统承诺推送截图且尚未到达，
+        // 短暂等待一帧，随后统一 handoff（含/不含截图）。
+        val waitMs = if (showWithScreenshot && frameworkShot == null) SCREENSHOT_WAIT_MS else 0L
+        mainHandler.postDelayed({ handoff(ctx) }, waitMs)
+    }
+
+    /** [T-assist-screenshot] 统一交接点：落盘截图（如有）→ 暂存 pendingAssist → 拉起 chat。 */
+    private fun handoff(ctx: String) {
+        if (handedOff) return
+        handedOff = true
+        var shotPath: String? = null
+        val shot = frameworkShot
+        if (shot != null && AssistCapture.isEnabled(context)) {
+            shotPath = AssistCapture.saveFrameworkShot(context, shot)?.absolutePath
+        }
+        shot?.recycle()
+        frameworkShot = null
+        if (ctx.isBlank() && shotPath == null) {
+            AppLogger.warning(TAG, "no assist context and no screenshot; nothing to hand off")
             finish()
             return
         }
-
-        // 1) 暂存为待注入的 assist 消息
-        DeepLinkCoordinator.setPendingAssist(ctx)
-
-        // 2) 打开 minis 主界面进入 chat（复用现有深链导航）
+        DeepLinkCoordinator.setPendingAssist(ctx.takeIf { it.isNotBlank() }, shotPath)
         launchMinisChat()
-
-        // 3) 关闭 voice session（UI 交接给 minis chat 会话）
         finish()
     }
 

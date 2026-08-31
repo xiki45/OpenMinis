@@ -171,6 +171,8 @@
     <string name="settings_storage_subtitle">管理 Alpine Linux rootfs 并浏览文件</string>
     <string name="settings_section_permissions">权限</string>
     <string name="settings_permissions_subtitle">控制 agent 对隐私敏感功能的访问</string>
+    <string name="settings_system_permissions_subtitle">无障碍服务状态与助理截屏设置</string>
+    <string name="system_permissions_title">系统权限</string>
     <string name="settings_section_logs">日志</string>
     <string name="settings_logs_subtitle">查看与导出应用日志</string>
     <string name="settings_section_about">关于</string>
@@ -1480,6 +1482,9 @@
     <string name="voice_correction_clear_title">清除所有已收集的语音纠错数据？</string>
     <string name="voice_correction_clear">全部清除</string>
     <string name="voice_correction_cleared">语音纠错数据已清除</string>
+    <string name="assist_screenshot_section">系统助理</string>
+    <string name="assist_screenshot_toggle">助理唤起时附带当前屏幕</string>
+    <string name="assist_screenshot_footer">被手势/按键作为系统助理唤起时，自动截一张当前屏幕附进新对话。需要无障碍服务；安全界面（银行类应用等）无法截取，会自动静默降级。</string>
     <string name="voice_provider_system">系统</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — 使用 Kimi 账号登录</string>
     <string name="kimi_login_title">使用 Kimi Code 登录</string>

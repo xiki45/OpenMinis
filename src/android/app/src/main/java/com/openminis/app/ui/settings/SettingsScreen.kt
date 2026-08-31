@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Accessibility
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.BatteryFull
@@ -87,6 +88,9 @@ fun SettingsScreen(
     // the route yet.
     onSoulClick: () -> Unit = {},
     onPermissionsClick: () -> Unit = {},
+    // [T-assist-screenshot] 系统权限页（无障碍服务状态 + 助理截图开关）。
+    // 该路由此前在 AppNavigation 注册但无入口；这里补上。
+    onSystemPermissionsClick: () -> Unit = {},
     onUsageClick: () -> Unit = {},
     onAppearanceClick: () -> Unit = {},
     onLogsClick: () -> Unit = {},
@@ -248,6 +252,14 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_section_permissions),
                     subtitle = stringResource(R.string.settings_permissions_subtitle),
                     onClick = onPermissionsClick,
+                )
+                // [T-assist-screenshot] 系统权限页：无障碍服务状态 + 助理唤起截图开关。
+                SettingsItem(
+                    icon = Icons.Outlined.Accessibility,
+                    iconColor = Color(0xFF34C759),
+                    title = stringResource(R.string.system_permissions_title),
+                    subtitle = stringResource(R.string.settings_system_permissions_subtitle),
+                    onClick = onSystemPermissionsClick,
                     showDivider = false,
                 )
             }

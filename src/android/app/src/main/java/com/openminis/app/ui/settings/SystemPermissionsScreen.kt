@@ -18,6 +18,7 @@ import androidx.compose.material.icons.outlined.Accessibility
 import androidx.compose.material.icons.outlined.BatteryAlert
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.Screenshot
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -123,6 +124,26 @@ fun SystemPermissionsScreen(onBack: () -> Unit) {
                     else
                         stringResource(R.string.system_permissions_a11y_disabled),
                     onClick = { openAccessibilitySettings(context) },
+                    showDivider = false,
+                )
+            }
+
+            // [T-assist-screenshot] 助理唤起时是否附带当前屏幕截图。
+            var assistShotEnabled by remember {
+                mutableStateOf(com.openminis.app.assist.AssistCapture.isEnabled(context))
+            }
+            SettingsSection(
+                header = stringResource(R.string.assist_screenshot_section),
+                footer = stringResource(R.string.assist_screenshot_footer),
+            ) {
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Screenshot,
+                    title = stringResource(R.string.assist_screenshot_toggle),
+                    checked = assistShotEnabled,
+                    onCheckedChange = { on ->
+                        assistShotEnabled = on
+                        com.openminis.app.assist.AssistCapture.setEnabled(context, on)
+                    },
                     showDivider = false,
                 )
             }
