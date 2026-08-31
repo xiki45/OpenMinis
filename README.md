@@ -114,7 +114,8 @@ unzip -l app-debug.apk | grep -E "alpine-minirootfs|libproot"
   需配套 LSPosed 模块 **<https://github.com/xiki45/minis-assist-hook>**：
   在系统手势唤起小爱时重定向到 Minis（双击小白条 / 长按电源键直接全屏打开，
   并在窗口上屏前完成截屏）。
-- **每次更新/重装本应用后，HyperOS 会解除无障碍服务绑定**（设置项还在但实际未绑定，
+- **每次更新/重装/强行停止（force-stop）本应用后，HyperOS（及 Android 12+ 通用行为）
+  会解除无障碍服务绑定**（设置项可能还在但实际未绑定，
   表现为唤起不再附带截图）。修复：系统无障碍设置里把 Minis 的开关关一次再打开
   （应用内 系统权限 页会显示状态与修复指引）。
 
