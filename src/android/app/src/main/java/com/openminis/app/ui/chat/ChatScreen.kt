@@ -884,8 +884,12 @@ fun ChatScreen(
     // System-level Assist: when minis was invoked as the default assistant or via
     // the HyperOS hook route, the entry stashed screen context (and possibly an
     // in-flight accessibility screenshot) in DeepLinkCoordinator. Consume it
-    // exactly once; attach the screenshot (if any) and send as the first message
-    // so the agent responds to what the user was looking at. [T-assist-screenshot]
+    // exactly once. [T-assist-screenshot]
+    //
+    // 分发语义（2026-09-01 改版：截图改为"待发附件"，不再自动发送）：
+    //  - 截图 → 只挂上附件 chip（可删、随用户下一次发送生效），让用户能带图提问；
+    //  - 标准路线的屏幕文本上下文 → 保持自动发送（轻量、即时，与原设计一致）；
+    //  - 纯手势唤起（无文本无截图）→ 只打开新会话，不打扰。
     LaunchedEffect(sessionId) {
         val pending = com.openminis.app.deeplink.DeepLinkCoordinator
             .pendingAssist.value ?: return@LaunchedEffect
@@ -893,11 +897,10 @@ fun ChatScreen(
         val shot = pending.screenshotPath?.let { p -> java.io.File(p).takeIf { it.exists() } }
             ?: com.openminis.app.assist.AssistCapture.awaitPendingShot()
         com.openminis.app.deeplink.DeepLinkCoordinator.consumePendingAssist()
-        var attached = false
         if (shot != null) {
-            attached = viewModel.addAttachmentFromStagedShare(shot) != null
+            val attached = viewModel.addAttachmentFromStagedShare(shot) != null
             com.openminis.app.logging.AppLogger.info(
-                "AssistInject", "screenshot attached=$attached file=${shot.name}",
+                "AssistInject", "screenshot staged as attachment (attached=$attached) file=${shot.name}",
             )
             shot.delete()  // addAttachmentFromStagedShare 内部已拷入私有目录，源文件可删
         } else {
@@ -905,11 +908,9 @@ fun ChatScreen(
                 "AssistInject", "no screenshot available; text-only or empty",
             )
         }
+        // 文本上下文仍自动发送；截图不发送（等用户带图提问）。
         val text = pending.text
-        when {
-            !text.isNullOrBlank() -> viewModel.sendMessage(text)
-            attached -> viewModel.sendMessage("")  // T180：纯附件发送
-        }
+        if (!text.isNullOrBlank()) viewModel.sendMessage(text)
     }
 
     // File picker launcher — T129: multi-select via OpenMultipleDocuments
