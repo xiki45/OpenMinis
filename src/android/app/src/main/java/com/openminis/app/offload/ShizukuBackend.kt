@@ -178,8 +178,6 @@ class ShizukuBackend(private val appContext: Context) {
 
     /**
      * Shizuku-SDK process path (reflection-based `Shizuku.newProcess`).
-     * Text-mode: stdout is read line-by-line (UTF-8). Do NOT use for
-     * binary output (`screencap -p`) — use [runProcessRaw].
      */
     fun runProcess(
         argv: Array<String>,
@@ -282,116 +280,6 @@ class ShizukuBackend(private val appContext: Context) {
         runCatching { errThread.join(2000) }
         val rc = runCatching { proc.exitValue() }.getOrDefault(-1)
         return ShizukuManager.ProcessResult(rc, out.toString().trimEnd('\n'), err.toString().trimEnd('\n'))
-    }
-
-    /**
-     * Shizuku-SDK process path — raw byte output.
-     *
-     * Same execution machinery as [runProcess] but captures stdout as raw
-     * bytes instead of decoding line-by-line, so it can carry binary
-     * payloads such as `screencap -p` PNG output. Stderr stays text.
-     */
-    fun runProcessRaw(
-        argv: Array<String>,
-        env: Array<String>? = null,
-        cwd: String? = null,
-        timeoutMs: Long = 5_000L,
-    ): ShizukuManager.RawProcessResult {
-        if (!isPermissionGranted()) {
-            return ShizukuManager.RawProcessResult(
-                exitCode = 126,
-                stdout = ByteArray(0),
-                stderr = "shizuku not ready (state=${snapshot().state})",
-            )
-        }
-        val procAny = runCatching {
-            val m = Shizuku::class.java.getDeclaredMethod(
-                "newProcess",
-                Array<String>::class.java,
-                Array<String>::class.java,
-                String::class.java,
-            )
-            m.isAccessible = true
-            m.invoke(null, argv, env, cwd)
-        }.getOrElse {
-            AppLogger.warning(TAG, "newProcess reflection failed: ${it.message}")
-            return ShizukuManager.RawProcessResult(
-                1, ByteArray(0), "shizuku.newProcess unavailable: ${it.message}",
-            )
-        } ?: return ShizukuManager.RawProcessResult(1, ByteArray(0), "shizuku.newProcess returned null")
-
-        val proc = procAny as? Process ?: return ShizukuManager.RawProcessResult(
-            1, ByteArray(0),
-            "shizuku.newProcess returned ${procAny.javaClass.name}, not java.lang.Process",
-        )
-
-        val out = java.io.ByteArrayOutputStream()
-        val err = StringBuilder()
-        val outThread = Thread {
-            runCatching {
-                proc.inputStream?.use { s ->
-                    val buf = ByteArray(8192)
-                    while (true) {
-                        val n = s.read(buf)
-                        if (n < 0) break
-                        synchronized(out) { out.write(buf, 0, n) }
-                    }
-                }
-            }
-        }
-        val errThread = Thread {
-            runCatching {
-                proc.errorStream?.use { s ->
-                    s.bufferedReader().forEachLine { l -> synchronized(err) { err.append(l).append('\n') } }
-                }
-            }
-        }
-        outThread.isDaemon = true; errThread.isDaemon = true
-        outThread.start(); errThread.start()
-
-        val exited: Boolean = try {
-            proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-        } catch (t: IllegalArgumentException) {
-            val deadline = System.currentTimeMillis() + timeoutMs
-            var done = false
-            while (System.currentTimeMillis() < deadline) {
-                try {
-                    proc.exitValue()
-                    done = true
-                    break
-                } catch (e: RuntimeException) {
-                    if (e is IllegalThreadStateException || e is IllegalArgumentException) {
-                        Thread.sleep(50)
-                    } else {
-                        throw e
-                    }
-                }
-            }
-            done
-        } catch (t: Throwable) {
-            AppLogger.warning(TAG, "Shizuku raw waitFor failed: type=${t::class.java.name} msg=${t.message}")
-            runCatching { proc.destroy() }
-            runCatching { outThread.join(2000) }
-            runCatching { errThread.join(2000) }
-            return ShizukuManager.RawProcessResult(
-                1, out.toByteArray(),
-                (err.toString().trimEnd('\n') + "\nwaitFor failed: ${t.message}").trim(),
-            )
-        }
-
-        if (!exited) {
-            runCatching { proc.destroy() }
-            runCatching { outThread.join(2000) }
-            runCatching { errThread.join(2000) }
-            return ShizukuManager.RawProcessResult(
-                124, out.toByteArray(), err.toString().trimEnd('\n'),
-            )
-        }
-
-        runCatching { outThread.join(2000) }
-        runCatching { errThread.join(2000) }
-        val rc = runCatching { proc.exitValue() }.getOrDefault(-1)
-        return ShizukuManager.RawProcessResult(rc, out.toByteArray(), err.toString().trimEnd('\n'))
     }
 
     companion object {

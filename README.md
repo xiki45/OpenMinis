@@ -26,7 +26,7 @@
 | `AssistSessionService.kt` | `VoiceInteractionSessionService`，每次唤起创建会话 |
 | `AssistSession.kt` | 核心：`onHandleAssist` 采集屏幕上下文、`onHandleScreenshot` 接收系统推送的屏幕位图 → 深链打开 Minis 聊天并注入 |
 | `AssistContext.kt` | 把 `AssistStructure`/`AssistContent`（视图树 + 网页内容）展平为可读文本，深度/数量/长度三重防爆 |
-| `AssistCapture.kt` | 唤起截图协调器：三级保障——① hook v2.2 提前截（消费 `screenshot_path`，100% 用户前一帧）② 标准/无障碍路线（框架位图 / 窗口上屏前无障碍截屏，绑定竞态重试 / 去重 / 超时降级）③ Shizuku 特权截屏兜底（无障碍掉线时经 Sui/Shizuku/AXManager 跑 `screencap`） |
+| `AssistCapture.kt` | 唤起截图协调器：标准路线落盘框架位图；HyperOS 路线在窗口上屏前用无障碍服务截屏（绑定竞态重试 / 去重 / 超时降级） |
 | `MinisRecognitionService.kt` | 框架硬性要求的 `RecognitionService` 声明（否则助理角色校验失败） |
 | `AssistTriggerService.kt` | 导出的触发服务，承接 OEM 私有手势配置的 startService |
 
@@ -111,24 +111,15 @@ unzip -l app-debug.apk | grep -E "alpine-minirootfs|libproot"
 
 **HyperOS（小米/红米）注意**：
 - 手势派发被硬编码到小爱私有通道，改默认助理无效。
-  需配套 LSPosed 模块 **<https://github.com/xiki45/minis-assist-hook>**（v2.2+）：
+  需配套 LSPosed 模块 **<https://github.com/xiki45/minis-assist-hook>**（v2.1+）：
   在系统手势唤起小爱时重定向到 Minis（双击小白条 / 长按电源键直接全屏打开）。
 - **触发源差异化取屏**（hook v2.1 起）：双击小白条 = 屏幕即现场 → 自动附截图；
   长按电源键 = 快速提问 → 不附截图。hook 经 `com.openminis.hook.attach_screen`
   extra 传递判定，缺失时默认附截图（兼容旧模块 / 标准路线）。
-- **截图三级保障**（hook v2.2 + Minis e712b2f 起）：
-  1. **hook 提前截**：hook v2.2 在重定向前用 root `screencap` 截用户前一帧，
-     路径经 `com.openminis.hook.screenshot_path` 传给 Minis 直接消费——100% 截到
-     原 app 画面。需在 KernelSU 管理器给 `com.miui.voiceassist` 授一次 root（一次性）。
-  2. **无障碍截屏**：hook 未授权 root 时，Minis 用无障碍服务抢在窗口上屏前截一帧。
-  3. **Shizuku 特权截屏兜底**：无障碍授权掉了/失效时，自动经 Shizuku 协议
-     （Sui / Shizuku / AXManager）跑系统 `screencap`——不依赖无障碍权限，保底有图。
-     在「系统权限 → 特权截屏兜底」可关（默认开）。
 - **每次更新/重装/强行停止（force-stop）本应用后，HyperOS（及 Android 12+ 通用行为）
   会解除无障碍服务绑定**（设置项可能还在但实际未绑定，
   表现为唤起不再附带截图）。修复：系统无障碍设置里把 Minis 的开关关一次再打开
-  （应用内 系统权限 页会显示状态与修复指引）；或保持「特权截屏兜底」开启，
-  无障碍掉线时截图仍可用（经 Shizuku/Sui）。
+  （应用内 系统权限 页会显示状态与修复指引）。
 
 ---
 

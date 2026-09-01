@@ -1668,8 +1668,6 @@
     <string name="assist_screenshot_section">System Assist</string>
     <string name="assist_screenshot_toggle">Attach current screen when invoked</string>
     <string name="assist_screenshot_footer">When launched as the system assistant (gesture / hardware key), automatically attach a screenshot of the current screen to the new conversation. Requires the accessibility service; secure screens (banking apps etc.) cannot be captured and silently fall back.</string>
-    <string name="assist_priv_screenshot_toggle">Privileged screenshot fallback</string>
-    <string name="assist_priv_screenshot_sub">When the accessibility service is unavailable, capture via Shizuku / Sui (no accessibility permission needed).</string>
     <string name="voice_provider_system">System</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — sign in with your Kimi account</string>
     <string name="kimi_login_title">Sign in with Kimi Code</string>
