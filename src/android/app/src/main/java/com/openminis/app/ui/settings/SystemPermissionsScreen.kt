@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.BatteryAlert
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Screenshot
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -143,6 +144,22 @@ fun SystemPermissionsScreen(onBack: () -> Unit) {
                     onCheckedChange = { on ->
                         assistShotEnabled = on
                         com.openminis.app.assist.AssistCapture.setEnabled(context, on)
+                    },
+                    showDivider = true,
+                )
+                // [T-assist-privileged-screenshot] 免无障碍截屏兜底开关：无障碍掉线时
+                // 自动改走 Shizuku 协议（Sui/Shizuku/AXManager）的 screencap。
+                var privShotEnabled by remember {
+                    mutableStateOf(com.openminis.app.assist.AssistCapture.isPrivilegedFallbackEnabled(context))
+                }
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Security,
+                    title = stringResource(R.string.assist_priv_screenshot_toggle),
+                    subtitle = stringResource(R.string.assist_priv_screenshot_sub),
+                    checked = privShotEnabled,
+                    onCheckedChange = { on ->
+                        privShotEnabled = on
+                        com.openminis.app.assist.AssistCapture.setPrivilegedFallbackEnabled(context, on)
                     },
                     showDivider = false,
                 )

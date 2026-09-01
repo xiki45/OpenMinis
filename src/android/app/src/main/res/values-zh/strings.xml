@@ -1485,6 +1485,8 @@
     <string name="assist_screenshot_section">系统助理</string>
     <string name="assist_screenshot_toggle">助理唤起时附带当前屏幕</string>
     <string name="assist_screenshot_footer">被手势/按键作为系统助理唤起时，自动截一张当前屏幕附进新对话。需要无障碍服务；安全界面（银行类应用等）无法截取，会自动静默降级。</string>
+    <string name="assist_priv_screenshot_toggle">特权截屏兜底</string>
+    <string name="assist_priv_screenshot_sub">无障碍服务不可用时，改用 Shizuku / Sui 特权截屏（不依赖无障碍权限）。</string>
     <string name="voice_provider_system">系统</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — 使用 Kimi 账号登录</string>
     <string name="kimi_login_title">使用 Kimi Code 登录</string>

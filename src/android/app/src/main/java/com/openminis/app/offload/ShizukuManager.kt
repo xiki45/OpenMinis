@@ -52,6 +52,17 @@ object ShizukuManager {
         val combined: String get() = if (stderr.isEmpty()) stdout else "$stdout\n$stderr".trimEnd()
     }
 
+    /**
+     * [T-assist-privileged-screenshot] Raw (binary-safe) variant of
+     * [ProcessResult]: stdout is carried as raw bytes for payloads such as
+     * `screencap -p` PNG output. [stderr] remains text.
+     */
+    data class RawProcessResult(
+        val exitCode: Int,
+        val stdout: ByteArray,
+        val stderr: String,
+    )
+
     @Volatile private var initialized = false
     @Volatile private var appContext: Context? = null
     private var backend: ShizukuBackend? = null
@@ -127,6 +138,23 @@ object ShizukuManager {
             )
         }
         return backend!!.runProcess(argv, env, cwd, timeoutMs)
+    }
+
+    /** [T-assist-privileged-screenshot] Binary-safe variant: stdout as raw bytes. */
+    fun runProcessRaw(
+        argv: Array<String>,
+        env: Array<String>? = null,
+        cwd: String? = null,
+        timeoutMs: Long = 5_000L,
+    ): RawProcessResult {
+        if (!isReady()) {
+            return RawProcessResult(
+                exitCode = 126,
+                stdout = ByteArray(0),
+                stderr = "shizuku not ready (state=${_snapshot.value.state})",
+            )
+        }
+        return backend!!.runProcessRaw(argv, env, cwd, timeoutMs)
     }
 
     fun deviceSdk(): Int = Build.VERSION.SDK_INT
