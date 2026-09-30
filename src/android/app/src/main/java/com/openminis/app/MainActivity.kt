@@ -56,6 +56,33 @@ private const val KEY_CURRENT_CHAT_SESSION_ID = "minis.current_chat_session_id"
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        /**
+         * [T-assist-entry-dedupe] Minimum gap between two ASSIST / VOICE_ASSIST
+         * deliveries allowed to open a new draft chat.
+         *
+         * One system invocation reaches this Activity several times (hook
+         * redirect + singleTask onNewIntent + the re-delivery that rides an
+         * Activity relaunch). Each delivery used to mint a fresh draft, so three
+         * deliveries in ~50 ms drove three ChatScreen mount/dispose cycles ->
+         * three startForegroundService()/stopService() pairs -> the service was
+         * stopped before its onStartCommand() could call startForeground(), and
+         * the system threw ForegroundServiceDidNotStartInTimeException
+         * (crash-2026-09-29_10-51-48.log). Mirrors minis-assist-hook's 1200 ms
+         * debounce with headroom for the cold-start path.
+         */
+        private const val ASSIST_ENTRY_DEDUPE_MS = 1_500L
+
+        /**
+         * [T-assist-entry-dedupe] elapsedRealtime() of the last ASSIST /
+         * VOICE_ASSIST delivery dispatched into a new chat. Process-scoped: the
+         * duplicates ride an Activity re-creation, so an instance field would
+         * reset exactly when the guard is needed.
+         */
+        @Volatile
+        private var lastAssistEntryDispatchedAtMs = 0L
+    }
+
     private var navController: NavHostController? = null
 
     /**
@@ -744,10 +771,35 @@ class MainActivity : ComponentActivity() {
         return uri == null || uri.scheme != "minis"
     }
 
+    /**
+     * [T-assist-entry-dedupe] Returns true when this ASSIST / VOICE_ASSIST
+     * delivery is a duplicate of one already dispatched inside
+     * [ASSIST_ENTRY_DEDUPE_MS] and must therefore NOT open another draft chat.
+     * Called before DeepLinkCoordinator.pendingAssist is touched so a duplicate
+     * cannot wipe screen context the VoiceInteractionSession hand-off wrote first.
+     */
+    private fun isDuplicateAssistEntryDelivery(): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastAssistEntryDispatchedAtMs < ASSIST_ENTRY_DEDUPE_MS) {
+            AppLogger.info(
+                "AssistEntry",
+                "duplicate ASSIST/VOICE_ASSIST delivery within " +
+                    ASSIST_ENTRY_DEDUPE_MS + "ms - keeping the current draft",
+            )
+            return true
+        }
+        lastAssistEntryDispatchedAtMs = now
+        return false
+    }
+
     private fun handleDeepLink(intent: Intent?) {
         val nav = navController ?: return
+        val isAssistEntry = isAssistEntryIntent(intent)
+        // [T-assist-entry-dedupe] Collapse the burst of intents one system
+        // invocation produces BEFORE touching any state.
+        if (isAssistEntry && isDuplicateAssistEntryDelivery()) return
         // [T-assist-screenshot] 热启动 assist 入口同样尽早发射截屏（窗口上屏前）。
-        if (isAssistEntryIntent(intent)) {
+        if (isAssistEntry) {
             com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
             // 空占位门闩，语义同冷启动路径。
             com.openminis.app.deeplink.DeepLinkCoordinator.setPendingAssist(null)
@@ -757,7 +809,7 @@ class MainActivity : ComponentActivity() {
         // "new chat" navigation path (ChatScreen consumes
         // DeepLinkCoordinator.pendingAssist if the VIS path wrote context
         // first, otherwise it's a plain new session).
-        val action = if (isAssistEntryIntent(intent)) {
+        val action = if (isAssistEntry) {
             DeepLinkAction.OpenAssist
         } else {
             DeepLinkHandler.parse(intent?.data)
