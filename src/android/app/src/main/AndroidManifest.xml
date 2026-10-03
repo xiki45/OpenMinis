@@ -294,6 +294,35 @@
                 android:resource="@xml/shortcuts" />
         </activity-alias>
 
+        <!-- [T-system-assist] System-assistant activity entry (ROM gesture /
+             hardware-key path). On ROMs such as HyperOS / Android 15 the long-
+             press gesture-bar invokes the default assistant via an *activity*
+             route: the framework resolves `android.intent.action.VOICE_ASSIST`
+             against the default-assistant package and startActivity's the
+             matching entry activity. The VIS (onHandleAssist) path is not
+             invoked on that gesture on these ROMs, so without a declared entry
+             activity the framework falls back to Google's (which may not even
+             run on the user's device — presenting as "nothing happens").
+             Declaring VOICE_ASSIST + ASSIST here lets Minis be that entry
+             activity; MainActivity treats both actions the same as
+             DeepLinkAction.OpenAssist (new chat, consuming any
+             DeepLinkCoordinator.pendingAssist context if the VIS path happened
+             to write one first). -->
+        <activity-alias
+            android:name=".MainActivityVoiceAssist"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
         <!-- Share receiver activity -->
         <activity
             android:name=".share.ShareReceiverActivity"
@@ -585,6 +614,73 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/minis_accessibility_service" />
         </service>
+
+        <!-- ============================================================
+             System-level Assist (default assistant)
+             Lets the user set Minis as the system default assistant
+             (Settings → Apps → Default apps → Digital assistant).
+             Long-press Home / gesture → onShowSession + onHandleAssist,
+             which snapshots the current screen into the agent.
+             ============================================================ -->
+        <!-- 1) VoiceInteractionService — the "default assistant" entry point.
+             The system binds here and calls onShowSession() when the user
+             invokes the assistant gesture. BIND_VOICE_INTERACTION is what
+             makes the system treat it as a candidate default assistant. -->
+        <service
+            android:name=".assist.AssistService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:label="@string/minis_assistant_label">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service" />
+        </service>
+
+        <!-- 2) VoiceInteractionSessionService — creates an AssistSession per
+             invocation; receives the onHandleAssist(AssistStructure, ...)
+             callback with the current screen. -->
+        <!-- T-system-assist: the framework binds the *session* service with
+             android.service.voice.VoiceInteractionService action too (in
+             addition to the AssistService itself). On Android 15 an intent-filter
+             declaring that action is required for the bind to resolve; without
+             it ActivityManager logs "Unable to start service ... not found" /
+             VoiceInteractionServiceManager "Failed binding to voice interaction
+             session service" and the gesture never opens a session. Mirrors how
+             Google's GsaVoiceInteractionSessionService declares the filter.
+             Only the action is needed — no BIND_VOICE_INTERACTION effect here,
+             it merely makes the service resolvable via that action. -->
+        <service
+            android:name=".assist.AssistSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+
+        <!-- 3) MinisRecognitionService — satisfies the framework requirement
+             that a default assistant declare a recognitionService; delegates
+             to the system SpeechRecognizer. -->
+        <service
+            android:name=".assist.MinisRecognitionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_RECOGNITION_SERVICE" />
+
+        <!-- [T-system-assist] AssistTriggerService —承接 OEM 私有手势配置的
+             startService 唤起。HyperOS 的手势条配置
+             `entity_config_key_voice_assistant`（Settings.Secure JSON）里
+             `pkgName`/`clazzName` 原本指向小米自家的
+             com.xiaomi.voiceassistant.VoiceService（一个被系统 startService
+             的服务）；改写为指向本服务后，系统以 startService 唤起它，再由它
+             打开 MainActivity 的 ACTION_ASSIST 入口（新会话）。
+             exported=true 且不加任何权限：系统进程要以 startService 方式调用，
+             签名权限会挡住系统；风险仅为第三方也可唤起 Minis 界面，属可接受。 -->
+        <service
+            android:name=".assist.AssistTriggerService"
+            android:exported="true" />
 
     </application>
 </manifest>

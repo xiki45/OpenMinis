@@ -345,14 +345,21 @@ class MinisApp : Application(), ImageLoaderFactory {
         }
 
         // T-android-fgs-timeout-crash: chain an UncaughtExceptionHandler
-        // ahead of ACRA's so we can intercept
-        // android.app.RemoteServiceException$ForegroundServiceDidNotStopInTimeException
-        // specifically. The mediaPlayback FGS type change removes the
-        // dataSync 6h cap that was tripping this, but this handler keeps
-        // the user from seeing a raw process-death if a future Android
-        // version adds a new cap to mediaPlayback too. We can't actually
-        // survive this exception (it's thrown on the main looper after
-        // SystemServer has already decided to kill us) but we CAN:
+        // ahead of ACRA's so we can intercept both
+        // android.app.RemoteServiceException$ForegroundService*InTimeException
+        // variants:
+        //  - DidNotStopInTime: a mediaPlayback FGS outlived its type's cap. The
+        //    mediaPlayback type change removed the dataSync 6h cap that was
+        //    tripping this, but a future Android version could add a new cap.
+        //  - DidNotStartInTime: startForegroundService() was issued but the
+        //    service never reached startForeground() - typically because the
+        //    start request was stopped / re-created before the main thread could
+        //    run onStartCommand(). See crash-2026-09-29_10-51-48.log: the
+        //    setPresent/setAbsent churn issued 3 starts + 2 stops inside 50 ms
+        //    while the service was still ~100 ms away from being created.
+        // We cannot actually survive either exception (they are thrown on the
+        // main looper after SystemServer has already decided to kill us) but we
+        // CAN:
         //  - stop the foreground service explicitly so the notification
         //    drops cleanly instead of lingering as a zombie row
         //  - delegate to ACRA so the crash log still hits disk
@@ -360,14 +367,23 @@ class MinisApp : Application(), ImageLoaderFactory {
             val priorHandler = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
                 try {
-                    val isFgsTimeout = throwable.javaClass.name.endsWith(
-                        "RemoteServiceException\$ForegroundServiceDidNotStopInTimeException",
-                    ) || (throwable.message?.contains("foreground service of type") == true &&
-                        throwable.message?.contains("did not stop within its timeout") == true)
+                    val throwableClass = throwable.javaClass.name
+                    val throwableMessage = throwable.message.orEmpty()
+                    val isFgsTimeout =
+                        throwableClass.endsWith(
+                            "ForegroundServiceDidNotStopInTimeException",
+                        ) ||
+                            throwableClass.endsWith(
+                                "ForegroundServiceDidNotStartInTimeException",
+                            ) ||
+                            (throwableMessage.contains("foreground service of type") &&
+                                throwableMessage.contains("did not stop within its timeout")) ||
+                            throwableMessage.contains("did not then call Service.startForeground()")
                     if (isFgsTimeout) {
                         Log.w(
                             "MinisApp",
-                            "FGS timeout caught; stopping service before deferring to ACRA: ${throwable.message}",
+                            "FGS timeout caught (" + throwableClass.substringAfterLast('.') +
+                                "); stopping service before deferring to ACRA: " + throwableMessage,
                         )
                         // Stop the service so the system tears the
                         // sticky binding down cleanly instead of

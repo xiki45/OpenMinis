@@ -1122,6 +1122,38 @@ fun ChatScreen(
         }
     }
 
+    // System-level Assist: when minis was invoked as the default assistant or via
+    // the HyperOS hook route, the entry stashed screen context (and possibly an
+    // in-flight accessibility screenshot) in DeepLinkCoordinator. Consume it
+    // exactly once. [T-assist-screenshot]
+    //
+    // 分发语义（2026-09-01 改版：截图改为"待发附件"，不再自动发送）：
+    //  - 截图 → 只挂上附件 chip（可删、随用户下一次发送生效），让用户能带图提问；
+    //  - 标准路线的屏幕文本上下文 → 保持自动发送（轻量、即时，与原设计一致）；
+    //  - 纯手势唤起（无文本无截图）→ 只打开新会话，不打扰。
+    LaunchedEffect(sessionId) {
+        val pending = com.openminis.app.deeplink.DeepLinkCoordinator
+            .pendingAssist.value ?: return@LaunchedEffect
+        // HyperOS 路线在入口发射了无障碍截屏，这里等它落盘（有界超时，失败得 null）。
+        val shot = pending.screenshotPath?.let { p -> java.io.File(p).takeIf { it.exists() } }
+            ?: com.openminis.app.assist.AssistCapture.awaitPendingShot()
+        com.openminis.app.deeplink.DeepLinkCoordinator.consumePendingAssist()
+        if (shot != null) {
+            val attached = viewModel.addAttachmentFromStagedShare(shot) != null
+            com.openminis.app.logging.AppLogger.info(
+                "AssistInject", "screenshot staged as attachment (attached=$attached) file=${shot.name}",
+            )
+            shot.delete()  // addAttachmentFromStagedShare 内部已拷入私有目录，源文件可删
+        } else {
+            com.openminis.app.logging.AppLogger.info(
+                "AssistInject", "no screenshot available; text-only or empty",
+            )
+        }
+        // 文本上下文仍自动发送；截图不发送（等用户带图提问）。
+        val text = pending.text
+        if (!text.isNullOrBlank()) viewModel.sendMessage(text)
+    }
+
     // File picker launcher — T129: multi-select via OpenMultipleDocuments
     // (GetContent has no multi-select equivalent). The launch arg is now a
     // mime-type array; "*/*" stays as the wildcard. Selections above

@@ -56,6 +56,33 @@ private const val KEY_CURRENT_CHAT_SESSION_ID = "minis.current_chat_session_id"
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        /**
+         * [T-assist-entry-dedupe] Minimum gap between two ASSIST / VOICE_ASSIST
+         * deliveries allowed to open a new draft chat.
+         *
+         * One system invocation reaches this Activity several times (hook
+         * redirect + singleTask onNewIntent + the re-delivery that rides an
+         * Activity relaunch). Each delivery used to mint a fresh draft, so three
+         * deliveries in ~50 ms drove three ChatScreen mount/dispose cycles ->
+         * three startForegroundService()/stopService() pairs -> the service was
+         * stopped before its onStartCommand() could call startForeground(), and
+         * the system threw ForegroundServiceDidNotStartInTimeException
+         * (crash-2026-09-29_10-51-48.log). Mirrors minis-assist-hook's 1200 ms
+         * debounce with headroom for the cold-start path.
+         */
+        private const val ASSIST_ENTRY_DEDUPE_MS = 1_500L
+
+        /**
+         * [T-assist-entry-dedupe] elapsedRealtime() of the last ASSIST /
+         * VOICE_ASSIST delivery dispatched into a new chat. Process-scoped: the
+         * duplicates ride an Activity re-creation, so an instance field would
+         * reset exactly when the guard is needed.
+         */
+        @Volatile
+        private var lastAssistEntryDispatchedAtMs = 0L
+    }
+
     private var navController: NavHostController? = null
 
     /**
@@ -499,9 +526,25 @@ class MainActivity : ComponentActivity() {
         // while inside a chat, synthesise an OpenSession deep-link so
         // the navigation stack lands on that chat instead of the
         // sessions list. T166.
+        //
+        // [T-system-assist] A VOICE_ASSIST / ASSIST activity entry (the
+        // .MainActivityVoiceAssist alias — ROM gesture/hardware-key route)
+        // carries no minis:// data, so DeepLinkHandler.parse yields Unknown.
+        // Route it to OpenAssist (new chat) explicitly, mirroring the runtime
+        // onNewIntent path, so a cold-start via the gesture also lands on a
+        // fresh chat that consumes any pendingAssist context.
         val explicitDeepLink = DeepLinkHandler.parse(intent?.data)
         val launchDeepLink = if (explicitDeepLink !is DeepLinkAction.Unknown) {
             explicitDeepLink
+        } else if (isAssistEntryIntent(intent)) {
+            // [T-assist-screenshot] HyperOS 路线冷启动入口：窗口尚未上屏，
+            // 在此尽早发射无障碍截屏，供 ChatScreen 首条消息附带。
+            com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
+            // [T-assist-screenshot] HyperOS 路线没有 AssistSession 写 pendingAssist，
+            // 这里放一个空占位作为"本次新会话是 assist 唤起"的消费门闩：
+            // ChatScreen 见到它才会去等在途截图并注入，普通手开会话不受影响。
+            com.openminis.app.deeplink.DeepLinkCoordinator.setPendingAssist(null)
+            DeepLinkAction.OpenAssist
         } else {
             restoredChatSessionId
                 ?.let { DeepLinkAction.OpenSession(it) }
@@ -719,12 +762,71 @@ class MainActivity : ComponentActivity() {
         if (intent.getBooleanExtra("shared_content", false)) {
             com.openminis.app.share.ShareCoordinator.processPendingShare(this)
         }
-        handleDeepLink(intent.data)
+        handleDeepLink(intent)
     }
 
-    private fun handleDeepLink(uri: Uri?) {
-        val action = DeepLinkHandler.parse(uri)
+    /**
+     * [T-system-assist] True when [intent] arrived through the
+     * `.MainActivityVoiceAssist` activity-alias — i.e. the system invoked us
+     * as the default assistant via `android.intent.action.VOICE_ASSIST` /
+     * `android.intent.action.ASSIST` (ROM gesture-bar / hardware-key route).
+     * Excludes genuine `minis://` deep-links so those keep their dedicated
+     * dispatch. Mirrors the iOS `ACTION_VOICE_ASSIST` / `ACTION_ASSIST`
+     * handling in AppDelegate.
+     */
+    private fun isAssistEntryIntent(intent: Intent?): Boolean {
+        val action = intent?.action
+        // ACTION_VOICE_ASSIST has no public Java constant on Intent
+        // (only ACTION_ASSIST does), so match the raw action string here —
+        // mirroring the value declared in the .MainActivityVoiceAssist alias.
+        if (action != Intent.ACTION_ASSIST && action != "android.intent.action.VOICE_ASSIST") return false
+        val uri = intent.data
+        return uri == null || uri.scheme != "minis"
+    }
+
+    /**
+     * [T-assist-entry-dedupe] Returns true when this ASSIST / VOICE_ASSIST
+     * delivery is a duplicate of one already dispatched inside
+     * [ASSIST_ENTRY_DEDUPE_MS] and must therefore NOT open another draft chat.
+     * Called before DeepLinkCoordinator.pendingAssist is touched so a duplicate
+     * cannot wipe screen context the VoiceInteractionSession hand-off wrote first.
+     */
+    private fun isDuplicateAssistEntryDelivery(): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastAssistEntryDispatchedAtMs < ASSIST_ENTRY_DEDUPE_MS) {
+            AppLogger.info(
+                "AssistEntry",
+                "duplicate ASSIST/VOICE_ASSIST delivery within " +
+                    ASSIST_ENTRY_DEDUPE_MS + "ms - keeping the current draft",
+            )
+            return true
+        }
+        lastAssistEntryDispatchedAtMs = now
+        return false
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
         val nav = navController ?: return
+        val isAssistEntry = isAssistEntryIntent(intent)
+        // [T-assist-entry-dedupe] Collapse the burst of intents one system
+        // invocation produces BEFORE touching any state.
+        if (isAssistEntry && isDuplicateAssistEntryDelivery()) return
+        // [T-assist-screenshot] 热启动 assist 入口同样尽早发射截屏（窗口上屏前）。
+        if (isAssistEntry) {
+            com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
+            // 空占位门闩，语义同冷启动路径。
+            com.openminis.app.deeplink.DeepLinkCoordinator.setPendingAssist(null)
+        }
+        // [T-system-assist] A VOICE_ASSIST / ASSIST activity entry carries no
+        // minis:// data; fold it into OpenAssist so it reuses the exact same
+        // "new chat" navigation path (ChatScreen consumes
+        // DeepLinkCoordinator.pendingAssist if the VIS path wrote context
+        // first, otherwise it's a plain new session).
+        val action = if (isAssistEntry) {
+            DeepLinkAction.OpenAssist
+        } else {
+            DeepLinkHandler.parse(intent?.data)
+        }
         when (action) {
             is DeepLinkAction.OpenTerminal -> {
                 nav.navigate(Routes.terminal(action.initCommand))
@@ -768,7 +870,8 @@ class MainActivity : ComponentActivity() {
             // the corresponding UI on first compose.
             is DeepLinkAction.NewChat,
             is DeepLinkAction.NewVoiceChat,
-            is DeepLinkAction.NewCameraChat -> {
+            is DeepLinkAction.NewCameraChat,
+            is DeepLinkAction.OpenAssist -> {
                 when (action) {
                     is DeepLinkAction.NewVoiceChat -> DeepLinkCoordinator
                         .setPendingChatAction(DeepLinkCoordinator.ChatAction.START_VOICE)

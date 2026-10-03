@@ -1,222 +1,134 @@
-# OpenMinis
+# OpenMinis · System-Level Assistant（feature/system-assist）
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-iOS%20%7C%20Android-lightgrey.svg)](#beta-programme)
 
-**Your private, on-device AI agent.**
+本仓库是 [OpenMinis](https://github.com/OpenMinis/OpenMinis) 的 fork，
+**默认分支 `feature/system-assist`** 在上游代码之上增加了 **Android 系统级数字助理**能力：
+把 Minis 注册为系统默认助理（VoiceInteractionService），可被手势/按键/标准
+`ASSIST` 意图唤起，读取当前屏幕上下文并交给 agent 处理。
 
-OpenMinis brings leading models — Claude, GPT, Gemini and more — into a native
-mobile experience, and gives them a real computer to work with: a full Linux
-shell running on your device, browser automation, extensible skills, persistent
-memory, and deep system integration.
-
-It is free, and fully open source.
-
-**We believe that in the age of AI, technical design and code are no longer
-where a product's advantage lies. The best agent emerges from a tight feedback
-loop with the people who use it — their expectations and their reports are
-what converge on the product.**
-
-Official website: **[openminis.app](https://openminis.app)**
-
-<a href="https://apps.apple.com/app/id6759188481">
-  <img alt="Download on the App Store" height="48" src="assets/badge-appstore.svg" />
-</a>
-&nbsp;
-<a href="https://github.com/OpenMinis/OpenMinis/releases">
-  <img alt="Get the APK on GitHub" height="48" src="assets/badge-android.svg" />
-</a>
-
-![Minis on iOS — deep research, chat, agent runtime, integrations, iCloud sync and granular permissions](assets/screenshots.png)
+> 本分支**不合并上游**，定期 rebase 到上游 `main` 保持同步。
+> 上游项目：<https://github.com/OpenMinis/OpenMinis>（GPL-3.0，本分支沿用）
 
 ---
 
-## What it does
+## 这个分支改动了什么
 
-| | |
+上游 `main` 之上 10 个提交、19 个文件（+958/−182，删除主要为 README 整体替换）。
+全部为新增文件与少量插入式改动，不触碰上游既有功能。
+
+### 新增 `assist/` 包（系统助理核心）
+
+| 文件 | 作用 |
 |---|---|
-| **Bring your own model** | Claude, GPT, Gemini and other providers, via your own API keys or account sign-in. |
-| **A real Linux shell** | A sandboxed Alpine Linux environment runs on-device — the agent can install packages, run scripts, and work with real files. |
-| **Device integration** | Health, Calendar, Reminders, Contacts, HomeKit, Bluetooth, Clipboard, Media, Alarms and more, exposed to the agent as tools. |
-| **Browser automation** | The agent can browse and interact with the web on your behalf. |
-| **Skills & memory** | Extensible skills plus persistent memory across sessions. |
-| **Workspaces** | Organise work into separate contexts, addressable via `minis://workspace/`. |
-| **Native offloads** | Heavy or platform-specific work is handed to native code instead of the sandbox. |
+| `AssistService.kt` | `VoiceInteractionService` 入口，系统默认助理的绑定点 |
+| `AssistSessionService.kt` | `VoiceInteractionSessionService`，每次唤起创建会话 |
+| `AssistSession.kt` | 核心：`onHandleAssist` 采集屏幕上下文、`onHandleScreenshot` 接收系统推送的屏幕位图 → 深链打开 Minis 聊天并注入 |
+| `AssistContext.kt` | 把 `AssistStructure`/`AssistContent`（视图树 + 网页内容）展平为可读文本，深度/数量/长度三重防爆 |
+| `AssistCapture.kt` | 唤起截图协调器：标准路线落盘框架位图；HyperOS 路线在窗口上屏前用无障碍服务截屏（绑定竞态重试 / 去重 / 超时降级） |
+| `MinisRecognitionService.kt` | 框架硬性要求的 `RecognitionService` 声明（否则助理角色校验失败） |
+| `AssistTriggerService.kt` | 导出的触发服务，承接 OEM 私有手势配置的 startService |
 
----
+### 入口与接线
 
-## What you can do with Minis
+- `res/xml/voice_interaction_service.xml`：`supportsAssist` + `sessionService` + `recognitionService` 完整声明
+- `AndroidManifest.xml`：注册上述服务（`BIND_VOICE_INTERACTION` 等），新增
+  `MainActivityVoiceAssist` activity-alias 响应 `ACTION_VOICE_ASSIST` / `ACTION_ASSIST`
+- 深链 `minis://assist`：`DeepLinkHandler` 路由 + `DeepLinkCoordinator.pendingAssist` 暂存
+  （可携带截图路径），`ChatScreen` 首次 compose 时消费 → **屏幕上下文成为发给 agent 的第一条消息**
+- 唤起截图：新会话首条消息自动附带"唤起时刻的屏幕"截图（长边缩至 1600 的 JPEG）。
+  设置 → 权限 → 系统权限 中可用开关「助理唤起时附带当前屏幕」关闭（默认开）。
+  顺带修复：系统权限页路由此前无入口（孤儿页），设置主页已补上入口行
 
-A few things people actually use it for:
-
-- **Photograph a meal, log the nutrition** — Minis identifies the dishes, estimates
-  calories and macros, and writes them to Apple Health.
-- **Wake up to your timeline** — Shortcuts triggers Minis to fetch your X timeline,
-  summarise it, synthesise speech, and play it as your alarm.
-- **Turn group chatter into tasks** — pull messages from a Telegram group, extract
-  bugs and action items, deduplicate them, and file them into Apple Reminders.
-- **Mount your Obsidian vault** — research, clean up and write Markdown notes back
-  into the vault as a normal workspace.
-- **Share anything into a calendar event** — send a page or message to Minis via the
-  iOS Share Sheet and it creates the event, time and place included.
-
-**→ [OpenMinis/AwesomeMinis](https://github.com/OpenMinis/AwesomeMinis)** — a curated,
-community-contributed collection of use cases and workflows across health,
-productivity, research, finance and developer tooling.
-
----
-
-## Skills
-
-A **skill** is a folder with a `SKILL.md` file — instructions, and optionally scripts,
-references and assets — that the agent loads on demand when a request matches it.
-Metadata stays in context for triggering; the body and bundled resources load only
-when the skill is actually used.
-
-Minis has its own tool system, but it does not require skills written specifically
-for it: **skills built for Claude, Codex, OpenClaw or Hermes Agent generally run in
-Minis as-is.** Skills that have been adapted to Minis' tools simply run better —
-they can reach the Linux shell, device integrations and native offloads directly.
-
-**→ [OpenMinis/MinisSkills](https://github.com/OpenMinis/MinisSkills)** — skills
-adapted for Minis alongside ones built for it from scratch, covering TTS, search,
-media downloads, health analysis, cloud APIs and more.
-
----
-
-## Press
-
-> "the most impressive indie app I've seen in a while"
->
-> — Federico Viticci, [**Open Minis Is the iOS Agent I Wish Siri AI Could Be**](https://www.macstories.net/reviews/open-minis-is-the-ios-agent-i-wish-siri-ai-could-be/),
-> MacStories (July 2026)
-
-> "在很大程度上实现甚至局部超越了 Apple Intelligence"
->
-> — Ye Han, [**这可能是 iPhone 最强 Agent 软件，没有之一 丨Open Minis 入门指南**](https://zhuanlan.zhihu.com/p/2045570157783807562),
-> 知乎 / Zhihu (June 2026)
-
-> "可能是 iOS 端最强 AI Agent"
->
-> — [**Open Minis：可能是 iOS 端最强 AI Agent**](https://www.appinn.com/open-minis/),
-> 小众软件 / Appinn (March 2026)
-
----
-
-## Beta programme
-
-App Store releases can lag behind: every update waits on review, and we hold
-builds back when stability warrants it. The TestFlight build is where fixes
-and new features land first.
-
-**→ [Join the TestFlight beta](https://testflight.apple.com/join/3BdkA5c3)**
-
-On Android, the [releases page](https://github.com/OpenMinis/OpenMinis/releases)
-always carries the latest APK.
-
----
-
-## Building from source
-
-Minis ships a Linux sandbox inside the app, so the native dependencies (iSH on
-iOS, PRoot on Android, FFmpeg, LAME, rclone) and the Alpine rootfs are **built
-from source** rather than committed as binaries.
-
-**→ See [BUILDING.md](BUILDING.md) for the full first-build guide.**
-
-The short version:
-
-```sh
-git clone --recurse-submodules https://github.com/OpenMinis/OpenMinis.git
-cd OpenMinis
-
-# iOS  — needs Go 1.25+ and Xcode's Metal Toolchain
-#        (xcodebuild -downloadComponent MetalToolchain)
-#        order matters: FFmpeg links against LAME
-./deps/build_lame.sh && ./deps/build_ffmpeg.sh
-./deps/build_ish.sh && ./deps/prepare_alpine_rootfs.sh
-./deps/build_rclone_ios.sh
-open src/ios/Minis.xcodeproj
-
-# Android — needs NDK r28+, Go 1.25+ and gomobile
-./deps/build_proot.sh && ./scripts/prepare_android_sandbox.sh
-./deps/build_rclone_android.sh
-mkdir -p src/android/app/libs && cp deps/build/rclone/rclone.aar src/android/app/libs/
-cd src/android && ./gradlew :app:assembleDebug
-```
-
-`BUILDING.md` covers the toolchain requirements per platform, the build-time
-customization templates, and a troubleshooting section for the failure modes
-you are most likely to hit.
-
----
-
-## Repository layout
+### 数据流
 
 ```
-src/ios/          iOS app (Swift / SwiftUI) + share, widget and file-provider extensions
-src/android/      Android app (Kotlin / Compose) + JNI native code
-src/shared/       Assets shared by both platforms
-deps/             Native dependency build scripts and vendored sources
-docs/specs/       Architecture and interface specifications
-scripts/          Rootfs preparation and developer tooling
+手势 / 按键 / ACTION_ASSIST
+   │
+   ├─ 标准路线（角色解析的 ROM）
+   │    系统 → AssistSession.onHandleAssist(结构/网页) + onHandleScreenshot(位图)
+   │
+   ├─ HyperOS 路线（hook 改道 / OEM startService）
+   │    AssistCapture：入口用无障碍服务抢在窗口上屏前截一帧
+   │
+   ▼
+① DeepLinkCoordinator.pendingAssist（文本 + 截图路径）
+② 打开新 chat 会话 → 截图作为附件 + 上下文文本作为首条消息
+   ▼
+agent 循环正常处理（多模态读图 / shell / 技能 / 无障碍读屏…）
 ```
 
 ---
 
-## Acknowledgements
+## 拉取并编译带 VoiceInteractionService 的 APK
 
-OpenMinis stands on a great deal of open-source work. Our thanks to the
-maintainers of these projects — the full inventory, with versions and license
-terms, is in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+### 前置
 
-**The sandbox** — the heart of the product:
+- arm64 Android 设备（minSdk 26，已在 Android 15 真机验证）
+- JDK 17、Android SDK（compileSdk 36）、NDK r27+（BUILDING.md 建议 r28）、CMake 3.22.1
 
-- **[iSH](https://github.com/ish-app/ish)** (GPLv3) — Linux usermode emulation on
-  iOS. We run [an ARM64 fork](https://github.com/OpenMinis/ish-arm64).
-- **[PRoot](https://github.com/termux/proot)** (GPLv2) — user-space chroot for the
-  Android sandbox, via [our fork](https://github.com/OpenMinis/proot);
-  **[talloc](https://talloc.samba.org)** (LGPLv3+) underpins it.
-- **[Alpine Linux](https://alpinelinux.org)** — the minirootfs the sandbox boots.
+### 步骤
 
-**Media & text** — [FFmpeg](https://ffmpeg.org) (LGPL-2.1+),
-[LAME](https://lame.sourceforge.io) (LGPL), [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT),
-[KaTeX](https://katex.org) (MIT).
+```bash
+git clone https://github.com/xiki45/OpenMinis.git
+cd OpenMinis          # 默认分支即 feature/system-assist
 
-**iOS** — [SwiftAnthropic](https://github.com/jamesrochabrun/SwiftAnthropic),
-[SwiftMath](https://github.com/mgriebling/SwiftMath),
-[RealTimeCutVADLibrary](https://github.com/helloooideeeeea/RealTimeCutVADLibrary) (all MIT),
-[swift-cmark](https://github.com/swiftlang/swift-cmark) (BSD-2-Clause), and the
-Apple / Swift Server Workgroup packages (Apache-2.0).
+# ⚠️ 两个准备步骤必须执行，跳过会得到缺失 Alpine 沙盒的 APK
+#    （应用内表现为 installation failed: alpine-minirootfs.tar）
+git submodule update --init deps/proot
+export ANDROID_NDK_HOME=<你的NDK路径>
+./deps/build_proot.sh                 # → jniLibs/arm64-v8a/libproot.so + loaders
+./scripts/prepare_android_sandbox.sh  # → assets/alpine-minirootfs.tar.gz（联网下载 ~3MB）
 
-**Android** — [AndroidX & Jetpack Compose](https://developer.android.com/jetpack),
-[OkHttp](https://square.github.io/okhttp/), [Coil](https://coil-kt.github.io/coil/),
-[kotlinx](https://github.com/Kotlin) serialization & coroutines,
-[multiplatform-markdown-renderer](https://github.com/mikepenz/multiplatform-markdown-renderer),
-[Reorderable](https://github.com/Calvin-LL/Reorderable), [ACRA](https://github.com/ACRA/acra)
-(all Apache-2.0), and [Shizuku](https://github.com/RikkaApps/Shizuku-API) (MIT).
+cd src/android
+./gradlew :app:assembleDebug
+# 产物：src/android/app/build/outputs/apk/debug/app-debug.apk（~49MB，debug 签名）
+```
 
----
+产物自检：
 
-## License
+```bash
+unzip -l app-debug.apk | grep -E "alpine-minirootfs|libproot"
+# 应看到 assets/alpine-minirootfs.tar 与 lib/arm64-v8a/libproot.so、libproot-loader*.so
+```
 
-OpenMinis is licensed under the **[GNU General Public License v3.0](LICENSE)**.
-
-The app links GPL-licensed components — [iSH](https://github.com/OpenMinis/ish-arm64)
-(GPLv3) and [PRoot](https://github.com/OpenMinis/proot) (GPLv2) — so the combined
-work is distributed under GPLv3. Bundled third-party licenses are listed in
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+其余构建细节（依赖版本、NDK 说明）见 [`BUILDING.md`](BUILDING.md)。
 
 ---
 
-## Community
+## 使用
 
-- **Telegram**: [Join the group](https://t.me/+2NzhOJuzRyI1YmM1)
-- **Issues**: Bug reports, feature requests and discussion via
-  [GitHub Issues](https://github.com/OpenMinis/OpenMinis/issues)
+1. 安装 APK（`adb install -r app-debug.apk` 或手动安装）
+2. **设置 → 应用 → 默认应用 → 数字助理** 选择 Minis（系统要求手动确认）
+3. 标准通道（`ACTION_ASSIST` / `ACTION_VOICE_ASSIST`、Pixel 类原生手势）即可唤起
+4. 可选：在 Minis **无障碍服务**（设置 → 无障碍）中启用 *Minis Accessibility Service*，
+   HyperOS 路线的唤起截图依赖它
 
-This repository is a mirror of a private development tree, so it **does not
-accept pull requests** — there is nowhere for them to land. Issues are the way
-to shape the product, and [AwesomeMinis](https://github.com/OpenMinis/AwesomeMinis)
-and [MinisSkills](https://github.com/OpenMinis/MinisSkills) both do take
-contributions. See [CONTRIBUTING.md](CONTRIBUTING.md).
+**唤起截图**：唤起时自动把"你正在看的屏幕"截图附进新对话（需 agent 模型支持视觉）。
+在 Minis **设置 → 权限 → 系统权限** 中可用「助理唤起时附带当前屏幕」开关控制；
+安全界面（银行类应用等）无法截取，会自动静默降级为无图会话。
+
+**HyperOS（小米/红米）注意**：
+- 手势派发被硬编码到小爱私有通道，改默认助理无效。
+  需配套 LSPosed 模块 **<https://github.com/xiki45/minis-assist-hook>**（v2.1+）：
+  在系统手势唤起小爱时重定向到 Minis（双击小白条 / 长按电源键直接全屏打开）。
+- **触发源差异化取屏**（hook v2.1 起）：双击小白条 = 屏幕即现场 → 自动附截图；
+  长按电源键 = 快速提问 → 不附截图。hook 经 `com.openminis.hook.attach_screen`
+  extra 传递判定，缺失时默认附截图（兼容旧模块 / 标准路线）。
+- **每次更新/重装/强行停止（force-stop）本应用后，HyperOS（及 Android 12+ 通用行为）
+  会解除无障碍服务绑定**（设置项可能还在但实际未绑定，
+  表现为唤起不再附带截图）。修复：系统无障碍设置里把 Minis 的开关关一次再打开
+  （应用内 系统权限 页会显示状态与修复指引）。
+
+---
+
+## 跟上游同步
+
+```bash
+git fetch upstream      # upstream = https://github.com/OpenMinis/OpenMinis
+git rebase upstream/main
+git push --force-with-lease
+```
+
+改动集中在 19 个文件、以新增为主，rebase 冲突概率低。
