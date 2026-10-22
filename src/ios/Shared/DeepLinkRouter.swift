@@ -137,6 +137,10 @@ enum DeepLinkRouter {
         case "soul":
             coord.pendingSettingsTarget = .soul
 
+        // [T-system-prompt-prose] minis://settings/system-prompt
+        case "system-prompt", "system_prompt", "systemprompt":
+            coord.pendingSettingsTarget = .systemPrompt
+
         case "tools":
             coord.pendingSettingsTarget = .tools
 

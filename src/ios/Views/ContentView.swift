@@ -8082,6 +8082,8 @@ private enum SettingsDestination: Hashable {
     case skills
     // [T-ios-assistant-header-open-soul]
     case soul
+    // [T-system-prompt-prose] Editable static prose of the system prompt.
+    case systemPrompt
     // [T-tools-master-switch]
     case tools
     case memory
@@ -8215,6 +8217,19 @@ private struct SettingsSheet: View {
                                 .foregroundStyle(.white)
                                 .frame(width: 21, height: 21)
                                 .background(.pink, in: Circle())
+                        }
+                    }
+                    NavigationLink {
+                        SystemPromptSettingsView()
+                    } label: {
+                        Label {
+                            Text("System Prompt")
+                        } icon: {
+                            Image(systemName: "doc.text")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.white)
+                                .frame(width: 21, height: 21)
+                                .background(.gray, in: Circle())
                         }
                     }
                     NavigationLink {
@@ -8461,6 +8476,8 @@ private struct SettingsSheet: View {
                     SkillsManagementView()
                 case .soul:
                     SoulSettingsView()
+                case .systemPrompt:
+                    SystemPromptSettingsView()
                 case .tools:
                     ToolsSettingsView()
                 case .memory:
@@ -8566,6 +8583,8 @@ private struct SettingsSheet: View {
             navPath.append(SettingsDestination.skills)
         case .soul:
             navPath.append(SettingsDestination.soul)
+        case .systemPrompt:
+            navPath.append(SettingsDestination.systemPrompt)
         case .tools:
             navPath.append(SettingsDestination.tools)
         case .memory:

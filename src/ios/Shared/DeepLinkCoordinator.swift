@@ -17,6 +17,8 @@ enum SettingsDeepLinkTarget: Equatable {
     /// `minis://settings/soul`, and used by the assistant identity row in the
     /// chat transcript.
     case soul
+    // [T-system-prompt-prose] minis://settings/system-prompt
+    case systemPrompt
     // [T-tools-master-switch] minis://settings/tools
     case tools
     case memory

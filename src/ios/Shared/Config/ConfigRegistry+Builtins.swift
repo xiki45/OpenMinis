@@ -23,6 +23,7 @@ extension ConfigRegistry {
         registerRootfsMirror(into: r)
         registerSession(into: r)
         registerSoul(into: r)
+        registerSystemPrompt(into: r)
         registerMemory(into: r)
     }
 
@@ -297,6 +298,50 @@ extension ConfigRegistry {
                     try SoulStore.save(file)
                 } catch {
                     throw ConfigError.io("SOUL.md write failed: \(error.localizedDescription)")
+                }
+            }
+        ))
+    }
+
+    // MARK: System Prompt — the editable static prose block
+    //
+    // `system_prompt.prose` mirrors Settings → System Prompt: the runtime
+    // guidance / shared-directory / minis:// / file-creation / tone / Apple
+    // framework / env-var / scheduled-tasks prose of the agent's system prompt.
+    // The tool bullet list, the SOUL identity, the skill / MCP fragments and
+    // the dynamic time line are app-owned and NOT editable here — they are
+    // spliced in at prompt-build time (see AIChatViewModel.spliceToolBullets).
+
+    @MainActor
+    private static func registerSystemPrompt(into r: ConfigRegistry) {
+        r.register(ClosureField(
+            path: "system_prompt.prose",
+            displayName: "System prompt prose",
+            description: "The editable static prose of the agent's system prompt: runtime guidance, the /var/minis shared-directory listing, the minis:// URL scheme notes, the file-creation guidelines, the tool-call style rules, the tone-and-style rules, the Native Apple framework command list, the environment-variable rules and the scheduled-tasks paragraph.\n\nNOT editable and NOT part of this value (all owned by the app): the SOUL identity sentence + Personality block, the tool bullet list, the skill / MCP fragments, and the runtime time/languages line.\n\nLength cap is language-aware, same rule as soul.body: 2000 tokens total (CJK glyph / punctuation = 1 each; Latin word = 1). The writer also rejects prompt-injection patterns (\"ignore previous instructions\" etc.).\n\nWriting a value stores an override in SYSTEM_PROMPT.md. Writing the built-in default text back (or an empty string) deletes the override so the default resumes; an applied change can also be reverted from the config audit log.",
+            valueSchema: .string(maxLength: nil),
+            risk: .sensitive, revertable: true,
+            reader: { .string(SystemPromptProseStore.load()) },
+            writer: { v in
+                guard case .string(let s) = v else { throw ConfigError.typeMismatch(expected: "string") }
+                if SystemPromptProseStore.containsInjectionPattern(s) {
+                    throw ConfigError.invalidValue("Prose contains a prompt-injection pattern (\"ignore/disregard/forget … previous/prior instructions\"). This block is runtime guidance for the agent, not instructions that may override it.")
+                }
+                switch SystemPromptProseStore.isOverLimit(s) {
+                case .ok:
+                    break
+                case .overLimit(let count, let cap):
+                    throw ConfigError.invalidValue("Over limit: \(count) tokens exceeds cap of \(cap). Trim the prose — each CJK character and each Latin word counts as one token.")
+                }
+                // Writing the default back frees the override slot rather than
+                // pinning a copy of today's default.
+                if s == SystemPromptProseStore.defaultContent {
+                    SystemPromptProseStore.reset()
+                } else {
+                    do {
+                        try SystemPromptProseStore.save(s)
+                    } catch {
+                        throw ConfigError.io("SYSTEM_PROMPT.md write failed: \(error.localizedDescription)")
+                    }
                 }
             }
         ))
