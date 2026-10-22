@@ -132,3 +132,44 @@ git push --force-with-lease
 ```
 
 改动集中在 19 个文件、以新增为主，rebase 冲突概率低。
+
+---
+
+## 系统提示词可编辑（Settings → System Prompt）
+
+在上游基础上，本分支把 agent **系统提示词的静态 prose 部分**开放为可编辑，方便按需调整 agent 的运行时行为指引。
+
+**入口**：设置 → Agent Runtime → **System Prompt**（Soul 之后、Memory 之前）。
+也可经 `minis-config get/set system_prompt.prose` 读写，写入值等于内置默认文本（或空串）即清除自定义、回落默认。
+
+### 可编辑 vs 由 app 管理
+
+| 部分 | 是否可编辑 | 来源 |
+|---|---|---|
+| **静态 prose**（运行时指引、`/var/minis` 目录、minis:// URL scheme、文件创建规范、tool-call style、语气、Android framework commands、环境变量规则、定时任务段落） | ✅ 可编辑 | `SystemPromptProseStore`（`SYSTEM_PROMPT.md`） |
+| 工具 bullet 列表（`shell_execute` / `file_*` / `browser_use` / `memory_*` 等） | ❌ app 管理 | 按工具/记忆开关硬编码派生，每次请求强制注入 |
+| MCP 服务器元数据（Top-20） | ❌ app 管理 | `MCPRepository.mcpPromptFragment()` |
+| Skill 元数据（Top-20 `<available_skills>`） | ❌ app 管理 | `SkillRepository.skillPromptFragment()` |
+| SOUL 身份 / Personality | ❌ 单独编辑 | Settings → Soul（`SOUL.md`） |
+| Runtime context（日期/时区/语言） | ❌ 每次生成 | 请求时拼装 |
+
+工具 / MCP / Skill 由 app 自动生成而非用户编辑，是为了避免 **prompt/schema drift**：工具 bullet 必须与工具 schema 同步开关，否则模型会被告知有某个工具但 schema 里没有，产生幻觉调用；MCP / Skill 元数据每次请求从配置动态生成，做成可编辑会出现两份真相。
+
+### 约束
+
+- **语言感知字数上限**（同 Soul personality）：中文 ≤ 1600 字符 **或** 英文 ≤ 1000 词，按主要语言择一判定；超限拒绝保存。
+- **注入清洗**：拒绝含 "ignore/disregard/forget … previous instructions" 等提示注入模式的文本。
+- **Reset to Default** 删除 `SYSTEM_PROMPT.md`，内置默认 prose 立即恢复。
+- 工具 bullet 列表**始终注入**——即使编辑后的 prose 删掉了 `Available tools:` 标题，bullets 也会被补到开头，保证 schema 里每个工具都被广告。
+
+### 涉及文件
+
+| 文件 | 作用 |
+|---|---|
+| `src/android/.../agent/SystemPromptProseStore.kt` | 持久化 store（默认文本 + 读写/重置/上限/清洗） |
+| `src/android/.../ui/settings/SystemPromptSettingsScreen.kt` | 设置页编辑器（计数、超限提示、保存、重置、未保存守卫） |
+| `src/android/.../config/ConfigBuiltins.kt` | `system_prompt.prose`（`minis-config` 字段） |
+| `src/android/.../ui/chat/ChatViewModel.kt` | `buildSystemPrompt()` 从 store 取 prose 并拼接工具 bullet |
+| `src/android/.../ui/navigation/AppNavigation.kt` / `ui/settings/SettingsScreen.kt` | 路由与设置入口 |
+
+> iOS 侧暂未实现，本功能当前仅 Android。

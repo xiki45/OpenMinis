@@ -177,6 +177,8 @@ object Routes {
     const val MCP = "mcp"
     /** [T-soul-md] SOUL.md editor. */
     const val SOUL = "soul"
+    /** [T-system-prompt-prose] Static system-prompt prose editor. */
+    const val SYSTEM_PROMPT = "system_prompt"
     const val MEMORY_FILE_EDIT = "memory_file/{fileName}/{isGlobal}"
     const val PERMISSIONS = "permissions"
     /**
@@ -623,6 +625,8 @@ fun AppNavigation(
                 onAgentToolsClick = { navController.safeNavigate(Routes.AGENT_TOOLS) },
                 onMcpClick = { navController.safeNavigate(Routes.MCP) },
                 onSoulClick = { navController.safeNavigate(Routes.SOUL) },
+                // [T-system-prompt-prose] Row sits right after Soul in Settings.
+                onSystemPromptClick = { navController.safeNavigate(Routes.SYSTEM_PROMPT) },
                 onPermissionsClick = { navController.safeNavigate(Routes.PERMISSIONS) },
                 // [T-assist-screenshot] 补上系统权限页入口（此前路由存在但无导航来源）。
                 onSystemPermissionsClick = { navController.safeNavigate(Routes.SYSTEM_PERMISSIONS) },
@@ -1364,6 +1368,13 @@ fun AppNavigation(
         // [T-soul-md] SOUL.md editor.
         composable(Routes.SOUL) {
             com.openminis.app.ui.settings.SoulSettingsScreen(
+                onBack = { navController.safePopBackStack() },
+            )
+        }
+
+        // [T-system-prompt-prose] Static system-prompt prose editor.
+        composable(Routes.SYSTEM_PROMPT) {
+            com.openminis.app.ui.settings.SystemPromptSettingsScreen(
                 onBack = { navController.safePopBackStack() },
             )
         }

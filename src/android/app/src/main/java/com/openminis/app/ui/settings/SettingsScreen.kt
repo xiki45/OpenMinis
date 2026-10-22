@@ -95,6 +95,10 @@ fun SettingsScreen(
     // Agent Runtime section; default no-op for callers that haven't wired
     // the route yet.
     onSoulClick: () -> Unit = {},
+    // [T-system-prompt-prose] Settings › System Prompt (editable static prose of
+    // the agent's system prompt). Sits right after Soul: Soul edits identity,
+    // this edits behaviour. Default no-op until the route is wired.
+    onSystemPromptClick: () -> Unit = {},
     onPermissionsClick: () -> Unit = {},
     // [T-assist-screenshot] 系统权限页（无障碍服务状态 + 助理截图开关）。
     // 该路由此前在 AppNavigation 注册但无入口；这里补上。
@@ -222,6 +226,16 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_soul),
                     subtitle = stringResource(R.string.settings_soul_subtitle),
                     onClick = onSoulClick,
+                )
+                // [T-system-prompt-prose] Immediately after Soul and before
+                // Memory: Soul edits identity, this edits the static behavioural
+                // prose of the system prompt (tools/skills are app-owned).
+                SettingsItem(
+                    icon = Icons.Outlined.Description,
+                    iconColor = Color(0xFF8E8E93),
+                    title = stringResource(R.string.settings_system_prompt),
+                    subtitle = stringResource(R.string.settings_system_prompt_subtitle),
+                    onClick = onSystemPromptClick,
                 )
                 SettingsItem(
                     icon = Icons.Outlined.Psychology,

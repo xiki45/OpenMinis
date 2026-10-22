@@ -288,6 +288,9 @@
     <!-- T-soul-md — SOUL.md personality / identity settings -->
     <string name="settings_soul">Soul</string>
     <string name="settings_soul_subtitle">Persistent personality and identity (SOUL.md)</string>
+    <!-- T-system-prompt-prose — Settings › System Prompt row -->
+    <string name="settings_system_prompt">System Prompt</string>
+    <string name="settings_system_prompt_subtitle">Editable static prose of the agent\'s system prompt</string>
     <string name="soul_settings_title">Soul</string>
     <string name="soul_section_preview">Preview</string>
     <string name="soul_section_identity">Identity</string>
@@ -327,6 +330,26 @@
     <string name="soul_icon_error_title">Can\'t use that image</string>
     <string name="soul_icon_error_unreadable">That image couldn\'t be read. Try a different one.</string>
     <string name="soul_icon_error_too_large">That image is too large to store. Try a simpler one.</string>
+    <!-- T-system-prompt-prose — static system-prompt prose editor -->
+    <string name="system_prompt_settings_title">System Prompt</string>
+    <string name="system_prompt_save">Save</string>
+    <string name="system_prompt_section_prose">System Prompt Prose</string>
+    <string name="system_prompt_prose_placeholder">Guidance the Agent reads on every turn — runtime notes, directories, file creation, tone…</string>
+    <string name="system_prompt_prose_footer">Only the static prose of the system prompt is editable here. The Soul identity, the tool list, skill and MCP fragments, and the runtime context appended at send time are supplied by the app and cannot be changed. The length cap is language-aware: Chinese ≤ 1600 characters OR English ≤ 1000 words (the rule is picked by the majority language). Over-limit text and prompt-injection patterns are rejected on save.</string>
+    <string name="system_prompt_count_chars">%1$d / %2$d chars</string>
+    <string name="system_prompt_count_words">%1$d / %2$d words</string>
+    <string name="system_prompt_over_limit_chinese">Over limit: %1$d / %2$d chars. Chinese ≤ %2$d chars or English ≤ %3$d words.</string>
+    <string name="system_prompt_over_limit_english">Over limit: %1$d / %2$d words. Chinese ≤ %3$d chars or English ≤ %2$d words.</string>
+    <string name="system_prompt_restore_default">Reset to Default</string>
+    <string name="system_prompt_restore_confirm_title">Reset to default system prompt?</string>
+    <string name="system_prompt_restore_confirm_body">Your custom prose will be deleted and the built-in default resumes. This cannot be undone.</string>
+    <string name="system_prompt_cancel">Cancel</string>
+    <string name="system_prompt_discard_confirm_title">Discard changes?</string>
+    <string name="system_prompt_discard_confirm_body">Your edits to the system prompt prose have not been saved.</string>
+    <string name="system_prompt_discard_confirm">OK, Discard</string>
+    <string name="system_prompt_discard_cancel">Cancel, Keep Editing</string>
+    <string name="system_prompt_save_error_title">Couldn\'t save</string>
+    <string name="system_prompt_ok">OK</string>
     <string name="settings_env_vars">Environment Variables</string>
     <string name="settings_env_vars_subtitle">Variables injected into the sandbox</string>
     <string name="settings_section_storage">Storage</string>

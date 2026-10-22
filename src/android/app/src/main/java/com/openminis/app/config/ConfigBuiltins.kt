@@ -50,6 +50,7 @@ internal object ConfigBuiltins {
         registerProviderCollections(r, providerRepo, envVarRepo)
         registerDefaults(r, providerRepo)
         registerSoul(r, context)
+        registerSystemPrompt(r, context)
         registerMemory(r, context)
         registerNetwork(r, context)
     }
@@ -1175,6 +1176,89 @@ internal object ConfigBuiltins {
                     }
                     val cur = loadCurrent()
                     saveCurrent(cur.copy(body = raw))
+                },
+            )
+        )
+    }
+
+    // -- System prompt — the editable static prose block --
+    //
+    // [T-system-prompt-prose] The agent's system prompt is assembled from
+    // four app-owned layers: the SOUL identity section
+    // (SystemPromptBuilder.identitySection), the static prose below, the
+    // tool bullet list, and the skill / MCP / memory / runtime-context
+    // suffixes. Only the prose is user-editable — this field is the only
+    // write surface for it besides Settings → System Prompt.
+    //
+    // `revertable = true` because writing the built-in default back (or an
+    // empty string) deletes the override file, so the previous value is
+    // fully reconstructible from the audit entry.
+    private fun registerSystemPrompt(r: ConfigRegistry, context: Context) {
+        r.register(
+            ClosureField(
+                path = "system_prompt.prose",
+                displayName = "System prompt prose",
+                description = "The editable static prose of the agent's system prompt: the runtime guidance, " +
+                    "the /var/minis shared-directory listing, the minis:// URL scheme notes, the file-creation " +
+                    "guidelines, the tool-call style rules, the tone-and-style rules, the Android framework " +
+                    "command list, the environment-variable rules and the scheduled-tasks paragraph.\n" +
+                    "\n" +
+                    "NOT editable and NOT part of this value (all owned by the app): the SOUL identity " +
+                    "sentence + Personality block, the tool bullet list, the skill / MCP fragments, and the " +
+                    "trailing \"Runtime context:\" suffix.\n" +
+                    "\n" +
+                    "Length cap is language-aware, same rule as soul.body: Chinese ≤ " +
+                    "${com.openminis.app.agent.SoulStore.CHINESE_CHAR_LIMIT} chars OR English ≤ " +
+                    "${com.openminis.app.agent.SoulStore.ENGLISH_WORD_LIMIT} words (picked by the majority " +
+                    "language). The writer also rejects prompt-injection patterns (\"ignore previous " +
+                    "instructions\" etc.).\n" +
+                    "\n" +
+                    "Writing a value stores an override in SYSTEM_PROMPT.md. Writing the built-in default " +
+                    "text back (or an empty string) deletes the override so the default resumes; an applied " +
+                    "change can also be reverted from Logs → Config Changes.",
+                // No schema maxLength — either a character or a word cap is
+                // wrong for the other language. Both checks (length +
+                // injection) run in the writer below.
+                valueSchema = ConfigSchema.Str(),
+                risk = ConfigRisk.SENSITIVE,
+                revertable = true,
+                reader = {
+                    // Never null: the store falls back to DEFAULT_CONTENT.
+                    ConfigValue.Str(
+                        com.openminis.app.agent.SystemPromptProseStore.load(context)
+                    )
+                },
+                writer = { v ->
+                    val raw = (v as? ConfigValue.Str)?.value
+                        ?: throw ConfigError.TypeMismatch("string")
+                    if (com.openminis.app.agent.SystemPromptBuilder
+                            .containsInjectionPattern(raw)
+                    ) {
+                        throw ConfigError.InvalidValue(
+                            "Prose contains a prompt-injection pattern (\"ignore/disregard/forget … previous/prior instructions\"). This block is runtime guidance for the agent, not instructions that may override it."
+                        )
+                    }
+                    val check = com.openminis.app.agent.SystemPromptProseStore.isOverLimit(raw)
+                    when (check) {
+                        is com.openminis.app.agent.SoulBodyLimitCheck.Ok -> Unit
+                        is com.openminis.app.agent.SoulBodyLimitCheck.OverLimitChinese ->
+                            throw ConfigError.InvalidValue(
+                                "Over limit: ${check.chars} Chinese chars exceeds cap of ${check.cap}. Either trim to ≤ ${check.cap} chars, or rewrite mostly in English to use the ≤ ${com.openminis.app.agent.SoulStore.ENGLISH_WORD_LIMIT}-word cap."
+                            )
+                        is com.openminis.app.agent.SoulBodyLimitCheck.OverLimitEnglish ->
+                            throw ConfigError.InvalidValue(
+                                "Over limit: ${check.words} English words exceeds cap of ${check.cap}. Either trim to ≤ ${check.cap} words, or rewrite mostly in Chinese to use the ≤ ${com.openminis.app.agent.SoulStore.CHINESE_CHAR_LIMIT}-char cap."
+                            )
+                    }
+                    // Writing the default back must FREE the override slot,
+                    // not pin a copy of whatever the default was today. save()
+                    // applies the same rule; this explicit branch keeps the
+                    // intent visible at the CLI boundary.
+                    if (raw.trim() == com.openminis.app.agent.SystemPromptProseStore.DEFAULT_CONTENT) {
+                        com.openminis.app.agent.SystemPromptProseStore.reset(context)
+                    } else {
+                        com.openminis.app.agent.SystemPromptProseStore.save(context, raw)
+                    }
                 },
             )
         )
