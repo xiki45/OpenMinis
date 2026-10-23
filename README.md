@@ -15,7 +15,7 @@
 
 ## 这个分支改动了什么
 
-上游 `main` 之上 10 个提交、19 个文件（+958/−182，删除主要为 README 整体替换）。
+上游 `main` 之上 3 个提交、31 个文件（+2339/−453，删除主要为 README 整体替换）。
 全部为新增文件与少量插入式改动，不触碰上游既有功能。
 
 ### 新增 `assist/` 包（系统助理核心）
@@ -131,7 +131,7 @@ git rebase upstream/main
 git push --force-with-lease
 ```
 
-改动集中在 19 个文件、以新增为主，rebase 冲突概率低。
+改动集中在 31 个文件、以新增为主，rebase 冲突概率低。
 
 ---
 
@@ -146,10 +146,10 @@ git push --force-with-lease
 
 | 部分 | 是否可编辑 | 来源 |
 |---|---|---|
-| **静态 prose**（运行时指引、`/var/minis` 目录、minis:// URL scheme、文件创建规范、tool-call style、语气、Android framework commands、环境变量规则、定时任务段落） | ✅ 可编辑 | `SystemPromptProseStore`（`SYSTEM_PROMPT.md`） |
+| **静态 prose**（运行时指引、`/var/minis` 目录、minis:// URL scheme、文件创建规范、tool-call style、语气、平台 framework commands、环境变量规则、定时任务段落） | ✅ 可编辑 | `SystemPromptProseStore`（`SYSTEM_PROMPT.md`） |
 | 工具 bullet 列表（`shell_execute` / `file_*` / `browser_use` / `memory_*` 等） | ❌ app 管理 | 按工具/记忆开关硬编码派生，每次请求强制注入 |
-| MCP 服务器元数据（Top-20） | ❌ app 管理 | `MCPRepository.mcpPromptFragment()` |
-| Skill 元数据（Top-20 `<available_skills>`） | ❌ app 管理 | `SkillRepository.skillPromptFragment()` |
+| MCP 服务器元数据（Top-20） | ❌ app 管理 | Android `MCPRepository.mcpPromptFragment()` / iOS `MCPStore.systemPromptSnippet()` |
+| Skill 元数据（Top-20 `<available_skills>`） | ❌ app 管理 | Android `SkillRepository.skillPromptFragment()` / iOS `SkillStore.skillPromptFragment()` |
 | SOUL 身份 / Personality | ❌ 单独编辑 | Settings → Soul（`SOUL.md`） |
 | Runtime context（日期/时区/语言） | ❌ 每次生成 | 请求时拼装 |
 
@@ -157,12 +157,14 @@ git push --force-with-lease
 
 ### 约束
 
-- **语言感知字数上限**（同 Soul personality）：中文 ≤ 1600 字符 **或** 英文 ≤ 1000 词，按主要语言择一判定；超限拒绝保存。
+- **字数上限**（同 Soul personality，随平台）：Android —— 中文 ≤ 1600 字符 **或** 英文 ≤ 1000 词，按主要语言择一判定；iOS —— 统一 ≤ 2000 token（CJK 一字/拉丁一词各计 1）；超限拒绝保存。
 - **注入清洗**：拒绝含 "ignore/disregard/forget … previous instructions" 等提示注入模式的文本。
 - **Reset to Default** 删除 `SYSTEM_PROMPT.md`，内置默认 prose 立即恢复。
 - 工具 bullet 列表**始终注入**——即使编辑后的 prose 删掉了 `Available tools:` 标题，bullets 也会被补到开头，保证 schema 里每个工具都被广告。
 
 ### 涉及文件
+
+**Android**
 
 | 文件 | 作用 |
 |---|---|
@@ -172,4 +174,15 @@ git push --force-with-lease
 | `src/android/.../ui/chat/ChatViewModel.kt` | `buildSystemPrompt()` 从 store 取 prose 并拼接工具 bullet |
 | `src/android/.../ui/navigation/AppNavigation.kt` / `ui/settings/SettingsScreen.kt` | 路由与设置入口 |
 
-> iOS 侧暂未实现，本功能当前仅 Android。
+**iOS**
+
+| 文件 | 作用 |
+|---|---|
+| `src/ios/Agent/Session/SystemPromptProseStore.swift` | 持久化 store（默认文本 + 读写/重置/上限/清洗） |
+| `src/ios/Views/Settings/SystemPromptSettingsView.swift` | 设置页编辑器（计数、超限提示、保存、重置、未保存守卫） |
+| `src/ios/Shared/Config/ConfigRegistry+Builtins.swift` | `system_prompt.prose`（`minis-config` 字段） |
+| `src/ios/Agent/Chat/AIChatViewModel.swift` | `baseSystemPrompt` 从 store 取 prose 并拼接工具 bullet + 时间/语言行 |
+| `src/ios/Views/ContentView.swift` / `Shared/DeepLinkRouter.swift` / `Shared/DeepLinkCoordinator.swift` | 路由与设置入口（含 `minis://settings/system-prompt` 深链） |
+
+> iOS 侧为 Android 实现的镜像，`DEFAULT_CONTENT` 文案按平台分别提取（iSH/Safari/`apple-*` vs PRoot/Chrome/`android-*`），API 一致；上限规则也随平台（iOS：统一 2000 token）。
+> iOS 编译验证按请求推迟，尚未跑过 `xcodebuild`。
