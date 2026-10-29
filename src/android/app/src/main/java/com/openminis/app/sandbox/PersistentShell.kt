@@ -254,9 +254,14 @@ class PersistentShell(
         }
 
         val handlers = NativeOffloadServer.registeredHandlers
-        if (handlers.isNotEmpty()) {
+        // [T-native-offload-bind] Only when our server is listening: otherwise
+        // the handler stubs run and report the CLI unavailable, instead of
+        // proot connecting to a name another process holds (and hanging).
+        if (handlers.isNotEmpty() && NativeOffloadServer.awaitListening()) {
             cmd.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
         }
+        // [FEAT-261021-11] Shell transparent forwarding (see PRootKernel).
+        cmd.addAll(com.openminis.app.network.ShellTransparentNet.prootArgs(rootfsManager.prootBinary))
 
         cmd.add("/bin/sh")
 
@@ -296,6 +301,10 @@ class PersistentShell(
         for ((key, value) in PRootKernel.customEnvironment) {
             env[key] = value
         }
+        // [T-net-android-phase3] Settings > Network "Shell" route: proxy
+        // variables for the local entry (empty = direct, unchanged). Before
+        // the caller's / user's own variables, which may override them.
+        env.putAll(com.openminis.app.network.NetworkShellEnvironment.proxyVariables())
 
         // [T-android-seccomp-selfheal / GH#186] Applied last so nothing above
         // can clobber it once this device is known to need it.
@@ -303,7 +312,8 @@ class PersistentShell(
             env[SeccompFallbackPolicy.NO_SECCOMP_ENV] = SeccompFallbackPolicy.NO_SECCOMP_VALUE
         }
 
-        val p = processBuilder.start()
+        // [T-shell-stall-yes-head] SIGPIPE unblocked in the child; see SpawnSignalMask.
+        val p = SpawnSignalMask.start(processBuilder)
         process = p
         stdinWriter = BufferedWriter(OutputStreamWriter(p.outputStream, StandardCharsets.UTF_8))
 
@@ -412,10 +422,21 @@ class PersistentShell(
         try {
             val buffer = ByteArray(4096)
             val stream = p.inputStream
+            // [T-android-pshell-utf8-split] A read boundary can fall inside a
+            // multi-byte character; decoding each read on its own turned both
+            // halves into U+FFFD. The decoder keeps the unfinished bytes for
+            // the next read. Markers are matched on the decoded text below and
+            // are ASCII, so this does not change how they are found.
+            val decoder = Utf8StreamDecoder()
             while (true) {
                 val n = stream.read(buffer)
-                if (n < 0) break
-                val text = String(buffer, 0, n, StandardCharsets.UTF_8)
+                // End of stream: what is left of a cut character goes through
+                // the same path as any other text, once.
+                val text = if (n < 0) decoder.finish() else decoder.decode(buffer, 0, n)
+                if (text.isEmpty()) {
+                    if (n < 0) break
+                    continue
+                }
                 appendTail(text)
 
                 val cb = pendingCallback
@@ -475,6 +496,7 @@ class PersistentShell(
                     carryOver = ""
                 }
                 // If no pending callback, discard (shell prompt noise etc.)
+                if (n < 0) break
             }
         } catch (e: Exception) {
             Log.d(TAG, "Reader loop ended: ${e.message}")
@@ -741,6 +763,40 @@ class PersistentShell(
         if (pendingEnv.isEmpty()) return
         if (!isAlive) return
         writeEnvironment(pendingEnv, previousKeys = emptySet())
+    }
+
+    /**
+     * [T-stop-choice] "Stop Current Tool Only": kill the command running now
+     * and nothing else - the shell stays, and so does any work detached with
+     * setsid/nohup (it left this command's group; see ForegroundCommandGroup).
+     *
+     * The signal goes from the host: proot does not virtualise pids, so the
+     * group id the wrapper reported is the host's. Writing a kill into stdin,
+     * as the timeout path does, cannot work here because `/bin/sh` reads its
+     * next line only after the foreground command returns. Once the group is
+     * dead the shell prints the done marker as usual and the call returns with
+     * whatever the command had written.
+     *
+     * Without a group id (no setsid in the guest, or the wrapper has not
+     * reported yet) this one shell is recycled instead.
+     *
+     * @return whether a command was running.
+     */
+    fun interruptForeground(): Boolean {
+        val cb = pendingCallback ?: return false
+        val pgid = cb.pgid
+        if (pgid != null && pgid > 1) {
+            val sent = runCatching {
+                android.system.Os.kill(-pgid, android.system.OsConstants.SIGKILL)
+            }.onFailure { Log.w(TAG, "interrupt: kill -$pgid failed: ${it.message}") }.isSuccess
+            if (sent) {
+                Log.i(TAG, "[stop-tool] killed foreground process group $pgid")
+                return true
+            }
+        }
+        Log.i(TAG, "[stop-tool] no process group to kill (pgid=$pgid) - recycling this shell")
+        stop()
+        return true
     }
 
     /**

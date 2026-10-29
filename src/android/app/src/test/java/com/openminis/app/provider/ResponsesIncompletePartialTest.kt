@@ -102,9 +102,12 @@ class ResponsesIncompletePartialTest {
     }
 
     @Test
-    fun `content_filter truncation is also preserved when text arrived`() {
-        // The reason string must not change the keep-vs-throw decision — the
-        // question is only whether the user has something to read.
+    fun `content_filter keeps the text that arrived and finishes as a refusal`() {
+        // [T-android-model-refusal] A content_filter stop is the safety system
+        // DECLINING, not a budget truncation: the partial text is still kept,
+        // but the turn finishes as content_filter so the agent loop shows "the
+        // model declined" rather than a truncated-reply mark (iOS maps
+        // incomplete + content_filter to .refusal).
         val chunks = responsesChunks(
             """
             data: {"type":"response.output_text.delta","delta":"partial before filter"}
@@ -117,7 +120,17 @@ class ResponsesIncompletePartialTest {
             "partial before filter",
             chunks.filterIsInstance<LLMStreamChunk.Text>().joinToString("") { it.text },
         )
-        assertEquals("length", chunks.filterIsInstance<LLMStreamChunk.Finished>().first().stopReason)
+        assertEquals("content_filter", chunks.filterIsInstance<LLMStreamChunk.Finished>().single().stopReason)
+    }
+
+    @Test
+    fun `content_filter with no output finishes as a refusal instead of throwing`() {
+        // Previously a generic "Response ended incomplete (reason:
+        // content_filter)" error. Now a normal terminal refusal the loop words
+        // properly, with no transient retry of a request that is declined again.
+        val chunks = responsesChunks("${incompleteEvent("content_filter")}\n\n")
+        assertEquals("content_filter", chunks.filterIsInstance<LLMStreamChunk.Finished>().single().stopReason)
+        assertTrue(chunks.none { it is LLMStreamChunk.Text })
     }
 
     // ── Nothing usable still fails ────────────────────────────────────────

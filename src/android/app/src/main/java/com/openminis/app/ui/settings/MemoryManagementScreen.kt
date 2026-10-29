@@ -344,18 +344,19 @@ fun MemoryFileEditScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Editor
-            DialogTextField(
+            // Editor. [T-android-editor-keyboard-overlap] The caret stays
+            // above the keyboard; see DocumentEditorField.
+            com.openminis.app.ui.components.DocumentEditorField(
                 value = content,
                 onValueChange = {
                     content = it
                 },
-                singleLine = false,
                 textStyle = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                 ),
                 placeholder = stringResource(R.string.memory_editor_placeholder),
-                modifier = Modifier.weight(1f),
+                outlined = true,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             )
 
             // Footer text

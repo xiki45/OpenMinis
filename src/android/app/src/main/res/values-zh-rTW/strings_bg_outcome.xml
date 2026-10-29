@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_task_paused_body">任務已暫停。開啟工作階段以繼續。</string>
+</resources>

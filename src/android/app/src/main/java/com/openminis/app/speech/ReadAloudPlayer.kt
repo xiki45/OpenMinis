@@ -1,8 +1,6 @@
 package com.openminis.app.speech
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.widget.Toast
@@ -73,6 +71,19 @@ class ReadAloudPlayer(context: Context) {
     /** Currently playing provider audio, if any — held so [stop] can cancel it. */
     private var player: MediaPlayer? = null
 
+    /** [T-readaloud-volume-boost] Volume above 100 % on [player]'s session. */
+    private var playerBoost: ReadAloudBoost? = null
+
+    /**
+     * [T-readaloud-volume-boost] The system engine plays on an audio session
+     * of our own (KEY_PARAM_SESSION_ID), so the boost above 100 % can sit on
+     * it. 0 when no session could be allocated: then no boost, as before.
+     */
+    private val systemSessionId: Int = runCatching {
+        appContext.getSystemService(AudioManager::class.java).generateAudioSessionId()
+    }.getOrDefault(0).coerceAtLeast(0)
+    private val systemBoost = ReadAloudBoost(systemSessionId)
+
     /**
      * Completes the in-flight [playBytes] suspension when [stop] tears the
      * MediaPlayer down. Releasing the player means its completion/error
@@ -106,6 +117,18 @@ class ReadAloudPlayer(context: Context) {
 
     private val _isSpeaking = MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
+
+    /**
+     * [T-readaloud-focus] Shared MAY_DUCK focus holder for both engines, held
+     * across a whole run of sentences (see [ReadAloudAudioFocus]).
+     */
+    private val focus = ReadAloudAudioFocus.shared(appContext)
+
+    /** Another app took focus (call, music started): stop, as a user stop would. */
+    private val onFocusLost: () -> Unit = {
+        AppLogger.info(TAG, "audio focus lost — stopping read-aloud")
+        stop()
+    }
 
     /**
      * Rolling buffer for streaming input. Mirrors [TextToSpeechManager]'s own
@@ -143,14 +166,43 @@ class ReadAloudPlayer(context: Context) {
         VoiceOutputState.registerPlayer(this)
         worker = scope.launch {
             for (text in queue) {
-                runCatching { speakOne(text) }
-                    .onFailure { AppLogger.error(TAG, "utterance failed: $it") }
+                try {
+                    runCatching { speakOne(text) }
+                        .onFailure { AppLogger.error(TAG, "utterance failed: $it") }
+                } finally {
+                    // [T-readaloud-focus] Every utterance ends here — done,
+                    // failed, or cancelled — so focus can never outlive it by
+                    // more than the window. The next sentence starting inside
+                    // it keeps focus held without a re-request. `pending` still
+                    // counts this utterance, so > 1 means another is queued and
+                    // only waiting on synthesis: hold longer for it.
+                    val moreQueued = pending.get() > 1
+                    focus.releaseSoon(
+                        this@ReadAloudPlayer,
+                        if (moreQueued) ReadAloudAudioFocus.SYNTH_WAIT_MS else ReadAloudAudioFocus.GRACE_MS,
+                    )
+                }
                 // Queue drained → speech is over. Counter rather than
                 // Channel.isEmpty, which is experimental API.
                 if (pending.decrementAndGet() <= 0) {
                     _isSpeaking.value = false
                     if (ownsCapsule()) VoiceOutputState.isSpeaking.value = false
                 }
+            }
+        }
+        // [T-readaloud-volume] Follow the read-aloud volume slider live on the
+        // provider path: MediaPlayer.setVolume applies to audio already
+        // playing, so the sentence being read changes as the thumb moves. The
+        // system engine cannot do this (KEY_PARAM_VOLUME is per utterance);
+        // speakViaSystem picks the value up from the next sentence.
+        // [T-readaloud-volume-boost] The part above 100 % is an effect on the
+        // audio session, so it follows the thumb live on both paths.
+        scope.launch {
+            VoiceOutputState.volume.collect { v ->
+                val gain = ReadAloudBoost.linearGain(v)
+                player?.runCatching { setVolume(gain, gain) }
+                playerBoost?.apply(v)
+                systemBoost.apply(v)
             }
         }
     }
@@ -277,6 +329,7 @@ class ReadAloudPlayer(context: Context) {
         playbackFinisher?.invoke()
         releasePlayer()
         system.stop()
+        focus.releaseNow(this)
         pending.set(0)
         _isSpeaking.value = false
         if (ownsCapsule()) {
@@ -313,6 +366,8 @@ class ReadAloudPlayer(context: Context) {
         playbackFinisher?.invoke()
         releasePlayer()
         system.stop()
+        // [T-readaloud-focus] Stop / mute / disable / dispose: no grace.
+        focus.releaseNow(this)
         pending.set(0)
         _isSpeaking.value = false
         if (ownsCapsule()) {
@@ -328,6 +383,7 @@ class ReadAloudPlayer(context: Context) {
         queue.close()
         scope.cancel()
         system.shutdown()
+        systemBoost.release()
         // Deregister by identity: removing a mid-stack player leaves the rest
         // intact, and dropping the top hands the capsule back to the player
         // beneath (typically the reply channel) instead of orphaning it.
@@ -475,8 +531,9 @@ class ReadAloudPlayer(context: Context) {
                 // Android had neither, and some OEM ROMs (ColorOS among them)
                 // will silently mute focus-less media playback. Focus denial is
                 // logged but non-fatal — muting is the exception, not the rule.
-                mp.setAudioAttributes(playbackAttributes)
-                requestAudioFocus()
+                // [T-readaloud-focus] Focus is now the shared run-long holder,
+                // acquired just before start() below.
+                mp.setAudioAttributes(ReadAloudAudioFocus.ATTRIBUTES)
                 mp.setDataSource(file.absolutePath)
                 mp.setOnCompletionListener { finish() }
                 mp.setOnErrorListener { _, what, extra ->
@@ -485,6 +542,15 @@ class ReadAloudPlayer(context: Context) {
                     true
                 }
                 mp.prepare()
+                // [T-readaloud-volume] Same read-aloud volume as the system
+                // path; the collector in init keeps it in step while playing.
+                // [T-readaloud-volume-boost] Up to 100 % on the player, the
+                // rest as a LoudnessEnhancer on its session.
+                val volume = VoiceOutputState.volume.value
+                val gain = ReadAloudBoost.linearGain(volume)
+                mp.setVolume(gain, gain)
+                playerBoost = ReadAloudBoost(mp.audioSessionId).also { it.apply(volume) }
+                logVolume("provider", volume)
                 // [T-android-tts-rom-compat] start() FIRST, speed second, each
                 // in its own guard. The previous order relied on
                 // setPlaybackParams-on-prepared implicitly starting playback —
@@ -493,6 +559,7 @@ class ReadAloudPlayer(context: Context) {
                 // the OUTER runCatching which skipped the utterance entirely.
                 // Now a ROM that rejects the speed change still plays at 1×;
                 // only the speed is lost, never the audio.
+                focus.acquire(this@ReadAloudPlayer, onFocusLost)
                 mp.start()
                 val speed = VoiceOutputState.speed.value
                 if (speed != 1.0f) {
@@ -508,34 +575,6 @@ class ReadAloudPlayer(context: Context) {
             }
             cont.invokeOnCancellation { releasePlayer() }
         }
-    }
-
-    // -- audio focus [T-android-tts-silent-blackhole] --
-
-    private val audioManager =
-        appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
-    private val playbackAttributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_MEDIA)
-        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-        .build()
-
-    private var focusRequest: AudioFocusRequest? = null
-
-    private fun requestAudioFocus() {
-        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-            .setAudioAttributes(playbackAttributes)
-            .build()
-        focusRequest = req
-        val granted = audioManager.requestAudioFocus(req)
-        if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            AppLogger.info(TAG, "audio focus not granted ($granted) — playing anyway")
-        }
-    }
-
-    private fun abandonAudioFocus() {
-        focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-        focusRequest = null
     }
 
     /**
@@ -560,9 +599,20 @@ class ReadAloudPlayer(context: Context) {
         // capsule chip — matching iOS, whose chip shows "Tingting (Chinese)"
         // rather than a generic "System TTS" once a voice is chosen.
         system.preferredVoiceName = VoiceOutputState.systemVoiceName.value
+        // [T-readaloud-volume] Per-utterance gain via KEY_PARAM_VOLUME
+        // (buildSpeechParams), capped at 1.0 by the engine.
+        // [T-readaloud-volume-boost] Above 100 % the utterance plays on our own
+        // session, which carries the LoudnessEnhancer for the rest.
+        val volume = VoiceOutputState.volume.value
+        system.speechVolume = ReadAloudBoost.linearGain(volume)
+        system.audioSessionId = systemSessionId
+        systemBoost.apply(volume)
+        logVolume("system", volume)
         if (ownsCapsule()) {
             VoiceOutputState.activeModelLabel.value = VoiceOutputState.systemVoiceLabel.value
         }
+        // [T-readaloud-focus] The system engine now ducks other apps too.
+        focus.acquire(this, onFocusLost)
         system.speak(text)
         // [T-android-tts-rom-compat] speak() may have been REJECTED by the
         // engine (missing language data on AOSP/OEM engines) — the manager
@@ -625,13 +675,23 @@ class ReadAloudPlayer(context: Context) {
     private fun estimatedSpeechMs(text: String): Long =
         (text.length * 90L + 400L).coerceIn(600L, 30_000L)
 
+    /** Last (path, volume) logged — one line per change, not per sentence. */
+    private var lastVolumeLog: Pair<String, Float>? = null
+
+    private fun logVolume(path: String, volume: Float) {
+        if (lastVolumeLog == path to volume) return
+        lastVolumeLog = path to volume
+        AppLogger.info(TAG, "read-aloud volume=$volume path=$path")
+    }
+
     private fun releasePlayer() {
+        playerBoost?.release()
+        playerBoost = null
         player?.runCatching {
             if (isPlaying) stop()
             release()
         }
         player = null
-        abandonAudioFocus()
     }
 
     /**

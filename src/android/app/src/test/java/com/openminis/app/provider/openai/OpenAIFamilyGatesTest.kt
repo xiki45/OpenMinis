@@ -602,10 +602,11 @@ class OpenAIFamilyGatesTest {
     fun `the production gates still carry their scoping literals`() {
         val src = ProductionSources.read("provider/openai/OpenAIProvider.kt")
         for (needle in listOf(
-            // Fast Mode: toggle AND gpt-family AND don't clobber an existing tier.
-            "if (!body.has(\"service_tier\") &&",
-            "com.openminis.app.data.FastModePrefs.isEnabled() &&",
-            "model.id.contains(\"gpt\", ignoreCase = true)",
+            // Fast Mode: gpt-family AND don't clobber an existing tier, and the
+            // tier the user chose run through the Ultrafast allow-list
+            // ([T-speed-tier], was a plain FastModePrefs.isEnabled() check).
+            "if (!body.has(\"service_tier\") && model.id.contains(\"gpt\", ignoreCase = true)) {",
+            ".effective(com.openminis.app.data.FastModePrefs.tier(), model)",
             // OpenRouter Anthropic cache control: host AND prefix.
             "isOpenRouter && model.id.lowercase().startsWith(\"anthropic/\")",
             "body.put(\"cache_control\", JSONObject().put(\"type\", \"ephemeral\"))",

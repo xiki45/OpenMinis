@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">Tunjukkan semua pemikiran</string>
+    <string name="thinking_full_title">Pemikiran penuh</string>
+    <string name="thinking_full_char_count">%1$s aksara</string>
+    <string name="thinking_full_load_more">Muat lagi</string>
+    <string name="thinking_full_copy_failed">Terlalu panjang untuk disalin</string>
+</resources>

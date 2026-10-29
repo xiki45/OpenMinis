@@ -265,13 +265,18 @@ internal class FreshProcessShell(
             cmd.add("-b"); cmd.add("$hostPath:$linuxPath")
         }
         val handlers = NativeOffloadServer.registeredHandlers
-        if (handlers.isNotEmpty()) {
+        // [T-native-offload-bind] Only when our server is listening: otherwise
+        // the handler stubs run and report the CLI unavailable, instead of
+        // proot connecting to a name another process holds (and hanging).
+        if (handlers.isNotEmpty() && NativeOffloadServer.awaitListening()) {
             cmd.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
         }
         // [T-android-fake-netlink] Same rtnetlink emulation the pooled shell
         // gets; the two paths must not disagree about whether the sandbox has
         // network interfaces.
         cmd.add("--fake-netlink")
+        // [FEAT-261021-11] Shell transparent forwarding (see PRootKernel).
+        cmd.addAll(com.openminis.app.network.ShellTransparentNet.prootArgs(rootfsManager.prootBinary))
         // [T-android-shell-fresh-process] Step 4: run the command as its own
         // process-group leader. No marker, no pgid reporting — the host does
         // not need to LEARN the group, because on the fresh path the guest
@@ -299,6 +304,10 @@ internal class FreshProcessShell(
         if (debugOffload) env["MINIS_NOFF_DEBUG"] = "1"
         env["MINIS_CHAT_SESSION_ID"] = sessionId
         for ((k, v) in PRootKernel.customEnvironment) env[k] = v
+        // [T-net-android-phase3] Settings > Network "Shell" route: proxy
+        // variables for the local entry (empty = direct, unchanged). Before
+        // the caller's / user's own variables, which may override them.
+        env.putAll(com.openminis.app.network.NetworkShellEnvironment.proxyVariables())
         // User-configured variables go in as real environment entries rather
         // than `export` lines written to a shared stdin — one more thing the
         // warm path had to do that this one does not.
@@ -306,7 +315,8 @@ internal class FreshProcessShell(
         if (useNoSeccomp) {
             env[SeccompFallbackPolicy.NO_SECCOMP_ENV] = SeccompFallbackPolicy.NO_SECCOMP_VALUE
         }
-        return pb.start()
+        // [T-shell-stall-yes-head] SIGPIPE unblocked in the child; see SpawnSignalMask.
+        return SpawnSignalMask.start(pb)
     }
 
     /**
@@ -326,8 +336,20 @@ internal class FreshProcessShell(
         val p = live ?: return
         // No isAlive gate: proot stays alive while it traces a detached
         // daemon, so "alive" says nothing about whether the command is.
-        killCommand(p, readEof = null)
-        Log.i(TAG, "[$sessionId] stopped by user, command killed")
+        //
+        // [T-android-stop-button-freeze] Stop is reached from the chat's Stop
+        // button, i.e. the main thread (ChatViewModel.cancelStream ->
+        // ExecutionCoordinator.stopCurrentCommand). killCommand waits up to
+        // KILL_SETTLE_MS for proot to exit before closing the streams, and with
+        // no read flag to watch that wait is always the full second - per
+        // running command. A field log showed 1.02 s between "cancelStream
+        // invoked" and the next line of the same call; with two commands
+        // running users saw ~2 s. The kill and its settle now run off the
+        // caller's thread; the command's read loop still ends the same way.
+        kotlin.concurrent.thread(name = "FreshShellStop", isDaemon = true) {
+            killCommand(p, readEof = null)
+            Log.i(TAG, "[$sessionId] stopped by user, command killed")
+        }
     }
 
     /** The process currently running, or null between commands. */

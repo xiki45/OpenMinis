@@ -459,7 +459,7 @@ internal suspend fun performTest(
     // configuration (`ProviderInstance.allowsEmptyAPIKey`) and still returns
     // null for an official endpoint with no key, so providers that genuinely
     // require one keep failing fast with the same message.
-    val apiKey = providerRepository.usableApiKey(instance)
+    val apiKey = providerRepository.requestCredential(instance)
         ?: return@withContext failure("No API key configured for this provider.")
 
     // [T-android-provider-voice] Speech tests route through the VoiceProvider
@@ -520,8 +520,17 @@ internal suspend fun performTest(
         }
     }
 
+    // [T-android-quicktest-opencode-session] A Quick Test is a conversation of
+    // its own: give it a fresh random id, so an OpenCode Go entry (which
+    // answers 400 "missing x-opencode-session" to a request without one) can
+    // be tested at all. A random UUID per conversation is what the operator
+    // asks for; the header stays host-gated in OpenCodeSessionHeader.
     val provider = runCatching {
-        ProviderFactory.create(instance, apiKey, entry.model, context, overrides = entry.overrides)
+        ProviderFactory.create(
+            instance, apiKey, entry.model, context,
+            sessionId = ProviderFactory.oneOffSessionId(),
+            overrides = entry.overrides,
+        )
     }.getOrElse { return@withContext failure(it.message ?: "Couldn't create provider.") }
 
     when (kind) {

@@ -72,6 +72,29 @@ object VoiceSendGate {
     var generation by mutableIntStateOf(0)
         private set
 
+    /**
+     * [T-voice-send-busy] The pending wait, by attempt number; null when none.
+     * A wait whose attempt is no longer pending was abandoned and neither
+     * sends nor releases anything when it ends. Main-thread writes only.
+     */
+    private var attempts = 0
+    private var pendingAttempt: Int? = null
+
+    /**
+     * [T-voice-send-busy] Take a pending send back and release the button: the
+     * user cancelled the transcription, tapped the mic to record again, edited
+     * the text (keyboard, backspace, clear all, AI correction), or left voice
+     * mode / the chat (the panel went away). Recognition still running keeps
+     * running and its text still lands in the transcript - it is just no
+     * longer sent on its own. Port of iOS abandonFinishForSend (b48cfdbfe).
+     */
+    fun abandonFinishForSend(reason: String) {
+        if (pendingAttempt == null) return
+        AppLogger.info(TAG, "✋ [voice-send] pending send abandoned ($reason) — not sending")
+        pendingAttempt = null
+        isFinishingForSend = false
+    }
+
     /** Latest panel transcript, so a deferred send can copy it explicitly. */
     @Volatile
     var transcript: String = ""
@@ -172,6 +195,8 @@ object VoiceSendGate {
             return
         }
         isFinishingForSend = true
+        val attempt = ++attempts
+        pendingAttempt = attempt
         val failuresBefore = failureCount.get()
         val state = SpeechRecognitionManager.state.value
         AppLogger.info(TAG, "🎙️ [voice-send] send while state=$state — finishing recognition first")
@@ -186,6 +211,7 @@ object VoiceSendGate {
             try {
                 do {
                     delay(100)
+                    if (pendingAttempt != attempt) return@launch
                     step = tracker.tick(
                         idle = SpeechRecognitionManager.state.value == RecognitionState.IDLE,
                         failedSinceStart = failureCount.get() > failuresBefore,
@@ -193,7 +219,12 @@ object VoiceSendGate {
                     )
                 } while (step == VoiceFinishTracker.Step.WAIT)
             } finally {
-                isFinishingForSend = false
+                // Only the pending attempt releases the button; an abandoned
+                // one already did, and must not touch a newer wait.
+                if (pendingAttempt == attempt) {
+                    pendingAttempt = null
+                    isFinishingForSend = false
+                }
             }
             val elapsedS = (SystemClock.elapsedRealtime() - started) / 1000.0
             when (step) {

@@ -94,6 +94,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
@@ -300,6 +301,11 @@ internal fun UserMessageBubble(
     onCompactAbove: (() -> Unit)? = null,
     onWithdraw: (() -> Unit)? = null,
     onPreviewFile: (Uri, String) -> Unit = { _, _ -> },
+    // [T-multi-select-share] Opens the share picker with this message's round
+    // selected. Null hides the action.
+    onShareChat: (() -> Unit)? = null,
+    // [T-in-chat-search] Opens Search in Chat. Null hides the action.
+    onSearchInChat: (() -> Unit)? = null,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isQueued = message.isQueued
@@ -429,7 +435,8 @@ internal fun UserMessageBubble(
                                 stableKey = "user:${message.id}",
                             ) {
                                 Text(
-                                    text = message.content,
+                                    // [T-in-chat-search] matches painted in place
+                                    text = com.openminis.app.ui.chat.search.rememberChatSearchHighlighted(message.content, com.openminis.app.ui.chat.search.ChatSearchUnits.BODY),
                                     color = textColor,
                                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 16.5.sp),
                                     modifier = bubbleModifier
@@ -513,6 +520,26 @@ internal fun UserMessageBubble(
                         onClick = { showMenu = false; onEdit() },
                         leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     )
+                }
+                // [T-in-chat-search] Beside the reading actions (iOS user menu).
+                if (onSearchInChat != null) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.chat_search_in_chat)) },
+                        onClick = { showMenu = false; onSearchInChat() },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    )
+                }
+                // [T-multi-select-share] Copy / Retry / Edit, a divider, then Share
+                // Chat… on its own; the destructive items stay last after their own
+                // divider (iOS ChatMessageRow's user menu).
+                if (onShareChat != null) {
+                    MinisMenuDivider()
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.chat_share_share_chat)) },
+                        onClick = { showMenu = false; onShareChat() },
+                        leadingIcon = { Icon(Icons.Outlined.IosShare, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    )
+                    if (onDeleteFromHere != null || onCompactAbove != null) MinisMenuDivider()
                 }
                 // [T-android-delete-from-here] Removes this message and every
                 // message after it. Destructive and not undoable, so it sits
@@ -619,6 +646,7 @@ internal fun UserAttachmentList(
             val uri = nonImageUris.getOrNull(idx)
             FileAttachmentTile(
                 fileName = name,
+                searchIndex = idx,
                 tileSize = tileSize,
                 onClick = {
                     // T150: route into FilePreviewScreen when we have a stable
@@ -653,6 +681,8 @@ internal fun UserAttachmentList(
 @Composable
 private fun FileAttachmentTile(
     fileName: String,
+    /** [T-in-chat-search] Index among the file tiles (unit field att:<i>). */
+    searchIndex: Int = -1,
     tileSize: androidx.compose.ui.unit.Dp,
     onClick: () -> Unit,
 ) {
@@ -676,7 +706,7 @@ private fun FileAttachmentTile(
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
-            text = fileName,
+            text = com.openminis.app.ui.chat.search.rememberChatSearchHighlighted(fileName, com.openminis.app.ui.chat.search.ChatSearchUnits.attachment(searchIndex)),
             fontSize = 9.sp,
             lineHeight = 11.sp,
             color = ChatColors.primaryText,

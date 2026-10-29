@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-folder-pages] Translations from the iOS catalog. -->
+<resources>
+    <string name="sessionlist_folder_show_more">展開更多 %1$d 個（還剩 %2$d 個）</string>
+</resources>

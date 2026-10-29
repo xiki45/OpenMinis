@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-usage-step2] Usage page strings. Kept in their own file so the page's
+     keys never collide with concurrent edits to strings.xml. -->
+<resources>
+    <string name="usage_range_today">Today</string>
+    <string name="usage_range_7d">7 Days</string>
+    <string name="usage_range_30d">30 Days</string>
+    <string name="usage_range_all">All</string>
+    <string name="usage_range_caption_fmt">%1$s · local time</string>
+    <string name="usage_total_tokens">Total tokens (incl. cache)</string>
+    <string name="usage_non_cached_fmt">Excl. cache reads %1$s</string>
+    <string name="usage_daily_avg_fmt">Daily avg %1$s</string>
+    <string name="usage_active_days_fmt">Active %1$d/%2$d days</string>
+    <string name="usage_seg_input">Input</string>
+    <string name="usage_seg_cache_write">Cache write</string>
+    <string name="usage_seg_cache_read">Cache read</string>
+    <string name="usage_seg_output">Output</string>
+    <string name="usage_cache_hit">Cache hit rate</string>
+    <string name="usage_cache_basis_fmt">Based on %1$s of input</string>
+    <string name="usage_trend">Trend</string>
+    <string name="usage_trend_peak_fmt">Peak %1$s</string>
+    <string name="usage_today_short">Today</string>
+    <string name="usage_a11y_chart_fmt">Usage chart. Total %1$s tokens, highest %2$s on %3$s</string>
+    <string name="usage_dim_provider">Providers</string>
+    <string name="usage_dim_model">Models</string>
+    <string name="usage_merge_models">Merge same model</string>
+    <plurals name="usage_n_models">
+        <item quantity="one">%1$d model</item>
+        <item quantity="other">%1$d models</item>
+    </plurals>
+    <plurals name="usage_n_providers">
+        <item quantity="one">%1$d provider</item>
+        <item quantity="other">%1$d providers</item>
+    </plurals>
+    <string name="usage_other_fmt">Other (%1$d)</string>
+    <string name="usage_removed_instances">Removed instances</string>
+    <string name="usage_instance_unknown">Instance not recorded</string>
+    <string name="usage_unknown_provider">Unknown</string>
+    <string name="usage_unknown_model">Unknown model</string>
+    <string name="usage_raw_ids_fmt">Raw IDs: %1$s</string>
+    <string name="usage_detail_fresh_input">Fresh input</string>
+    <string name="usage_empty_all">No usage data yet. Token usage shows up here after you chat.</string>
+    <string name="usage_empty_range">No usage in this period</string>
+    <string name="usage_show_all">Show all time</string>
+    <string name="usage_error">Couldn\'t read usage</string>
+    <string name="usage_retry">Retry</string>
+    <string name="usage_note_retained">Based on the chats you still have; deleted chats are not counted.</string>
+    <string name="usage_note_background">Excludes background calls such as title generation and context compaction.</string>
+</resources>

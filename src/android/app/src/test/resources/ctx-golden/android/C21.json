@@ -1,0 +1,326 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/page.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/page.png | 2760x21891 | 849211 bytes]"
+          },
+          {
+            "image": {
+              "base64Len": 11508,
+              "bytes": 8629,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "4f1500a85fd22404",
+              "w": 252
+            },
+            "inResultOf": "call_r1",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/page.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/page.png | 2760x21891 | 849211 bytes]"
+          },
+          {
+            "image": {
+              "base64Len": 11508,
+              "bytes": 8629,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "4f1500a85fd22404",
+              "w": 252
+            },
+            "inResultOf": "fn:read_image",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/page.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/page.png | 2760x21891 | 849211 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by read_image (tool_call_id: call_r1)]"
+          },
+          {
+            "image": {
+              "base64Len": 11508,
+              "bytes": 8629,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "4f1500a85fd22404",
+              "w": 252
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/page.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/page.png | 2760x21891 | 849211 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by read_image]"
+          },
+          {
+            "image": {
+              "base64Len": 11508,
+              "bytes": 8629,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "4f1500a85fd22404",
+              "w": 252
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/page.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/page.png | 2760x21891 | 849211 bytes]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/page.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/page.png | 2760x21891 | 849211 bytes]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/page.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/page.png | 2760x21891 | 849211 bytes]"
+          }
+        ],
+        "role": "tool"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/page.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/page.png | 2760x21891 | 849211 bytes]"
+          }
+        ],
+        "role": "tool"
+      }
+    ]
+  }
+}

@@ -51,16 +51,18 @@ class Review0923ViewModelStoreRealTest {
     }
 
     @Test
-    fun `the normal pool trims to four, oldest idle first`() {
-        val ids = (1..5).map { id("n") }
+    fun `the normal pool trims to its cap, oldest idle first`() {
+        // [T-new-limits] The cap went 4 -> 8; read it rather than restate it.
+        val cap = ChatViewModelStore.MAX_CACHED_NORMAL
+        val ids = (1..cap + 1).map { id("n") }
         val stores = ids.map { open(it) }
         assertFalse("oldest idle session evicted", live(ids[0], stores[0]))
-        (1..4).forEach { assertTrue("session $it kept", live(ids[it], stores[it])) }
+        (1..cap).forEach { assertTrue("session $it kept", live(ids[it], stores[it])) }
     }
 
     @Test
     fun `a re-opened session moves to the most-recently-used end`() {
-        val ids = (1..4).map { id("n") }
+        val ids = (1..ChatViewModelStore.MAX_CACHED_NORMAL).map { id("n") }
         val stores = ids.map { open(it) }.toMutableList()
         // Touch the oldest: it must now outlive the second-oldest.
         assertSame(stores[0], open(ids[0]))
@@ -71,7 +73,7 @@ class Review0923ViewModelStoreRealTest {
 
     @Test
     fun `the store being inserted is never the one evicted, even when everything else is exempt`() {
-        val ids = (1..4).map { id("n") }
+        val ids = (1..ChatViewModelStore.MAX_CACHED_NORMAL).map { id("n") }
         val stores = ids.map { open(it) }
         ChatViewModelStore.setActiveSession(ids[0])
         val fresh = id("n")

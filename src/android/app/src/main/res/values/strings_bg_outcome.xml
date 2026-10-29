@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- [T-bgnotif-outcome] Background notification body for a run that ended unfinished (iOS 387bca64c). -->
+    <string name="notif_task_paused_body">Task paused. Open the session to continue.</string>
+</resources>

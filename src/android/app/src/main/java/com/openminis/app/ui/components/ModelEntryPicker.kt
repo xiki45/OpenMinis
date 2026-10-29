@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -336,38 +335,35 @@ fun LazyListScope.modelEntryPickerItems(
                                     entry.model.displayName,
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
-                                // [T-android-provider-voice] Modality chips
-                                // (iOS entryRow modalityBadges: img / audio /
-                                // video / pdf and the -out variants).
+                                // [T-model-row-premature-wrap] Id, "·" and the
+                                // modality chips (iOS entryRow modalityBadges: img /
+                                // audio / video / pdf and the -out variants) on one
+                                // line when they fit; else the id keeps the full width
+                                // and the chips drop, together, to the line below.
                                 //
-                                // [T-android-modality-chip] FlowRow, NOT Row: this
-                                // was the one call site 0e7b742cc missed when it
-                                // fixed the same defect in the three picker sheets.
-                                // In a plain Row an overflowing chip is squeezed
-                                // until Compose wraps it character-by-character —
-                                // "img-out" drew as a vertical letter column, and
-                                // because the Row is CenterVertically that column
-                                // inflated the row height until the model name
-                                // floated above the selection dot. The shared
-                                // ModalityBadge (maxLines=1 + softWrap=false) stops
-                                // a chip breaking internally; FlowRow is what gives
-                                // it somewhere to go, wrapping whole chips instead.
-                                // Overflow here is about total chip width, not any
-                                // single label: a long model id plus 4 chips
-                                // overflows the weight(1f) column just as surely.
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    itemVerticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        entry.model.id,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                    )
-                                    modalityBadges(entry.model).forEach { badge ->
-                                        ModalityBadge(badge)
-                                    }
-                                }
+                                // [T-android-modality-chip] Never a plain Row: an
+                                // overflowing chip there was squeezed until Compose
+                                // wrapped it character-by-character ("img-out" as a
+                                // vertical letter column that inflated the row). The
+                                // shared ModalityBadge (maxLines=1 + softWrap=false)
+                                // stops a chip breaking internally; FitOrWrapLine
+                                // gives the chips their own line instead of squeezing.
+                                val badges = modalityBadges(entry.model)
+                                FitOrWrapLine(
+                                    separator = if (badges.isNotEmpty()) {
+                                        { ModelRowSeparatorDot() }
+                                    } else {
+                                        null
+                                    },
+                                    lead = {
+                                        Text(
+                                            entry.model.id,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                        )
+                                    },
+                                    tags = { badges.forEach { badge -> ModalityBadge(badge) } },
+                                )
                             }
                             // System virtual entries have no cloud endpoint to
                             // smoke-test — no bolt on those rows.
@@ -462,8 +458,8 @@ fun modalityBadges(model: LLMModel): List<String> {
  *    color and the "gray capsule" disappeared entirely;
  *  - maxLines=1 + softWrap=false so a chip can NEVER break internally.
  *    Compose Text in an overflowing Row wraps character-by-character
- *    ("audio-out" rendered as a vertical letter column); hosts must place
- *    chips in a FlowRow so overflow wraps whole chips to the next line.
+ *    ("audio-out" rendered as a vertical letter column); hosts place chips
+ *    in a FitOrWrapLine so overflow moves whole chips to the next line.
  */
 @Composable
 fun ModalityBadge(badge: String) {
@@ -481,6 +477,43 @@ fun ModalityBadge(badge: String) {
                 RoundedCornerShape(3.dp),
             )
             .padding(horizontal = 4.dp, vertical = 1.dp),
+    )
+}
+
+/**
+ * [T-model-row-premature-wrap] The dim "·" between a model id and its modality
+ * chips (iOS entryRow: caption2, quaternary). Only drawn when both share a line.
+ */
+@Composable
+fun ModelRowSeparatorDot() {
+    Text(
+        "·",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+    )
+}
+
+/**
+ * The model pickers' green "Active" badge: marks the member a Model Group is
+ * currently using (iOS UnifiedModelPicker `activeBadge`). Shared so every
+ * picker row draws the same capsule.
+ */
+@Composable
+fun ModelActiveBadge() {
+    Text(
+        stringResource(R.string.model_picker_active_badge),
+        fontSize = 9.sp,
+        lineHeight = 11.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        softWrap = false,
+        color = Color(0xFF34C759),
+        modifier = Modifier
+            .background(
+                Color(0xFF34C759).copy(alpha = 0.1f),
+                RoundedCornerShape(50),
+            )
+            .padding(horizontal = 5.dp, vertical = 1.dp),
     )
 }
 

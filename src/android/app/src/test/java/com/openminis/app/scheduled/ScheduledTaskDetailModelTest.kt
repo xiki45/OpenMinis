@@ -212,32 +212,19 @@ class ScheduledTaskDetailModelTest {
     // ── chat card subtitle ──────────────────────────────────────────────────
 
     @Test
-    fun `a card whose next-fire time has passed says nothing, not last run`() {
-        val sub = ScheduledTaskDetailModel::cardSubtitle
-        val m = ScheduledTaskMarker("T", "L", nextFireAtMs = 1_000L, prompt = "p")
-        assertEquals(ScheduledTaskDetailModel.CardSubtitle.Next(1_000L), sub(m, false, 500L))
-        assertEquals(ScheduledTaskDetailModel.CardSubtitle.None, sub(m, false, 1_000L))
-        assertEquals(ScheduledTaskDetailModel.CardSubtitle.None, sub(m, false, 5_000L))
-        // Only a fire with no next one is the last run.
-        val last = ScheduledTaskMarker("T", "L", nextFireAtMs = null, prompt = "p")
-        assertEquals(ScheduledTaskDetailModel.CardSubtitle.LastRun, sub(last, false, 5_000L))
-        assertEquals(ScheduledTaskDetailModel.CardSubtitle.Cancelled, sub(m, true, 500L))
-    }
-
-    @Test
-    fun `the card uses the subtitle rule`() {
+    fun `the card builds its status line with the iOS subline rule`() {
         val card = ProductionSources.read("ui/chat/ScheduledTaskCard.kt")
-        assertTrue(card.contains("ScheduledTaskDetailModel.cardSubtitle(marker, cancelled, now)"))
-        assertTrue(card.contains("ScheduledTaskDetailModel.CardSubtitle.None -> null"))
+        assertTrue(card.contains("ScheduledTaskDetailModel.cardSubline(marker, cancelled, now, phrases, live = live)"))
+        assertFalse(card.contains("cardSubtitle"))
     }
 
     @Test
-    fun `the card re-reads the clock when its next-fire time passes`() {
+    fun `the card re-reads the clock while its next-fire time is ahead`() {
         // Read only at composition, an on-screen card kept "Next: <time>"
-        // after the fire had happened.
+        // after the fire had happened; the relative label also needs a tick.
         val card = ProductionSources.read("ui/chat/ScheduledTaskCard.kt")
         assertTrue(card.contains("produceState(System.currentTimeMillis(), marker.nextFireAtMs)"))
-        assertTrue(card.contains("delay(wait + 1)"))
+        assertTrue(card.contains("delay(ScheduledTaskDetailModel.nextTickMs(wait))"))
     }
 
     @Test
@@ -331,9 +318,12 @@ class ScheduledTaskDetailModelTest {
     @Test
     fun `the chat card opens the detail page`() {
         val card = ProductionSources.read("ui/chat/ScheduledTaskCard.kt")
-        assertTrue(card.contains(".clickable { showingDetail = true }"))
+        // [T-sched-card-metrics] The tap goes through the shared TaskCardFrame.
+        assertTrue(card.contains("onClick = { showingDetail = true }"))
         assertTrue(card.contains("ScheduledTaskDetailSheet(\n            marker = marker,\n            hostSessionId = hostSessionId,"))
         val chat = ProductionSources.read("ui/chat/ChatScreen.kt")
-        assertTrue(chat.contains("marker = item.marker,\n                                hostSessionId = sessionId,"))
+        // [T-port-sched-pill-visible] The real session id: the route id of a
+        // chat started fresh stays its "__new__…" draft id.
+        assertTrue(chat.contains("marker = item.marker,\n                                hostSessionId = viewModel.currentSessionId,"))
     }
 }

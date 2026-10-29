@@ -6,7 +6,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 
 /** The engine's verdict on one transcript. */
 data class CorrectionSuggestion(
@@ -19,6 +19,12 @@ data class CorrectionSuggestion(
     val rejectedReason: String? = null,
     val diffSummary: String = "",
     val appliedPairs: List<VoiceCorrectionDiff.Pair> = emptyList(),
+    /**
+     * [T-voice-correction-fallback] The model's own error text when every
+     * model failed (e.g. "credit balance is too low"), so the panel can name
+     * the cause instead of only "failed". Null otherwise.
+     */
+    val failureDetail: String? = null,
 )
 
 /**
@@ -62,34 +68,31 @@ class VoiceCorrectionEngine(
         // using the conversation context and rare-term digest alone.
         val candidates = retrieveCandidates(text, locale)
 
-        // The strategy's HTTP call is a BLOCKING OkHttp request inside
-        // withContext(Dispatchers.IO), and a blocking call has no suspension
-        // point for cancellation to land on — so wrapping it in
-        // withTimeoutOrNull alone does NOT bound it. Measured on device: a
-        // 5000ms budget still returned after 9461ms.
-        //
-        // Running it in its own async and awaiting THAT under the timeout gives
-        // the timer a real suspension point (the await), so the budget is
-        // honoured from the caller's perspective. The orphaned request is
-        // cancelled and its result discarded; it cannot come back and mutate
-        // anything because the suggestion is built purely from the return value.
+        // [T-voice-correction-fallback] No ceiling over the whole run: each
+        // model call has its own CORRECTION_BUDGET_MS, enforced by
+        // CorrectionFallback (which also handles the blocking HTTP call that a
+        // plain timeout cannot cut short), and the chain is bounded by its
+        // model count. A whole-run ceiling here would starve the later models.
         val outcome = try {
-            coroutineScope {
-                val work = async(Dispatchers.IO) {
-                    strategy.correct(text, candidates, context, locale)
-                }
-                val result = withTimeoutOrNull(VoiceCorrectionConfig.CORRECTION_BUDGET_MS) {
-                    work.await()
-                }
-                if (result == null) work.cancel()
-                result
-            } ?: return timedOut(transcript, started)
+            withContext(Dispatchers.IO) {
+                strategy.correct(text, candidates, context, locale)
+            }
         } catch (t: Throwable) {
-            Log.w(TAG, "correction failed", t)
+            // [T-voice-correction-fallback] The strategy already walked every
+            // candidate model; the last one's error is the reason to show.
+            val last = (t as? CorrectionError.AllModelsFailed)?.attempts?.lastOrNull()?.error ?: t
+            Log.w(
+                TAG,
+                "[VoiceCorrection][Correct] FAILED reason=llm_error:${last.javaClass.simpleName} " +
+                    "attempts=${(t as? CorrectionError.AllModelsFailed)?.attempts?.size ?: 0} fallback=original_text " +
+                    "durationMs=${System.currentTimeMillis() - started}",
+                t,
+            )
             return CorrectionSuggestion(
                 transcript, transcript, false, "none",
                 (System.currentTimeMillis() - started).toInt(),
-                "llm_error:${t.javaClass.simpleName}",
+                "llm_error:${last.javaClass.simpleName}",
+                failureDetail = last.message,
             )
         }
 
@@ -129,11 +132,6 @@ class VoiceCorrectionEngine(
             appliedPairs = pairs,
         )
     }
-
-    private fun timedOut(transcript: String, started: Long) = CorrectionSuggestion(
-        transcript, transcript, false, "none",
-        (System.currentTimeMillis() - started).toInt(), "llm_timeout",
-    )
 
     /**
      * Stage 1 + 2: phonetic keys → per-source lookup (concurrent) → fusion.

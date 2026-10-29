@@ -109,13 +109,13 @@ class ScheduledPreemptiveInsertTest {
         val reminder = ScheduledTaskMarker.insertionReminder("Disk check", null)
         assertEquals(
             "<system-reminder>Scheduled task \"Disk check\" fired and was inserted here — not your last tool result, " +
-                "not a user request. Handle briefly, then resume your prior task.</system-reminder>",
+                "not a user request. Handle briefly, then resume your unfinished prior task.</system-reminder>",
             reminder,
         )
         assertEquals(
             "a blank label still reads as a sentence",
             "<system-reminder>A scheduled task fired and was inserted here — not your last tool result, " +
-                "not a user request. Handle briefly, then resume your prior task.</system-reminder>",
+                "not a user request. Handle briefly, then resume your unfinished prior task.</system-reminder>",
             ScheduledTaskMarker.insertionReminder("  ", null),
         )
         // Inside the envelope, never at the head of the message: a user row
@@ -134,7 +134,7 @@ class ScheduledPreemptiveInsertTest {
         assertEquals(
             "<system-reminder>Scheduled task \"Weather\" fired and was inserted here — not your last tool result, " +
                 "not a user request. Preset command already ran; read the result below, don't re-run it. " +
-                "Handle briefly, then resume your prior task.</system-reminder>",
+                "Handle briefly, then resume your unfinished prior task.</system-reminder>",
             ScheduledTaskMarker.insertionReminder("Weather", "shell_execute"),
         )
         assertTrue(m.xml.contains(ScheduledTaskMarker.insertionReminder("Weather", "shell_execute")))
@@ -160,11 +160,10 @@ class ScheduledPreemptiveInsertTest {
     // ── the bridge ──────────────────────────────────────────────────────────
 
     @Test
-    fun `the scheduled bridge is a pause, and is kept out of the chat UI`() {
+    fun `old bridge wordings are still kept out of the chat UI`() {
+        // [T-bridge-to-reminder] No longer written, still recognised.
         val bridge = ChatMessage.SCHEDULED_INSERT_BRIDGE_TEXT
-        assertTrue(bridge.contains("pick up the task I was working on"))
         assertTrue(ChatMessage(id = "b", role = "assistant", content = bridge).isInternalBridge)
-        // The user-follow-up bridge is unchanged.
         assertTrue(ChatMessage.INTERNAL_BRIDGE_TEXT.startsWith("(Interrupted mid-task by a new user message."))
     }
 
@@ -212,10 +211,18 @@ class ScheduledPreemptiveInsertTest {
             .substringBefore("\n    private suspend fun drainQueuedPrompts(")
         assertTrue(inject.contains("val queued = batch"))
         assertFalse(inject.contains("val queued = _promptQueue.value"))
-        // A single scheduled fire is re-wrapped and bridged as an insertion.
+        // A single scheduled fire is re-wrapped as an insertion.
         assertTrue(inject.contains("val scheduledInsert = queued.size == 1 && queued[0].isScheduledFire"))
         assertTrue(inject.contains("if (scheduledInsert) insertedScheduledEnvelope(prompt.text) else prompt.text"))
-        assertTrue(inject.contains("if (scheduledInsert) ChatMessage.SCHEDULED_INSERT_BRIDGE_TEXT else ChatMessage.INTERNAL_BRIDGE_TEXT"))
+        // [T-bridge-to-reminder] No assistant bridge any more; a user
+        // follow-up ends with the interrupt note, a scheduled fire relies on
+        // its envelope's reminder.
+        assertFalse(inject.contains("ChatMessage.SCHEDULED_INSERT_BRIDGE_TEXT"))
+        assertFalse(inject.contains("ChatMessage.INTERNAL_BRIDGE_TEXT"))
+        assertFalse(inject.contains("role = LLMMessage.Role.ASSISTANT"))
+        // [T-ctx-builder] The note is appended by ChatAttachmentIngest.queuedHistoryMessage.
+        assertTrue(inject.contains("interruptReminder = if (scheduledInsert) null else ChatMessage.QUEUED_INTERRUPT_REMINDER_TEXT,"))
+        assertTrue(vm.contains("contentParts = if (interruptReminder == null) body else body + AgentContentPart.Text(interruptReminder),"))
         // Its prefill still re-arms the scripted turn after the injection.
         assertTrue(vm.contains("scriptedTurnFor(handled.prefill)?.let { pendingScriptedTurn = it }"))
     }
@@ -235,6 +242,8 @@ class ScheduledPreemptiveInsertTest {
     fun `the subagent background switch still answers only a user follow-up`() {
         // A scheduled fire must not turn a synchronous subagent_task into a
         // background job — that is a reaction to the USER wanting an answer.
-        assertTrue(vm.contains("if (_promptQueue.value.any { it.origin == QueuedPromptOrigin.USER }) {"))
+        // [T-stop-choice] ...or the user's "Stop Current Tool Only".
+        assertTrue(vm.contains("val userFollowUp = _promptQueue.value.any { it.origin == QueuedPromptOrigin.USER }\n" +
+            "                if (userFollowUp || delegateDetach.value != detachSeen) {"))
     }
 }

@@ -205,20 +205,7 @@ internal object TitleCandidates {
         sessionId: String,
     ): LLMProvider? {
         val instance = repo.instance(entry.providerInstanceId) ?: return null
-        var apiKey = repo.usableApiKey(instance)
-            ?: if (repo.hasAnyCredential(instance)) "" else return null
-        if (instance.credentialType == com.openminis.app.data.model.ProviderCredential.oauth) {
-            try {
-                val manager = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                val fresh = manager?.validAccessToken()
-                if (fresh != null && fresh != apiKey) {
-                    repo.saveApiKey(instance.id, fresh)
-                    apiKey = fresh
-                }
-            } catch (e: Exception) {
-                Log.w("TitleGen", "OAuth refresh failed for ${entry.model.id}: ${e.message}")
-            }
-        }
+        val apiKey = repo.requestCredential(instance) ?: return null
         return try {
             ProviderFactory.create(instance, apiKey, entry.model, context, sessionId = sessionId, overrides = entry.overrides)
         } catch (e: Exception) {

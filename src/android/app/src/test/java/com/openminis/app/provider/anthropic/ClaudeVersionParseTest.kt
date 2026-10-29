@@ -247,15 +247,15 @@ class ClaudeVersionParseTest {
      * assert only two and encoded the bug G5 fixed:
      *
      *   ON, 4.6+ and 5+   → `{effort:…}`      (adaptive)
-     *   OFF, 4.6-4.x ONLY → `{disabled:true}` (they think by default, so OFF
-     *                                          must be stated explicitly)
-     *   OFF, 5+           → `{}`              (Claude 5 REJECTS the literal and
-     *                                          treats absence as adaptive)
+     *   OFF, 4.6+ and 5+  → `{disabled:true}` (the OFF INTENT: these think when
+     *                                          the field is absent — on Claude 5
+     *                                          at the default effort)
      *   ON/OFF, ≤4.5      → `{budget_tokens:…}` / `{}`
      *
-     * So "is adaptive" and "may we say disabled" are different questions with
-     * different answers on 5+, which is exactly what
-     * `modelAcceptsExplicitThinkingDisabled` exists to separate.
+     * [T-claude5-thinking-off] The intent is shared; the wire literal is not —
+     * `AnthropicProvider.offThinking` picks disabled / between_tools / adaptive +
+     * low per model (see the table test below). Before iOS ef86ed890, 5+ got `{}`
+     * here, i.e. no field, which thought at full default effort.
      */
     @Test
     fun `the parse selects the thinking wire shape, adaptive versus legacy`() {
@@ -274,13 +274,14 @@ class ClaudeVersionParseTest {
                     .anthropicThinkingShape(id, true, ThinkingLevel.OFF, 8192),
             )
         }
-        // OFF on 5+: the literal is REJECTED — send nothing (iOS 69be65763).
-        for (id in listOf("claude-fable-5", "claude-opus-5", "claude-sonnet-5")) {
-            assertTrue(
-                "Claude 5 400s on thinking.type=disabled and treats absence as adaptive, " +
-                    "so OFF must send nothing: $id",
+        // OFF on 5+: the intent is stated too — an absent field is NOT off there
+        // (it thinks at the default effort). [T-claude5-thinking-off]
+        for (id in listOf("claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1")) {
+            assertEquals(
+                "Claude 5 OFF must carry the explicit off intent: $id",
+                mapOf("disabled" to true),
                 com.openminis.app.provider.thinking.ThinkingRuleResolver
-                    .anthropicThinkingShape(id, true, ThinkingLevel.OFF, 8192).isEmpty(),
+                    .anthropicThinkingShape(id, true, ThinkingLevel.OFF, 8192),
             )
         }
         val legacyOn = com.openminis.app.provider.thinking.ThinkingRuleResolver
@@ -289,6 +290,45 @@ class ClaudeVersionParseTest {
         val legacyOff = com.openminis.app.provider.thinking.ThinkingRuleResolver
             .anthropicThinkingShape("claude-sonnet-4-5", true, ThinkingLevel.OFF, 8192)
         assertTrue("…and sends nothing at OFF: $legacyOff", legacyOff.isEmpty())
+    }
+
+    /**
+     * [T-claude5-thinking-off] The per-model table from Anthropic's
+     * "Troubleshooting thinking" doc (iOS ef86ed890): each model gets the lowest
+     * setting it accepts, never a literal it 400s on and never an absent field
+     * that leaves Claude 5 thinking at its default effort.
+     */
+    @Test
+    fun `off thinking follows the per-model table`() {
+        val off = AnthropicProvider.Companion::offThinking
+        for (id in listOf("claude-sonnet-4-6", "claude-opus-4-7", "claude-opus-4.8", "claude-opus-4-99", "claude-opus-4-8", "claude-opus-4-6")) {
+            assertEquals("4.6–4.x: thinking.type=disabled ($id)", AnthropicProvider.OffThinking.DISABLED, off(id))
+        }
+        for (id in listOf("claude-sonnet-5", "claude-sonnet-5-20260401")) {
+            assertEquals("Sonnet 5 accepts disabled ($id)", AnthropicProvider.OffThinking.DISABLED, off(id))
+        }
+        for (id in listOf("claude-sonnet-5-5", "anthropic/claude-sonnet-5.5")) {
+            assertEquals("Sonnet 5.5 400s on disabled → between_tools ($id)", AnthropicProvider.OffThinking.BETWEEN_TOOLS, off(id))
+        }
+        for (id in listOf("claude-fable-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5", "claude-sonnet-6", "claude-sonnet-5-7")) {
+            assertEquals(
+                "always-on / tool-leak / unknown 5+ → adaptive + low, never disabled ($id)",
+                AnthropicProvider.OffThinking.LOW_EFFORT,
+                off(id),
+            )
+        }
+        for (id in listOf("claude-sonnet-4-5", "claude-3-5-sonnet", "claude-3-7-sonnet", "claude-opus-4-20250514")) {
+            assertEquals("≤ 4.5 omits the field — off is already its default ($id)", AnthropicProvider.OffThinking.OMIT, off(id))
+        }
+        for (id in listOf("gpt-5", "MiniMax-M3", "deepseek-v4")) {
+            assertEquals("non-Claude ids never trip it ($id)", AnthropicProvider.OffThinking.OMIT, off(id))
+        }
+        for (id in listOf("claude-sonnet-4-6", "claude-fable-5", "claude-sonnet-5-5", "claude-opus-5-5")) {
+            assertTrue(
+                "every adaptive model states off explicitly: $id must not fall to OMIT",
+                AnthropicProvider.modelUsesAdaptiveThinking(id) && off(id) != AnthropicProvider.OffThinking.OMIT,
+            )
+        }
     }
 
     // ══════════════════════════════════════════════ drift guard
@@ -328,20 +368,27 @@ class ClaudeVersionParseTest {
         )
         assertTrue("temperature threshold moved", src.contains("return major > 4 || (major == 4 && minor >= 6)"))
         assertTrue(
-            "modelAcceptsExplicitThinkingDisabled must stay a 4.6 <= v < 5 window — it is NOT " +
-                "the same predicate as modelUsesAdaptiveThinking, which also covers 5+",
-            src.contains("fun modelAcceptsExplicitThinkingDisabled(modelId: String): Boolean") &&
-                src.contains("return major == 4 && minor >= 6"),
+            "offThinking must keep the ported per-model table ([T-claude5-thinking-off])",
+            src.contains(
+                "            if (major == 4) return OffThinking.DISABLED\n" +
+                    "            if (major == 5 && modelId.lowercase().contains(\"sonnet\")) {\n" +
+                    "                if (minor == 0) return OffThinking.DISABLED\n" +
+                    "                if (minor == 5) return OffThinking.BETWEEN_TOOLS\n" +
+                    "            }\n" +
+                    "            return OffThinking.LOW_EFFORT",
+            ),
         )
         assertTrue(
-            "the request builder must gate the disabled literal on acceptsExplicitThinkingDisabled, " +
-                "not on modelUsesAdaptiveThinking",
-            src.contains("} else if (modelAcceptsExplicitThinkingDisabled(model.id)) {"),
+            "the request builder must encode OFF per model",
+            src.contains("when (offThinking(model.id)) {") &&
+                src.contains("body.put(\"thinking\", JSONObject().put(\"type\", \"between_tools\"))") &&
+                src.contains("body.put(\"output_config\", JSONObject().put(\"effort\", \"low\"))"),
         )
         val resolver = ProductionSources.read("provider/thinking/ThinkingRuleResolver.kt")
         assertTrue(
-            "the resolver's OFF shape must ask acceptsExplicitThinkingDisabled, not adaptive",
-            resolver.contains(".modelAcceptsExplicitThinkingDisabled(modelId)"),
+            "the resolver's OFF shape must state off for every non-legacy model",
+            resolver.contains("AnthropicProvider.offThinking(modelId) ==") &&
+                resolver.contains("AnthropicProvider.OffThinking.OMIT"),
         )
         assertTrue(
             "the thinking-toggle threshold moved off 3.7",

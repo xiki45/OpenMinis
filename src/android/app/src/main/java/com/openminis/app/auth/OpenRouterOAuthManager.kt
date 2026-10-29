@@ -3,7 +3,6 @@ package com.openminis.app.auth
 import android.content.Context
 import android.net.Uri
 import android.util.Log
-import androidx.browser.customtabs.CustomTabsIntent
 import com.openminis.app.data.repository.ProviderRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -17,6 +16,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * OpenRouter OAuth manager using PKCE flow.
@@ -58,7 +58,13 @@ object OpenRouterOAuthManager {
 
         val apiKey = withContext(Dispatchers.IO) {
             val code = suspendCancellableCoroutine { cont ->
-                val server = OAuthCallbackServer(CALLBACK_PORT, FALLBACK_PORTS) { receivedCode, _ ->
+                val server = OAuthCallbackServer(
+                    CALLBACK_PORT,
+                    FALLBACK_PORTS,
+                    // [T-oauth-callback-double-resume] Denied / failed on the
+                    // provider's page: end the sign-in now with its reason.
+                    onError = { err -> if (cont.isActive) cont.resumeWithException(err.toException(context)) },
+                ) { receivedCode, _ ->
                     if (cont.isActive) {
                         cont.resume(receivedCode)
                     }
@@ -84,11 +90,7 @@ object OpenRouterOAuthManager {
                 Log.d(TAG, "Auth URL: ${OAuthLogRedaction.url(authUrl.toString())}")
 
                 // Open in Chrome Custom Tab (in-app browser, like iOS SFSafariViewController)
-                val customTabsIntent = CustomTabsIntent.Builder()
-                    .setShowTitle(true)
-                    .build()
-                customTabsIntent.intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                customTabsIntent.launchUrl(context, authUrl)
+                OAuthTabLauncher.launch(context, authUrl, newTask = true)
                 Log.i(TAG, "Opened Custom Tab for OpenRouter authorization")
             }
 
@@ -102,7 +104,7 @@ object OpenRouterOAuthManager {
             // where the OS blocks this app's network (DNS answers "no address").
             // Exchange only once the user is back.
             OAuthForegroundGate.awaitForeground(TAG)
-            exchangeCode(code, verifier)
+            exchangeCode(code, verifier, com.openminis.app.network.NetworkRuntime.providerTag(instanceId))
         }
 
         // Store the API key
@@ -152,7 +154,8 @@ object OpenRouterOAuthManager {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    private fun exchangeCode(code: String, verifier: String): String {
+    /** [FEAT-261021-16] [netTag]: the instance's Settings > Network tag. */
+    private fun exchangeCode(code: String, verifier: String, netTag: String): String {
         val body = JSONObject()
         body.put("code", code)
         body.put("code_verifier", verifier)
@@ -170,7 +173,7 @@ object OpenRouterOAuthManager {
             .header("X-Title", "Minis App")
             .build()
 
-        val response = client.newCall(request).execute()
+        val response = com.openminis.app.network.NetworkHttp.client(netTag, client).newCall(request).execute()
         val responseBody = response.body?.string() ?: ""
         Log.i(TAG, "Response status: ${response.code}")
         // [T-android-oauth-log-redaction] SUCCESS body carries the live API key

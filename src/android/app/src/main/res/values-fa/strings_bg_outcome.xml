@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_task_paused_body">کار موقتاً متوقف شد. برای ادامه، گفتگو را باز کنید.</string>
+</resources>

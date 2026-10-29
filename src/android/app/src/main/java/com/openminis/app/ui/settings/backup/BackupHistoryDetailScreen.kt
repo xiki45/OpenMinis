@@ -81,6 +81,7 @@ fun BackupHistoryDetailScreen(
     onOpenDestination: ((String) -> Unit)? = null,
 ) {
     var confirmRemove by remember { mutableStateOf(false) }
+    var showAllLog by remember(record.id) { mutableStateOf(false) }
     // [T-android-backup-delete-files-feedback] The destructive branch is a
     // SECOND, explicit confirmation naming the package and the destination
     // count — the first sheet only asks which KIND of delete, and agreeing to
@@ -209,8 +210,25 @@ fun BackupHistoryDetailScreen(
                 // Newest first: the last thing that happened is what the user
                 // opened this screen to read.
                 val entries = record.log.asReversed()
-                entries.forEachIndexed { i, e ->
-                    LogRow(entry = e, showDivider = i < entries.lastIndex)
+                // [T-android-backup-log-fold] Only the newest lines are
+                // composed: this section is part of a non-lazy scrolling
+                // Column, and 16,827 lines froze the main thread for 32-70 s.
+                // The rest costs that once, when the user asks for it.
+                val shown = if (showAllLog) entries else entries.take(LOG_COLLAPSED_COUNT)
+                val folded = entries.size - shown.size
+                shown.forEachIndexed { i, e ->
+                    LogRow(entry = e, showDivider = i < shown.lastIndex || folded > 0)
+                }
+                if (folded > 0) {
+                    Text(
+                        stringResource(R.string.backup_history_log_show_all, entries.size),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showAllLog = true }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                    )
                 }
             }
         }
@@ -498,6 +516,9 @@ private fun DestinationOutcomeRow(
     }
 }
 
+/** Log lines composed before "Show all" — like the history list's 10 records. */
+internal const val LOG_COLLAPSED_COUNT = 100
+
 /** One log line: time on the left, message on the right (iOS's log section). */
 @Composable
 private fun LogRow(entry: BackupHistory.LogEntry, showDivider: Boolean) {
@@ -512,7 +533,11 @@ private fun LogRow(entry: BackupHistory.LogEntry, showDivider: Boolean) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                entry.message,
+                // [T-android-backup-log-sanitize] A cleaned record keeps one
+                // note for the lines it folded away; shown in the UI language.
+                com.openminis.app.backup.BackupLogRules.omittedCount(entry)
+                    ?.let { stringResource(R.string.backup_history_log_omitted, it) }
+                    ?: entry.message,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (entry.isProblem) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onSurface,

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">\"%1$s\" ialah folder yang dilekapkan oleh Minis di sini, jadi ia tidak boleh dipadam daripada pelayar fail. Tiada apa-apa dipadam. Untuk mengalih keluar folder luaran, gunakan Tetapan › Lekapkan Folder Luaran.</string>
+</resources>

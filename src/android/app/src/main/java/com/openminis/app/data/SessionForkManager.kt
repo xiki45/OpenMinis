@@ -99,7 +99,8 @@ class SessionForkManager(
                 sessionId = new.id,
                 role = msg.role,
                 partsJson = msg.partsJson,
-                tokenUsage = msg.tokenUsage,
+                // [T-usage-step1] Marked copied so the Usage page does not count it twice.
+                tokenUsage = com.openminis.app.usage.StoredUsageJson.markCopied(msg.tokenUsage),
                 reasoningContent = msg.reasoningContent,
             )
             oldToNewId[msg.id] = newMsg.id

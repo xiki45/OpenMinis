@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-picker-anf] Shown when the system file picker cannot be opened. -->
+<resources>
+    <string name="picker_unavailable">This device has no system file picker.</string>
+</resources>

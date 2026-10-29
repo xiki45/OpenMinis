@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">\"%1$s\" adalah folder yang dipasang Minis di sini, jadi tidak dapat dihapus dari peramban file. Tidak ada yang dihapus. Untuk melepas folder eksternal, buka Pengaturan › Kaitkan Folder Eksternal.</string>
+</resources>

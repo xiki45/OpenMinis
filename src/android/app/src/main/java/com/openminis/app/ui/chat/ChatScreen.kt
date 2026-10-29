@@ -134,6 +134,7 @@ import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
@@ -149,7 +150,6 @@ import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.components.MinisMenu
 import androidx.compose.material.icons.outlined.BugReport
-import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Tag
@@ -202,10 +202,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.boundsInWindow
@@ -303,6 +305,7 @@ import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.browser.BrowserSheet
 import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.ui.components.MinisTextButton
+import com.openminis.app.ui.components.safeLaunchPicker
 
 // iOS ChatColors equivalent
 internal val ToolCheckColor = Color(0xFF34C759) // iOS .green
@@ -588,6 +591,26 @@ fun ChatScreen(
             mcpRepository = mcpRepository,
         ),
     )
+    // [UI-261023-07] While this chat is in the foreground it is being read:
+    // clear its unread dot, and keep a turn that ends now from raising one.
+    val unreadLifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(viewModel, unreadLifecycleOwner) {
+        val token = Any()
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME ->
+                    com.openminis.app.service.SessionUnreadStore.startViewing(token) { viewModel.currentSessionId }
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE ->
+                    com.openminis.app.service.SessionUnreadStore.stopViewing(token)
+                else -> Unit
+            }
+        }
+        unreadLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            unreadLifecycleOwner.lifecycle.removeObserver(observer)
+            com.openminis.app.service.SessionUnreadStore.stopViewing(token)
+        }
+    }
     // [T-android-larky-longsession-followup] Consume the tail-windowed
     // view instead of the canonical full list. For sessions with ≤300
     // messages this is the SAME reference (zero overhead); for longer
@@ -601,6 +624,13 @@ fun ChatScreen(
     val revealedUsageIds by viewModel.revealedUsageIds.collectAsState()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsState()
     val isStreaming by viewModel.isStreaming.collectAsState()
+    // [T-android-jankdiag] Tag frame summaries with "a reply is streaming".
+    LaunchedEffect(isStreaming) { com.openminis.app.diagnostics.JankDiag.setStreaming(isStreaming) }
+    // [T-android-jankdiag] A chat opens inside the sessions route on a phone: name it.
+    DisposableEffect(sessionId) {
+        com.openminis.app.diagnostics.JankDiag.enterScreen("chat")
+        onDispose { com.openminis.app.diagnostics.JankDiag.leaveScreen("chat") }
+    }
     val canResume by viewModel.canResume.collectAsState()
     // [T-android-context-usage-hint] Context-window pressure. `contextUsage`
     // is live (drives the glow on every usage chunk); `contextUsageHint` is
@@ -668,6 +698,13 @@ fun ChatScreen(
     // across forward navigation (file preview, env vars, etc.); see
     // ChatViewModel.listState for the why.
     val listState = viewModel.listState
+    // [T-user-ask-resolved-expand] Lets a card or a folded tool row the user
+    // opens or shuts keep its top in place in this reverseLayout list (iOS
+    // e563158e2). Created here so the bottom drift snap below can stand down
+    // while it works ([T-toggle-anchor-snap-yield]).
+    val toggleAnchorScope = rememberCoroutineScope()
+    val toggleAnchor = remember(listState) { ChatToggleAnchor(listState) }
+    toggleAnchor.scope = toggleAnchorScope
     // [T-android-voice-viewport-context] The rows the chat list is rendering,
     // for voice correction's on-screen context. Filled next to `flatItems`.
     val voiceScreenItems = remember(sessionId) { VoiceScreenItemsHolder() }
@@ -684,13 +721,11 @@ fun ChatScreen(
     val shareBufferVersion by com.openminis.app.share.ShareCoordinator.bufferVersion.collectAsState()
     androidx.compose.runtime.LaunchedEffect(shareBufferVersion) {
         if (shareBufferVersion == 0) return@LaunchedEffect
-        // [XSessionDiag] sessionId is passed for LOGGING ONLY — consumeBuffer
-        // ignores it for every decision (see its KDoc). It records which chat
-        // actually drained the global share buffer.
-        val pending = com.openminis.app.share.ShareCoordinator.consumeBuffer(
-            context,
-            diagSessionId = sessionId,
-        )
+        // [T-android-share-routing] Only the chat the share was addressed to
+        // takes it (the router - ChatSplitScaffold / AppNavigation - picks the
+        // visible chat or opens a new draft). Any other chat composing at the
+        // same moment gets null here and leaves it alone.
+        val pending = com.openminis.app.share.ShareCoordinator.consumeBuffer(context, sessionId)
             ?: return@LaunchedEffect
         com.openminis.app.logging.AppLogger.info(
             "ChatScreen",
@@ -731,6 +766,24 @@ fun ChatScreen(
         )
         viewModel.markShareInjected()
         com.openminis.app.share.SharedShareStore.cleanSharedFiles(context)
+        // [T-android-share-routing] Say where it went. The composer chip alone
+        // was easy to miss, and a share that seemed to vanish was retried.
+        // "New chat" means an empty one: a chat opened with the New Chat
+        // button keeps its `__new__…` key for the life of the screen even
+        // after its first message, so the key cannot tell.
+        val isEmptyChat = viewModel.messages.value.isEmpty()
+        val title = viewModel.sessionTitle.value.takeIf {
+            it.isNotBlank() && it != ChatViewModel.UNTITLED_SESSION_TITLE
+        }
+        android.widget.Toast.makeText(
+            context,
+            when {
+                isEmptyChat -> context.getString(com.openminis.app.R.string.share_added_new_chat)
+                title != null -> context.getString(com.openminis.app.R.string.share_added_to_chat, title)
+                else -> context.getString(com.openminis.app.R.string.share_added_this_chat)
+            },
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
     }
 
     // T311: publish "this is the active chat" while ChatScreen is composed,
@@ -743,6 +796,13 @@ fun ChatScreen(
     val tHangDiagAppContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     androidx.compose.runtime.DisposableEffect(sessionId) {
         ChatViewModelStore.setActiveSession(sessionId)
+        // [OpenMinis#433] On screen again (back from a pushed page, or reopened
+        // by New Chat): no other New Chat may take this draft now.
+        ChatViewModelStore.unparkDraft(sessionId)
+        // [T-android-stop-late-write] A reopened chat reuses its cached view
+        // model, overlay and all: a pill stuck on RUNNING by a turn that is
+        // over heals here instead of waiting for a cold start.
+        viewModel.healStaleInFlightTools("screen-open")
         // [T-HANG-DIAG] enter / dispose markers around the ChatScreen lifetime
         // so we can correlate "user tapped session X" → loadSession timings
         // and any subsequent hang record. Removable by grepping out
@@ -761,6 +821,13 @@ fun ChatScreen(
             // Nulling unconditionally left the chat on screen unprotected from
             // eviction and made `minis-config session.*` report no session.
             ChatViewModelStore.clearActiveSession(sessionId)
+            // [OpenMinis#433] A new chat left with unsent text or attachments
+            // keeps them, like an existing session does: the next New Chat for
+            // the same model group and folder reopens this draft. Leaving it
+            // empty clears its slot. No-op for anything but a New Chat draft.
+            // Both layouts land here: the phone's back stack and the two-pane
+            // detail swap both dispose this screen.
+            ChatViewModelStore.parkDraftIfUnsent(sessionId, viewModel.hasUnsentDraft)
             // T-android-new-chat-empty-residue: drop sessions materialised by
             // a settings toggle (ensureSession via /memory, /thinking, etc.)
             // but never sent a real message. VM guards on streaming + DB count
@@ -803,7 +870,11 @@ fun ChatScreen(
             viewModel.setInputText(inputText + sep + transfer.inputText)
         }
         for (a in transfer.attachments) viewModel.addAttachment(a)
-        viewModel.markShareInjected()
+        // [T-android-moveto-empty-content] The move is done: the content now
+        // belongs to this chat like anything typed here, so no "Move to…"
+        // capsule follows it in (iOS injectPendingTransferIfNeeded does not
+        // set hasInjectedShareContent either). It used to re-arm the capsule
+        // here, so the button jumped along with every move.
     }
 
     // Mirrors `inputText` for the BasicTextField but tracks selection so we
@@ -939,6 +1010,8 @@ fun ChatScreen(
     var showThinkingLevelSheet by remember { mutableStateOf(false) }
     var showAttachMenu by remember { mutableStateOf(false) }
     var showChatMenu by remember { mutableStateOf(false) }
+    // [T-speed-tier] The "Speed ›" submenu, opened from the chat menu.
+    var showSpeedMenu by remember { mutableStateOf(false) }
     var showSkillsSheet by remember { mutableStateOf(false) }
     // [T-mcp-integration-android] MCPs-in-Session sheet visibility.
     var showMcpsSheet by remember { mutableStateOf(false) }
@@ -962,6 +1035,14 @@ fun ChatScreen(
     // current session is still streaming — stopping the running task needs
     // an explicit confirm; idle sessions skip the dialog entirely.
     var showNewChatStopDialog by remember { mutableStateOf(false) }
+    // [T-multi-select-share] The open share picker's request, or null.
+    var shareRequest by remember { mutableStateOf<com.openminis.app.ui.chat.share.ChatShareRequest?>(null) }
+    val newChatTitle = stringResource(R.string.new_chat)
+    // Long-press "Share Chat…" (a message's round preselected) and the "…" menu
+    // (nothing preselected) open the same picker.
+    val openSharePicker: (String?) -> Unit = { messageId ->
+        shareRequest = com.openminis.app.ui.chat.share.buildChatShareRequest(viewModel, messageId, newChatTitle, context)
+    }
     // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
     var showEnhancedCacheDialog by remember { mutableStateOf(false) }
 
@@ -1443,6 +1524,11 @@ fun ChatScreen(
     // previous item — that is NOT user intent. Drive auto-follow off
     // `userScrolledAway` which only toggles on real user drags.
     var userScrolledAway by remember { mutableStateOf(false) }
+    // [FIX-261022-07 #443 #472] Keeps what a scrolled-away reader sees in place
+    // when the anchor row grows or the keyboard resizes the list (ReadingAnchor.kt).
+    val readingAnchor = remember(listState) { ReadingAnchor(listState, toggleAnchor) }
+    readingAnchor.readerAway = { userScrolledAway }
+    readingAnchor.scope = toggleAnchorScope
 
     // [T-android-scrollbtn-turn-walk] Up-button turn-walk state, mirroring iOS
     // `lastJumpedUserId` (dcdec3c5). Holds the id of the user message the
@@ -1941,6 +2027,7 @@ fun ChatScreen(
     // dropped the in-flight keystroke (the reported "can't type while
     // streaming" bug).
     var isUserDragging by remember { mutableStateOf(false) }
+    readingAnchor.keepOnResize = { userScrolledAway || isUserDragging }
     LaunchedEffect(listState) {
         listState.interactionSource.interactions.collect { interaction ->
             // T-android-jank-profile: drag interactions fire on every drag
@@ -1966,6 +2053,49 @@ fun ChatScreen(
                 is androidx.compose.foundation.interaction.DragInteraction.Cancel ->
                     isUserDragging = false
                 else -> Unit
+            }
+        }
+    }
+    // [T-android-userask-edge-bounce] A scroller nested in the list (the
+    // pending user_ask card's body) hands its leftover drag to the list at
+    // its edge. That arrives as a raw delta: isScrollInProgress stays false
+    // and there is no DragInteraction, so the follow-bottom code did not see
+    // a user scroll and snapped the list back each frame. This connection
+    // sits above the list's own scrollable, so it sees every nested delta on
+    // its way up; it records the child-driven ones and, when that gesture
+    // ends, applies the rule a finger lifted from the list itself gets.
+    var childScrollGestureOpen by remember { mutableStateOf(false) }
+    var lastChildScrollMs by remember { mutableStateOf(0L) }
+    val childScrollWatch = remember(listState) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(
+                available: Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
+            ): Offset {
+                if (ChatNestedScrollFollow.isChildUserScroll(
+                        source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput,
+                        available.y,
+                        isUserDragging,
+                    )
+                ) {
+                    childScrollGestureOpen = true
+                    lastChildScrollMs = System.currentTimeMillis()
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(
+                consumed: androidx.compose.ui.unit.Velocity,
+                available: androidx.compose.ui.unit.Velocity,
+            ): androidx.compose.ui.unit.Velocity {
+                if (childScrollGestureOpen) {
+                    childScrollGestureOpen = false
+                    lastInterruptMs = System.currentTimeMillis()
+                    val away = ChatNestedScrollFollow.scrolledAwayAfterGesture(isNearBottom.value)
+                    if (away != userScrolledAway) userScrolledAway = away
+                    AppLogger.debug("ScrollFollow", "child scroll gesture ended scrolledAway=$away")
+                }
+                return androidx.compose.ui.unit.Velocity.Zero
             }
         }
     }
@@ -2028,7 +2158,13 @@ fun ChatScreen(
     // gesture, fires regardless of current scroll position.
     LaunchedEffect(messages.size) {
         val lastMsg = messages.lastOrNull() ?: return@LaunchedEffect
-        if (lastMsg.role != "user") return@LaunchedEffect
+        // [T-android-snap-real-sends-only] Only something the user sent
+        // (a user bubble - including a prompt queued while a turn runs) may
+        // pull the list to the bottom. Sub agent callbacks and scheduled-task
+        // fires are also written with role "user" but render as cards; one
+        // of them starting a turn used to yank a user who was reading
+        // history down to the bottom.
+        if (!lastMsg.rendersAsUserBubble()) return@LaunchedEffect
         // T255: catch-all reset so any user-message append path
         // (send button / Enter / enqueue-while-streaming / future
         // entry points) restores auto-follow even if a call-site reset
@@ -2308,8 +2444,19 @@ fun ChatScreen(
                 info.viewportEndOffset,
             )
         }.distinctUntilChanged().collectLatest { _ ->
-            if (userScrolledAway) return@collectLatest
-            if (listState.isScrollInProgress) return@collectLatest
+            // [T-android-userask-edge-bounce] Not while the user moves the list,
+            // by dragging it or through a nested scroller at its edge.
+            val childScrolling = ChatNestedScrollFollow.childScrollActive(
+                childScrollGestureOpen, System.currentTimeMillis() - lastChildScrollMs,
+            )
+            if (!ChatNestedScrollFollow.followMaySnap(userScrolledAway, listState.isScrollInProgress, childScrolling)) {
+                return@collectLatest
+            }
+            // [T-toggle-anchor-snap-yield] A card or fold row the user is
+            // opening / shutting moves the list on purpose, one frame at a
+            // time; snapping back to the bottom would undo each step a frame
+            // later (the card would grow upward with a wobble).
+            if (toggleAnchor.isBusy) return@collectLatest
             if (!isNearBottom.value) return@collectLatest
             // Pin only if the current offset has actually drifted from
             // the bottom (avoid no-op scroll spam).
@@ -2535,17 +2682,13 @@ fun ChatScreen(
         }
     }
 
-    // T-imgsize: surface composer-side image-budget actions (compress / drop)
-    // via Snackbar. Each event is one user send; we emit at most two short
-    // notices (compressed count + dropped count) so the user understands
-    // why we touched their attachments before the provider would 413.
+    // T-imgsize: surface composer-side image-budget DROPS via Snackbar - the
+    // user's attachment did not go out, which they need to know.
+    // [T-silence-auto-notices] Compression is not surfaced any more (only the
+    // ViewModel's "[ImageBudget] compose" log): it changes nothing the user
+    // has to act on, and iOS never showed it.
     LaunchedEffect(Unit) {
         viewModel.imageBudgetEvent.collect { ev ->
-            if (ev.compressedCount > 0) {
-                snackbarHostState.showSnackbar(
-                    context.getString(R.string.image_budget_compressed, ev.compressedCount),
-                )
-            }
             if (ev.droppedCount > 0) {
                 snackbarHostState.showSnackbar(
                     context.getString(R.string.image_budget_total_exceeded),
@@ -2554,22 +2697,12 @@ fun ChatScreen(
         }
     }
 
-    // T-request-imgsize: surface request-level image-budget elisions
-    // (older images compacted into text placeholders to fit the 25MB
-    // request cap). Independent flow from the composer-side budget so
-    // both can fire on the same turn without racing.
-    LaunchedEffect(Unit) {
-        viewModel.requestBudgetEvent.collect { plan ->
-            if (plan.droppedCount > 0) {
-                snackbarHostState.showSnackbar(
-                    context.getString(
-                        R.string.image_budget_request_elided,
-                        plan.droppedCount,
-                    ),
-                )
-            }
-        }
-    }
+    // [T-silence-auto-notices] Request-level image elisions (older history
+    // images replaced by placeholders to fit the 25MB request cap) are no
+    // longer shown. Once a chat crossed the cap the Snackbar came back on
+    // every request - each tool round, retry and model switch - with nothing
+    // for the user to decide; the model already gets the placeholder text.
+    // applyRequestImageBudget still logs each elision.
 
     val appearancePrefs = remember { com.openminis.app.ui.settings.getAppearancePrefs(context) }
     var messageFontLevel by remember { mutableStateOf(appearancePrefs.getInt(com.openminis.app.ui.settings.KEY_FONT_MESSAGE, 0)) }
@@ -2594,6 +2727,47 @@ fun ChatScreen(
         }
         appearancePrefs.registerOnSharedPreferenceChangeListener(listener)
         onDispose { appearancePrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    // [T-port-fold-tools] Folding of consecutive tool calls (ToolFoldRows.kt):
+    // the setting, the opened runs, and whether the user is scrolled up. Its
+    // `changes` re-runs the list pipeline below.
+    val toolFold = remember(sessionId) {
+        ToolFoldController().apply {
+            enabled = appearancePrefs.getBoolean(
+                com.openminis.app.ui.settings.KEY_FOLD_TOOLS, com.openminis.app.ui.settings.FOLD_TOOLS_DEFAULT,
+            )
+        }
+    }
+    DisposableEffect(appearancePrefs, toolFold) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { sp, key ->
+            if (key == com.openminis.app.ui.settings.KEY_FOLD_TOOLS) {
+                toolFold.enabled = sp.getBoolean(key, com.openminis.app.ui.settings.FOLD_TOOLS_DEFAULT)
+            }
+        }
+        appearancePrefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { appearancePrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    LaunchedEffect(toolFold) {
+        snapshotFlow { userScrolledAway }.collect { toolFold.browsing = it }
+    }
+    // [T-in-chat-search] Search in Chat for this conversation (ui/chat/search).
+    // Screen-held, not in ChatViewModel: typing or stepping must redraw the
+    // bar and a few highlighted texts, not the page. A new session starts
+    // closed. The list pipeline feeds it rows (chatSearch.onRows) below.
+    val chatSearch = remember(sessionId) {
+        com.openminis.app.ui.chat.search.ChatSearchController(
+            coroutineScope,
+            com.openminis.app.ui.chat.search.ResourceChatSearchTextSource(context.resources),
+        )
+    }
+    androidx.activity.compose.BackHandler(enabled = chatSearch.isActive) { chatSearch.deactivate() }
+    // [T-android-retry-badge] The retry log sheet, opened from the typing row's
+    // badge. Shows the live log, or the log as it was when opened once the
+    // generation has ended and the live one was emptied.
+    var retrySheetSnapshot by remember(sessionId) { mutableStateOf<List<RetryRecord>?>(null) }
+    retrySheetSnapshot?.let { snapshot ->
+        val liveRetries by viewModel.retryLog.collectAsState()
+        RetryLogSheet(records = liveRetries.ifEmpty { snapshot }, onDismiss = { retrySheetSnapshot = null })
     }
     val markdownFontScale = com.openminis.app.ui.settings.fontScaleForLevel(messageFontLevel)
     val chatInputFontScale = com.openminis.app.ui.settings.fontScaleForLevel(chatInputLevel)
@@ -2819,6 +2993,10 @@ fun ChatScreen(
         LocalMarkdownBlankTapHandler provides remember(viewModel) {
             { msgId: String -> viewModel.toggleUsageCapsule(msgId.substringBefore('#')) }
         },
+        // [T-414-usage-tap-band] #414: only a blank tap within five lines of
+        // text above the capsule reveals it (UsageTapBand). The registry holds
+        // where each reply's final text ends.
+        LocalUsageTapBandRegistry provides remember(viewModel) { UsageTapBandRegistry() },
         // Route markdown media resolution through this chat's session so
         // minis://attachments/* lookups don't rely on the global bindMounts
         // map (which is last-writer-wins across sessions).
@@ -2827,7 +3005,11 @@ fun ChatScreen(
     Scaffold(
         containerColor = ChatColors.background,
         contentWindowInsets = WindowInsets(0),
-        topBar = {
+        // [T-port-sched-pill] The top bar slot is the app bar plus, below it,
+        // the scheduled-task pill, so the list (padded by the Scaffold) starts
+        // under the pill instead of scrolling beneath it. The app bar keeps
+        // its old indentation to keep this diff small.
+        topBar = { Column {
             TopAppBar(
                 title = {
                     // iOS-style centered layout: "Minis" + group row + provider·model row
@@ -2840,7 +3022,11 @@ fun ChatScreen(
                         )
                         // Fallback pulse animation (iOS: 3× red pulse on model switch)
                         val fallbackTrigger by viewModel.fallbackTrigger.collectAsState()
-                        val fallbackPulseAlpha = remember { androidx.compose.animation.core.Animatable(0f) }
+                        // [T-navbar-failed-tint-residue] Keyed on the view model:
+                        // in the two-pane layout this screen is re-bound to
+                        // another chat in place, and an unkeyed alpha carried a
+                        // half-finished flash into it. See runFallbackPulse.
+                        val fallbackPulseAlpha = remember(viewModel) { androidx.compose.animation.core.Animatable(0f) }
                         // [T-android-fallback-pulse-replay] Only pulse for a
                         // fallback that happens while this screen is on show.
                         //
@@ -2867,12 +3053,8 @@ fun ChatScreen(
                         val fallbackPulseBaseline = remember(viewModel) {
                             viewModel.fallbackTrigger.value
                         }
-                        LaunchedEffect(fallbackTrigger) {
-                            if (!shouldPulse(fallbackTrigger, fallbackPulseBaseline)) return@LaunchedEffect
-                            repeat(3) {
-                                fallbackPulseAlpha.animateTo(1f, animationSpec = androidx.compose.animation.core.tween(350))
-                                fallbackPulseAlpha.animateTo(0f, animationSpec = androidx.compose.animation.core.tween(350))
-                            }
+                        LaunchedEffect(viewModel, fallbackTrigger) {
+                            runFallbackPulse(fallbackTrigger, fallbackPulseBaseline, fallbackPulseAlpha.asPulseAlpha())
                         }
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -2958,13 +3140,13 @@ fun ChatScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(3.dp),
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .background(
-                                                if (modelName.isNotEmpty()) Color(0xFF34C759) else Color(0xFFFF9500),
-                                                CircleShape,
-                                            ),
+                                    // [T-quota-low-dot] green / yellow (the current
+                                    // model's quota or balance is low) / orange
+                                    // (signed out).
+                                    com.openminis.app.ui.quota.ModelQuotaStatusDot(
+                                        isAuthed = modelName.isNotEmpty(),
+                                        activeEntryId = viewModel.activeEntryId,
+                                        providerRepository = providerRepository,
                                     )
                                     // T-android-topbar-group-name-fallback:
                                     // _selectedGroupName is empty during the
@@ -3100,29 +3282,17 @@ fun ChatScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                                     ) {
-                                        // [T-codex-fast-mode] ⚡ badge ahead of the
-                                        // resolved model name — small orange circle
-                                        // + white bolt, shown only while Fast Mode
-                                        // is enabled AND the active model is
-                                        // eligible (iOS 9e3c76ef row-3 placement,
-                                        // 09944220 9pt sizing).
-                                        val fastBadgeEligible by viewModel.showFastModeToggle.collectAsState()
-                                        val fastBadgeOn by viewModel.fastModeEnabled.collectAsState()
-                                        if (fastBadgeEligible && fastBadgeOn) {
-                                            Box(
-                                                contentAlignment = Alignment.Center,
-                                                modifier = Modifier
-                                                    .size(11.dp)
-                                                    .background(Color(0xFFFF9500), CircleShape),
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Bolt,
-                                                    contentDescription = null,
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(9.dp),
-                                                )
-                                            }
-                                        }
+                                        // [T-codex-fast-mode] Speed badge ahead of the
+                                        // resolved model name, shown only while a
+                                        // faster tier is on AND the active model is
+                                        // eligible (iOS 9e3c76ef row-3 placement).
+                                        // [T-speed-tier-icons] Outline bolt for
+                                        // Fast, solid bolt for Ultrafast.
+                                        // displayedSpeedTier is already STANDARD for
+                                        // an ineligible model, and FAST where
+                                        // Ultrafast falls back.
+                                        val navSpeedTier by viewModel.displayedSpeedTier.collectAsState()
+                                        SpeedTierNavBadge(navSpeedTier)
                                         Text(
                                             text = if (providerName.isNotEmpty() && modelName.isNotEmpty()) {
                                                 "$providerName · $modelName"
@@ -3285,6 +3455,32 @@ fun ChatScreen(
                                     MenuItemIcon(MinisIcons.SquareAndPencil)
                                 },
                             )
+                            // [T-multi-select-share] Share Chat… beside New Chat (iOS
+                            // groups them), disabled while the chat has nothing to share.
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_share_share_chat)) },
+                                enabled = messages.isNotEmpty(),
+                                onClick = {
+                                    showChatMenu = false
+                                    openSharePicker(null)
+                                },
+                                leadingIcon = {
+                                    MenuItemIcon(Icons.Outlined.IosShare)
+                                },
+                            )
+                            // [T-in-chat-search] Search in Chat, after Share Chat…
+                            // as in the iOS "…" menu.
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_search_in_chat)) },
+                                enabled = messages.isNotEmpty(),
+                                onClick = {
+                                    showChatMenu = false
+                                    chatSearch.activate()
+                                },
+                                leadingIcon = {
+                                    MenuItemIcon(Icons.Default.Search)
+                                },
+                            )
                             MinisMenuDivider()
                             // Clear Chat (iOS parity, red)
                             DropdownMenuItem(
@@ -3431,17 +3627,59 @@ fun ChatScreen(
                             // OAuth). App-level persisted toggle; while on, the
                             // Responses body carries service_tier="priority"
                             // (≈1.5x faster at 2x credit burn on the ChatGPT
-                            // subscription) and the nav model row shows a ⚡
+                            // subscription) and the nav model row shows a bolt
                             // badge. Sits next to Enhanced Cache — both are
                             // model-invocation controls (iOS 09944220 grouping).
+                            //
+                            // [T-speed-tier] On a model that also offers
+                            // Ultrafast the switch becomes a "Speed ›" row that
+                            // opens a Standard / Fast / Ultrafast submenu and
+                            // shows the current tier. Everywhere else the row
+                            // stays exactly the old single switch.
                             val showFastMode by viewModel.showFastModeToggle.collectAsState()
-                            val fastModeOn by viewModel.fastModeEnabled.collectAsState()
-                            if (showFastMode) {
+                            val showUltrafast by viewModel.showUltrafastOption.collectAsState()
+                            val shownSpeedTier by viewModel.displayedSpeedTier.collectAsState()
+                            val fastModeOn = shownSpeedTier != com.openminis.app.data.SpeedTier.STANDARD
+                            if (showFastMode && showUltrafast) {
+                                DropdownMenuItem(
+                                    // [T-android-ultrafast-align] Named after the
+                                    // feature ("Fast Mode"), as on iOS 43b3f006f;
+                                    // the tiers inside keep their names.
+                                    text = { Text(stringResource(R.string.chat_menu_fast_mode_tier)) },
+                                    onClick = {
+                                        showChatMenu = false
+                                        showSpeedMenu = true
+                                    },
+                                    // [T-speed-tier-icons] The entry is a
+                                    // speedometer (iOS `speedometer`); the
+                                    // trailing text names the tier, no icon.
+                                    leadingIcon = {
+                                        MenuItemIcon(com.openminis.app.ui.components.SpeedTierIcons.Speedometer)
+                                    },
+                                    trailingIcon = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                speedTierLabel(shownSpeedTier),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                            Icon(
+                                                Icons.Default.ChevronRight,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    },
+                                )
+                            } else if (showFastMode) {
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.chat_menu_fast_mode)) },
                                     onClick = { viewModel.setFastModeEnabled(!fastModeOn) },
+                                    // [T-speed-tier-icons] Fast = outline bolt,
+                                    // the same glyph as its submenu row.
                                     leadingIcon = {
-                                        MenuItemIcon(Icons.Outlined.Bolt)
+                                        MenuItemIcon(com.openminis.app.ui.components.SpeedTierIcons.BoltOutline)
                                     },
                                     trailingIcon = {
                                         SettingsSwitch(
@@ -3500,6 +3738,35 @@ fun ChatScreen(
                                 )
                             }
                         }
+                        // [T-speed-tier] Speed submenu: three mutually exclusive
+                        // tiers, the current one checked. Anchored like the chat
+                        // menu it came from.
+                        MinisMenu(
+                            expanded = showSpeedMenu,
+                            onDismissRequest = { showSpeedMenu = false },
+                        ) {
+                            val currentTier by viewModel.displayedSpeedTier.collectAsState()
+                            for (tier in com.openminis.app.data.SpeedTier.entries) {
+                                DropdownMenuItem(
+                                    text = { Text(speedTierLabel(tier)) },
+                                    onClick = {
+                                        viewModel.setSpeedTier(tier)
+                                        showSpeedMenu = false
+                                    },
+                                    leadingIcon = { SpeedTierMenuGlyph(tier) },
+                                    trailingIcon = {
+                                        if (tier == currentTier) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        }
                     }
                 },
                 windowInsets = WindowInsets.statusBars,
@@ -3522,7 +3789,12 @@ fun ChatScreen(
                 // Font sizes + lineHeights stay untouched per spec.
                 expandedHeight = 68.dp,
             )
-        },
+            // [T-port-sched-pill-visible] The REAL session id, read when the
+            // pill composes. A new chat opens as a "__new__…" draft and gets
+            // its id on the first message, while `sessionId` here stays the
+            // draft id - so the pill matched no task in a chat started fresh.
+            ScheduledTaskPill(currentSessionId = { viewModel.currentSessionId })
+        } },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         // [T-android-scroll-fab-content-inset] The chat pane's own width, used
@@ -3547,6 +3819,15 @@ fun ChatScreen(
             // keystroke. [T-android-composer-input-blocked-while-streaming]
             LaunchedEffect(isUserDragging) {
                 if (isUserDragging) {
+                    // [FIX-261022-07 #472] Not while the IME is dictating:
+                    // hiding it ends the voice session (Gboard logs
+                    // stopVoiceInput reason SHUTDOWN right after our hide), and
+                    // a dictating user scrolls up to look at what they are
+                    // answering. See ImeDictation.
+                    if (ImeDictation.recordingActive(context)) {
+                        AppLogger.debug("ScrollFollow", "drag keeps the keyboard: audio recording active (IME voice typing)")
+                        return@LaunchedEffect
+                    }
                     // Not releaseComposerAfterSend(): this is scroll-to-dismiss,
                     // a direct request to get the keyboard out of the way, and
                     // it must obey even with a hardware keyboard attached (the
@@ -3620,17 +3901,34 @@ fun ChatScreen(
                 // mount uses `lastToolBlocks.isNotEmpty()` over the merged
                 // view; we mirror that semantically by checking the same
                 // filter on both sources.
+                // [T-android-session-entering-dots] Entering a session whose
+                // rows are not loaded yet showed an empty chat area until the
+                // whole history snapped in. Like iOS (AIChatView
+                // SessionLoadingCard), a centred "…" stands in, fading out as
+                // the list fades in. Only on entry: a reload with rows on
+                // screen never shows it.
+                val sessionLoadedForDots by viewModel.sessionLoadedState.collectAsState()
+                val enteringSession = showSessionEnteringIndicator(
+                    isDraft = viewModel.isDraftSession,
+                    sessionLoaded = sessionLoadedForDots,
+                    messagesEmpty = messages.isEmpty(),
+                    safeMode = com.openminis.app.crash.CrashFrequencyDetector.isSafeMode(),
+                )
+                // Starts at its first target, so a session whose rows are
+                // already in memory draws at full opacity with no fade.
+                val listEntryAlpha by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (enteringSession) 0f else 1f,
+                    animationSpec = tween(SessionEnteringDots.EXIT_MS),
+                    label = "listEntryAlpha",
+                )
                 val streamingById by viewModel.streamingById.collectAsState()
                 val hasFloatingTools = remember(messages, streamingById) {
                     val merged = if (streamingById.isEmpty()) messages
                                  else mergeStreamingOverlay(messages, streamingById)
-                    merged.any { msg ->
-                        msg.role == "assistant" && msg.toolBlocks.any { tb ->
-                            tb.toolStatus != null && tb.kind != "thinking" && tb.kind != "info"
-                        }
-                    }
+                    // [T-android-toolbar-reserve-compaction] The bar's own
+                    // predicate, compaction cut included.
+                    hasFloatingToolBarBlocks(merged)
                 }
-                val visualOverlayHeight = 65.dp  // thumbnailHeight in FloatingToolStatusBar
                 // Halve the breathing room above the input bar in both
                 // states — felt too sparse before. The thumbnail's 65dp
                 // physical height is preserved (it has to clear the
@@ -3652,8 +3950,44 @@ fun ChatScreen(
                 // (user reported "the bottom of the text is slightly clipped"). The floating-tools branch
                 // already reserves visualOverlayHeight (65dp) + buffer and
                 // was not part of the report; keep its +14 buffer.
+                // [T-android-toolbar-gap] Measured from what is actually
+                // drawn: the thumbnail's top with Tool preview ON, the bar's
+                // own top with it OFF. Pinning to the 65dp thumbnail in both
+                // states left a 27dp-larger gap above a preview-less bar.
+                // The gap above the overlay's visible top is the same 8dp
+                // either way (ON: 6 + 65 + 8 = 79dp, the reserve it always
+                // had). It reads the same state the bar's LocalToolPreviewEnabled
+                // is fed from, so the reserve and the bar change in the same
+                // frame; a toggle
+                // re-pins through LaunchedEffect(bottomReserve) below.
                 val bottomReserve =
-                    if (hasFloatingTools) visualOverlayHeight + 14.dp else 20.dp
+                    if (hasFloatingTools) {
+                        FloatingToolBarMetrics.visibleTop(toolPreviewEnabled) + FloatingToolBarMetrics.ROW_GAP
+                    } else 20.dp
+                // [T-android-reserve-anchor] The reserve is the reversed list's
+                // bottom contentPadding, which sits BEFORE every item: when it
+                // grows (the floating tool bar appears with a turn's first
+                // tool call) every visible row moves up by the difference.
+                // Following users are re-pinned below; a user who scrolled up
+                // to read history got shifted ~59dp with nothing to undo it.
+                // Offset the change in the same pass (requestScrollToItem
+                // applies at the next measure, so no frame shows the shift).
+                // Read without observation: this composable must not
+                // recompose on every scroll tick.
+                val reservePx = with(LocalDensity.current) { bottomReserve.roundToPx() }
+                val lastReservePx = remember(sessionId) { intArrayOf(-1) }
+                if (lastReservePx[0] >= 0 && reservePx != lastReservePx[0]) {
+                    val delta = reservePx - lastReservePx[0]
+                    androidx.compose.runtime.snapshots.Snapshot.withoutReadObservation {
+                        if (userScrolledAway && !isNearBottom.value) {
+                            listState.requestScrollToItem(
+                                listState.firstVisibleItemIndex,
+                                (listState.firstVisibleItemScrollOffset + delta).coerceAtLeast(0),
+                            )
+                        }
+                    }
+                }
+                lastReservePx[0] = reservePx
                 // T174: when bottomReserve changes (toolbar appearing /
                 // disappearing or thumbnail height shift), re-pin to bottom
                 // if we are currently following. Without this, the new
@@ -3712,6 +4046,9 @@ fun ChatScreen(
                 var flatItems by remember(sessionId) {
                     mutableStateOf<List<FlatChatItem>>(emptyList())
                 }
+                // [T-android-stream-grow-reveal] Spots live-reply rows that
+                // appear while following; see the flatten pass below.
+                val growRevealTracker = remember(sessionId) { StreamGrowRevealTracker() }
                 SideEffect { voiceScreenItems.items = flatItems }
                 // [T-android-coldload-offmain-parse] Composition-snapshot
                 // prewarmer (captures the markdown palette) used by the
@@ -3725,6 +4062,11 @@ fun ChatScreen(
                 var lastColdPrewarmMs by remember(sessionId) { mutableStateOf(-1L) }
                 var coldOpenSummaryEmitted by remember(sessionId) { mutableStateOf(false) }
                 val screenMountAtMs = remember(sessionId) { System.currentTimeMillis() }
+                // [T-android-row-keys-stable] Messages seen live on this
+                // screen keep one row per paragraph for good, so a reply's
+                // row keys never change under a reader (see
+                // LiveMessageTracker). Outlives the messages-keyed effect.
+                val liveMessageTracker = remember(sessionId) { LiveMessageTracker() }
                 // T-streaming-side-channel: messages-level changes (new
                 // message, retry, etc.) AND streamingById deltas both feed
                 // buildFlatChatItems, but we subscribe to streamingById
@@ -3776,7 +4118,10 @@ fun ChatScreen(
                     kotlinx.coroutines.flow.combine(
                         kotlinx.coroutines.flow.flowOf(messages),
                         viewModel.streamingById,
-                    ) { msgs, stream -> msgs to stream }
+                        // [T-port-fold-tools] Re-fold on a toggle, the setting,
+                        // or the user coming back to the bottom.
+                        toolFold.changes,
+                    ) { msgs, stream, _ -> msgs to stream }
                         .conflate()
                         .sample(80L)
                         .collect { (msgs, stream) ->
@@ -3788,6 +4133,8 @@ fun ChatScreen(
                             // First message carrying a live overlay; everything
                             // before it is frozen. Empty stream → whole list is
                             // frozen (covers cold open and post-drain ticks).
+                            // Both builds below must use the same snapshot.
+                            val liveIds = liveMessageTracker.update(msgs, stream.keys)
                             val splitIdx = if (stream.isEmpty()) {
                                 msgs.size
                             } else {
@@ -3821,7 +4168,7 @@ fun ChatScreen(
                                     // threw ConcurrentModificationException from
                                     // a later frame's SubList.equals. Copying
                                     // severs the view so it can't comodify.
-                                    buildFlatChatItems(msgs.take(splitIdx), sessionId)
+                                    buildFlatChatItems(msgs.take(splitIdx), sessionId, liveMessageIds = liveIds)
                                 }
                                 val buildMs = (System.nanoTime() - tBuildStart) / 1_000_000
                                 frozenRows = rows
@@ -3897,10 +4244,48 @@ fun ChatScreen(
                             } else {
                                 withContext(Dispatchers.Default) {
                                     val merged = mergeStreamingOverlay(msgs, stream)
-                                    buildFlatChatItems(merged, null, fromIndex = splitIdx, seedKeys = frozenKeys)
+                                    buildFlatChatItems(merged, null, fromIndex = splitIdx, seedKeys = frozenKeys, liveMessageIds = liveIds)
                                 }
                             }
-                            flatItems = if (liveRows.isEmpty()) frozenRows else frozenRows + liveRows
+                            val builtRows = if (liveRows.isEmpty()) frozenRows else frozenRows + liveRows
+                            // [T-in-chat-search] The rows BEFORE folding, so a
+                            // match inside a folded run is found too.
+                            chatSearch.onRows(builtRows)
+                            // [T-port-fold-tools] Fold runs of consecutive tool
+                            // calls into "Ran N tools" rows. Off: the same list.
+                            flatItems = toolFold.fold(
+                                builtRows,
+                                msgs,
+                                if (stream.isEmpty()) emptyList() else streamingOverlaySubset(msgs, stream),
+                            )
+                            // [T-user-ask-resolved-expand] A fold row the user just
+                            // tapped stays where it was: its position is requested
+                            // for the same remeasure that applies the new rows.
+                            toggleAnchor.restoreRow(flatItems)
+                            // [T-android-stream-grow-reveal] Rows of the live reply
+                            // that just appeared while following stay on screen: the
+                            // list re-pins to the new bottom row instead of the key
+                            // anchor leaving it below the viewport for the follow
+                            // loop to chase. Requested here, in the pass that assigns
+                            // flatItems, so it applies to the very measure that first
+                            // places the new rows (LazyColumn reads them straight
+                            // from state, possibly before this screen recomposes).
+                            run {
+                                val live = if (viewModel.isStreaming.value) {
+                                    msgs.lastOrNull { it.role == "assistant" }?.id?.substringBefore('#')
+                                } else {
+                                    null
+                                }
+                                val pinned = !userScrolledAway &&
+                                    listState.firstVisibleItemIndex == 0 &&
+                                    listState.firstVisibleItemScrollOffset == 0
+                                val pin = growRevealTracker.onRows(
+                                    flatItems.map { StreamGrowRevealTracker.Row(it.key, it.growOwnerMessageId()) },
+                                    live,
+                                    pinned,
+                                )
+                                if (pin) listState.requestScrollToItem(0, 0)
+                            }
                             // [T-android-fab-up-anr] Publish where each user
                             // bubble sits so scrollToPreviousUserTurn can find
                             // an off-screen target without scrolling onto it.
@@ -4017,6 +4402,67 @@ fun ChatScreen(
                     lastTrailingPinKey = newest.key
                     tracedScrollToItem("trailing-row/${newest.contentType}", 0, 0)
                 }
+                // [T-in-chat-search] Scroll to the current result: a fresh query's
+                // newest match, or a next / previous step (a refresh after new
+                // content emits nothing, so streaming never moves the reader).
+                // A match inside a folded tool run opens the run first (expand,
+                // never toggle) and waits for its rows. The row lands about a
+                // third from the top: reverseLayout puts a scrolled-to item at
+                // the bottom edge, so the list then backs off by 60% of the
+                // viewport toward newer rows.
+                LaunchedEffect(chatSearch) {
+                    chatSearch.navigations.collect { match ->
+                        val key = match.key.rowKey
+                        // [T-in-chat-search-jump-offset] Up to two conditional
+                        // items (compact progress, resume banner) sit ahead of
+                        // items(), so a row's lazy index is its distance from
+                        // the newest flat row PLUS those leading items. They
+                        // are measured from what is on screen, like
+                        // scrollToPreviousUserTurn does: ignoring them landed
+                        // every jump one row off whenever either was shown.
+                        fun lazyIndex(): Int? {
+                            val i = flatItems.indexOfFirst { it.key == key }
+                            if (i < 0) return null
+                            val visible = listState.layoutInfo.visibleItemsInfo
+                            visible.firstOrNull { it.key == key }?.let { return it.index }
+                            val lastFlat = flatItems.size - 1
+                            val lead = visible.firstNotNullOfOrNull { info ->
+                                val k = info.key as? String ?: return@firstNotNullOfOrNull null
+                                val fi = flatItems.indexOfFirst { it.key == k }
+                                if (fi < 0) null else info.index - (lastFlat - fi)
+                            }?.coerceAtLeast(0) ?: 0
+                            return (lastFlat - i) + lead
+                        }
+                        var idx = lazyIndex()
+                        if (idx == null) {
+                            val row = chatSearch.rowFor(key)
+                            val mid = row?.foldMessageId()
+                            val bid = row?.foldBlockId()
+                            val run = if (mid != null && bid != null) toolFold.runKeyContaining(mid, bid) else null
+                            if (run != null) {
+                                toolFold.expand(run)
+                                idx = kotlinx.coroutines.withTimeoutOrNull(1_500) {
+                                    snapshotFlow { lazyIndex() }.filterNotNull().first()
+                                }
+                            }
+                        }
+                        val target = idx ?: run {
+                            com.openminis.app.logging.AppLogger.info("ChatSearch", "[ChatSearch] navigate: row not shown key=${key.take(48)}")
+                            return@collect
+                        }
+                        // [FIX-261025-08] A jump is the reader leaving the
+                        // bottom, like the jump-to-previous-turn button: without
+                        // this, while a reply streamed the follow loop saw a
+                        // reader still "at the bottom" and glided the list back
+                        // within ~0.1 s, undoing the jump (and the ReadingAnchor
+                        // stayed off, since it keys on userScrolledAway).
+                        userScrolledAway = true
+                        lastInterruptMs = System.currentTimeMillis()
+                        listState.scrollToItem(target)
+                        val viewport = listState.layoutInfo.viewportSize.height
+                        if (viewport > 0) listState.scrollBy(-(viewport * 0.6f))
+                    }
+                }
                 // messageId → isCompactedHistory map. Used to fade entire
                 // assistant-row clusters (header + text + tool pills) at
                 // render time — mirrors iOS isCompactedHistory opacity(0.5).
@@ -4036,11 +4482,19 @@ fun ChatScreen(
                     is FlatChatItem.AssistantMarkdownBlock -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantThinking -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantToolUse -> grayedMap[originalMessageId(messageId)] == true
+                    is FlatChatItem.AssistantToolGroup -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantInfo -> false  // system rows never grayed
                     is FlatChatItem.AssistantTyping -> false
                     is FlatChatItem.AssistantError -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantUsage -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantLegacyContent -> grayedMap[originalMessageId(messageId)] == true
+                }
+                // [T-android-stream-grow-reveal] The reply whose rows glide
+                // open over 0.2 s while it streams (see StreamGrowReveal.kt).
+                val growLiveMessageId = if (isStreaming) {
+                    messages.lastOrNull { it.role == "assistant" }?.id?.let(::originalMessageId)
+                } else {
+                    null
                 }
                 // SelectionContainer must wrap the WHOLE LazyColumn — placing
                 // it per-item breaks long-press because items get disposed
@@ -4105,7 +4559,7 @@ fun ChatScreen(
                 LaunchedEffect(viewModel, selectionReader) {
                     viewModel.stopStaleReadAloud.collect { selectionReader.stop() }
                 }
-                val markdownToolbar = remember(context, messageBounds, viewModel, inputFocusRequester, keyboardController, selectionController, selectionReader) {
+                val markdownToolbar = remember(context, messageBounds, viewModel, inputFocusRequester, keyboardController, selectionController, selectionReader, chatSearch) {
                     MinisMarkdownTextToolbar(
                         context = context,
                         registry = messageBounds,
@@ -4125,6 +4579,9 @@ fun ChatScreen(
                         onReadFromStart = { fullText -> selectionReader.speak(fullText) },
                         isStreamingNow = { viewModel.isStreaming.value },
                         selectionController = selectionController,
+                        onShareChat = { messageId -> openSharePicker(messageId) },
+                        // [T-in-chat-search] The selection becomes the query.
+                        onSearchInChat = { text -> chatSearch.activate(text) },
                     )
                 }
                 // Wrap any callback that truncates / replaces / removes rows from
@@ -4170,6 +4627,8 @@ fun ChatScreen(
                 // read the LazyColumn's window-space root coords for edge
                 // auto-scroll calculations.
                 var listRootCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+                toggleAnchor.listCoords = { listRootCoords }
+                toggleAnchor.bottomInsetPx = with(LocalDensity.current) { (if (bottomReserve == 0.dp) 12.dp else bottomReserve).toPx() }
                 // [Perf][LongCtx] T-android-long-ctx-reentry-perf:
                 // fires once per session when the LazyColumn first reports
                 // a layout. Combined with `buildFlatChatItems.firstBuild`
@@ -4177,6 +4636,17 @@ fun ChatScreen(
                 // tells us whether the bottleneck is row-list build,
                 // initial list measure, or per-row composition.
                 val perfFirstLayoutFired = remember(sessionId) { java.util.concurrent.atomic.AtomicBoolean(false) }
+                // [T-android-scroll-jank-perf-log] The two newest-row
+                // breadcrumbs below mean "first composition" / "first
+                // placement" of that row, but fired on EVERY recomposition
+                // (each streamed token) and EVERY layout pass (each scroll
+                // frame): a /proc/self/status read plus a synchronized,
+                // flushed log-file write on the main thread per frame. A 120 Hz
+                // field log (HUAWEI MNA-AL00, file logging + Verbose on) held
+                // 4750 such lines, up to 82 a second, with frames stretching to
+                // 16-40 ms whenever the log was busy. Each row now logs each
+                // breadcrumb once.
+                val perfNewestLogged = remember(sessionId) { java.util.concurrent.ConcurrentHashMap.newKeySet<String>() }
                 Box {
                 AlwaysStretchOverscrollBox { sharedEffect ->
                 LazyColumn(
@@ -4202,6 +4672,11 @@ fun ChatScreen(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
+                        // [T-android-session-entering-dots] Fades the first
+                        // rows in under the leaving dots; 1f at all other times.
+                        .graphicsLayer { alpha = listEntryAlpha }
+                        // [T-android-userask-edge-bounce] See childScrollWatch.
+                        .nestedScroll(childScrollWatch)
                         // [T-android-chat-max-content-width] Cap the reading
                         // measure on a wide window, mirroring iOS
                         // AIChatView.maxContentWidth (900pt when the horizontal
@@ -4218,6 +4693,9 @@ fun ChatScreen(
                         .wrapContentWidth(Alignment.CenterHorizontally)
                         .widthIn(max = CHAT_MAX_CONTENT_WIDTH)
                         .padding(horizontal = 16.dp)
+                        // [#472] A shorter / taller list (keyboard, composer)
+                        // leaves a scrolled-away reader's text where it was.
+                        .then(readingAnchor.viewportModifier)
                         .onGloballyPositioned {
                             listRootCoords = it
                             if (perfFirstLayoutFired.compareAndSet(false, true)) {
@@ -4335,10 +4813,14 @@ fun ChatScreen(
                         // (before measure); onPlaced fires after layout.
                         if (item == flatItems.lastOrNull()) {
                             androidx.compose.runtime.SideEffect {
-                                com.openminis.app.diagnostics.PerfLongCtx.step(
-                                    sessionId,
-                                    "lazyColumn.firstItem.compose",
-                                )
+                                // [T-android-jankdiag] Counted, not logged.
+                                com.openminis.app.diagnostics.JankDiag.onNewestRowRecompose()
+                                if (perfNewestLogged.add("compose:${item.key}")) {
+                                    com.openminis.app.diagnostics.PerfLongCtx.step(
+                                        sessionId,
+                                        "lazyColumn.firstItem.compose",
+                                    )
+                                }
                             }
                         }
                         // [Perf][LongCtx] aggregate compose-count tracker.
@@ -4386,23 +4868,40 @@ fun ChatScreen(
                             }
                         }
                         val isNewestItem = item == flatItems.lastOrNull()
+                        val growOwner = if (growLiveMessageId == null) null else item.growOwnerMessageId()
+                        // [#443] Outermost, so it sees the height the list
+                        // places (including the grow glide's).
+                        val rowHold = remember(item.key) { readingAnchor.RowHold(item.key) }
                         Box(
                             modifier = Modifier
+                                .then(rowHold.modifier)
+                                .then(
+                                    if (growOwner != null && growOwner == growLiveMessageId) {
+                                        Modifier.streamGrowReveal()
+                                    } else {
+                                        Modifier
+                                    },
+                                )
                                 .alpha(rowAlpha)
                                 .then(
                                     if (isNewestItem) {
                                         Modifier.onPlaced {
-                                            com.openminis.app.diagnostics.PerfLongCtx.step(
-                                                sessionId,
-                                                "lazyColumn.firstItem.placed",
-                                                "size=${it.size.width}x${it.size.height}",
-                                            )
+                                            if (perfNewestLogged.add("placed:${item.key}")) {
+                                                com.openminis.app.diagnostics.PerfLongCtx.step(
+                                                    sessionId,
+                                                    "lazyColumn.firstItem.placed",
+                                                    "size=${it.size.width}x${it.size.height}",
+                                                )
+                                            }
                                             // [T-android-jank-diag-logging]
                                             // One quotable line per session
                                             // open, after the first frame's
                                             // newest row has laid out.
                                             if (!coldOpenSummaryEmitted) {
                                                 coldOpenSummaryEmitted = true
+                                                com.openminis.app.diagnostics.JankDiag.openStable(
+                                                    sessionId, messages.size, flatItems.size, lastColdPrewarmMs,
+                                                )
                                                 val totalChars = messages.sumOf { m -> m.content.length }
                                                 val maxChars = messages.maxOfOrNull { m -> m.content.length } ?: 0
                                                 AppLogger.info(
@@ -4433,6 +4932,8 @@ fun ChatScreen(
                                     },
                                 ),
                         ) {
+                        // [T-in-chat-search] This row's key + the current highlight for its Texts.
+                        com.openminis.app.ui.chat.search.ChatSearchRowScope(chatSearch, item.key) {
                         when (item) {
                             is FlatChatItem.UserBubble -> {
                                 // User bubbles intentionally don't register
@@ -4446,6 +4947,8 @@ fun ChatScreen(
                                 // gap when this bubble directly follows another
                                 // user bubble (back-to-back candidate sends).
                                 precededByUser = item.precededByUser,
+                                // [T-in-chat-search]
+                                onSearchInChat = { chatSearch.activate() },
                                 onCopy = {
                                     val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                     clipboard.setPrimaryClip(android.content.ClipData.newPlainText("message", item.message.content))
@@ -4497,6 +5000,10 @@ fun ChatScreen(
                                 onWithdraw = if (item.message.isQueued) {
                                     { safeMutate { viewModel.withdrawQueuedMessage(item.message.id) } }
                                 } else null,
+                                // [T-multi-select-share] Share Chat… with this round preselected.
+                                // Queued bubbles offer it too, as on iOS; a queued message is
+                                // not selectable, so the picker opens with nothing selected.
+                                onShareChat = { openSharePicker(originalMessageId(item.message.id)) },
                                 onPreviewFile = { uri, name ->
                                     // T150: turn the persisted file:// URI back
                                     // into a FileItem and hand off to the host
@@ -4551,6 +5058,13 @@ fun ChatScreen(
                                 slotKey = "mdblock:${item.parentBlockId}:${item.blockIndex}",
                                 markdown = item.messageMarkdown,
                             ) {
+                                // [T-414-usage-tap-band] Rows of the reply's final
+                                // text block carry the capsule's tap band.
+                                UsageTapBandRowScope(
+                                    messageId = item.messageId,
+                                    inFinalTextBlock = item.inFinalTextBlock,
+                                    isLastRow = item.isLastBlockOfMessage,
+                                ) {
                                 LargeContentGuard(
                                     content = item.rawText,
                                     isStreaming = item.isStreaming,
@@ -4567,6 +5081,7 @@ fun ChatScreen(
                                             shardId = "mdblock:${item.parentBlockId}:${item.blockIndex}",
                                         ),
                                     )
+                                }
                                 }
                             }
                             is FlatChatItem.AssistantThinking -> {
@@ -4601,7 +5116,7 @@ fun ChatScreen(
                             // task reads as a card, not as a user bubble.
                             is FlatChatItem.ScheduledTaskCardItem -> ScheduledTaskCard(
                                 marker = item.marker,
-                                hostSessionId = sessionId,
+                                hostSessionId = viewModel.currentSessionId, // [T-port-sched-pill-visible] real id, not the draft route id
                             )
                             // [T-p2-delegate-render] A helper block gets its
                             // own card; everything else keeps the pill.
@@ -4619,7 +5134,21 @@ fun ChatScreen(
                             // above all) are readable in the detail sheet.
                             // Replaces the bespoke one-line row, which read as a
                             // section divider and could not be opened.
-                            is FlatChatItem.AssistantToolUse -> if (
+                            // [T-port-fold-tools] A folded run; tap opens / closes it.
+                            is FlatChatItem.AssistantToolGroup -> ToolGroupRow(item) {
+                                // [T-user-ask-resolved-expand] Remember where the row is, then open / shut it.
+                                toggleAnchor.captureRow(item.key, flatItems)
+                                toolFold.toggle(item.runKey)
+                            }
+                            is FlatChatItem.AssistantToolUse -> if (item.block.toolName == com.openminis.app.agent.userask.UserAskPromptText.TOOL_NAME) {
+                                // [T-port-user-ask] A question card; a call that
+                                // never became a question shows as a plain pill.
+                                CompositionLocalProvider(LocalChatToggleAnchor provides toggleAnchor) {
+                                    UserAskBlock(item.block) {
+                                        ToolCallPill(item.block, allToolBlocks = item.allToolBlocks, onOpenDetail = { viewModel.openToolDetail(it) })
+                                    }
+                                }
+                            } else if (
                                 com.openminis.app.agent.jobs.HelperRunner.isSubAgentToolName(item.block.toolName) &&
                                 helperControlSummary(item.block) != null
                             ) {
@@ -4634,23 +5163,13 @@ fun ChatScreen(
                                 // Stop the AGENT (child), not the parent's stream:
                                 // through the registry so the runner reads CANCELLED.
                                 onStop = {
-                                    val childId = com.openminis.app.agent.jobs.HelperRunner.childSessionIdFrom(item.block.content)
-                                    val job = childId?.let { com.openminis.app.agent.jobs.AgentJobRegistry.jobForSession(it) }
                                     // [T-android-stop-sibling-subagent] Stop the whole
                                     // fan-out, not just this card's job: the siblings are
                                     // the same piece of work and the user cannot see them.
-                                    if (job != null && job.isActive) {
-                                        com.openminis.app.agent.jobs.AgentJobRegistry.cancelSiblings(
-                                            childId!!, "user-stop-block",
-                                        )
-                                    }
-                                    // [T-android-vm-store-child-tag-survives-evict] CHILD pool: an
-                                    // evicted child must not come back as NORMAL here.
-                                    else if (childId != null) runCatching {
-                                        com.openminis.app.debug.HeadlessChatRunner.viewModelFor(
-                                            context, childId, ChatViewModelStore.PoolKind.CHILD,
-                                        ).cancelStream()
-                                    }
+                                    // [T-subagent-detail-rich] Shared with the detail
+                                    // card's Stop (stopSubAgentByUser).
+                                    com.openminis.app.agent.jobs.HelperRunner.childSessionIdFrom(item.block.content)
+                                        ?.let { stopSubAgentByUser(context, it, "user-stop-block") }
                                 },
                                 // [T-android-neverstarted-not-running] A block
                                 // whose delegation died on the queue can be run
@@ -4689,12 +5208,14 @@ fun ChatScreen(
                                 block = item.block,
                                 allToolBlocks = item.allToolBlocks,
                                 onRetry = if (item.isLastCancelled && !isStreaming && !canResume) ({ safeMutate { viewModel.retryLast() } }) else null,
-                                // T14: route per-card stop to the global
-                                // cancelStream(). The button only renders
-                                // when the block is RUNNING/STREAMING — see
-                                // ToolCallPill `isRunning && onStop != null`
-                                // — so passing it unconditionally is safe.
-                                onStop = { viewModel.cancelStream() },
+                                // [T-android-stop-late-write] Per-tool stop:
+                                // a block of the running turn stops that turn;
+                                // a leftover from an earlier turn cancels only
+                                // itself and never the reply that is live now.
+                                // The button only renders while the block is
+                                // RUNNING/STREAMING (ToolCallPill
+                                // `isRunning && onStop != null`).
+                                onStop = { viewModel.stopTool(item.block.id) },
                                 onOpenTerminalWithCommand = onOpenTerminalWithCommand,
                                 // T261: route detail open through ViewModel so
                                 // the sheet is hoisted out of LazyColumn item
@@ -4728,6 +5249,8 @@ fun ChatScreen(
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
                                 },
+                                // [T-in-chat-search]
+                                onSearchInChat = { chatSearch.activate() },
                             )
                             is FlatChatItem.AssistantInfo -> FallbackInfoBlock(
                                 block = item.block,
@@ -4740,7 +5263,16 @@ fun ChatScreen(
                                     { viewModel.revertCompact() }
                                 } else null,
                             )
-                            is FlatChatItem.AssistantTyping -> TypingIndicator()
+                            is FlatChatItem.AssistantTyping -> {
+                                // [T-android-retry-badge] "↻ n/3" before "… is thinking"
+                                // while an automatic retry runs; tap lists the retries.
+                                val retryAttempt by viewModel.autoRetryAttempt.collectAsState()
+                                TypingIndicator(
+                                    retryAttempt = retryAttempt,
+                                    retryMax = viewModel.autoRetryMax,
+                                    onRetryBadgeClick = { retrySheetSnapshot = viewModel.retryLog.value },
+                                )
+                            }
                             // [T-android-usage-capsule-time] Same composable the
                             // classic renderer uses, so the two paths cannot drift.
                             // [T-android-usage-capsule-style] Hidden until the
@@ -4751,34 +5283,16 @@ fun ChatScreen(
                             is FlatChatItem.AssistantUsage -> {
                                 val msgId = originalMessageId(item.messageId)
                                 val shown = msgId in revealedUsageIds
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        // [T-android-usage-capsule-blank-tap]
-                                        // A secondary target only. The primary
-                                        // one is now blank space in the text
-                                        // itself (LocalMarkdownBlankTapHandler),
-                                        // matching iOS. This row keeps a small
-                                        // strip so the revealed capsule can be
-                                        // tapped again to dismiss it, but no
-                                        // longer has to be big enough to be
-                                        // FOUND — 32dp of dead space under
-                                        // every reply was the cost of it being
-                                        // the only way in.
-                                        //
-                                        // [T-android-usage-row-zero-gap] No min
-                                        // height while hidden. The 12dp floor
-                                        // was invisible yet still sat under
-                                        // every finished reply (plus one more
-                                        // 2dp list gap), so text -> next card
-                                        // measured ~28dp against ~10dp for card
-                                        // -> text on a Pixel 6. The row now
-                                        // takes space only while the capsule is
-                                        // showing, which is also the only time
-                                        // it has to be tappable (to dismiss).
-                                        .pointerInput(msgId) {
-                                            detectTapGestures { viewModel.toggleUsageCapsule(msgId) }
-                                        },
+                                // [T-android-usage-capsule-blank-tap-margin]
+                                // Dismiss-only, exact bounds (UsageCapsuleRow):
+                                // hidden, the zero-height row used to catch taps
+                                // ~24dp above it through the 48dp touch-target
+                                // expansion and reveal the capsule beside the
+                                // reply's last line, bypassing every rule.
+                                UsageCapsuleRow(
+                                    shown = shown,
+                                    onToggle = { viewModel.toggleUsageCapsule(msgId) },
+                                    modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = shown,
@@ -4801,6 +5315,10 @@ fun ChatScreen(
                                 slotKey = "legacy",
                                 markdown = item.messageMarkdown,
                             ) {
+                                // [T-414-usage-tap-band] A legacy reply's content is
+                                // its only text and is drawn last: one row, the
+                                // capsule's anchor.
+                                UsageTapBandRowScope(messageId = item.messageId, inFinalTextBlock = true, isLastRow = true) {
                                 LargeContentGuard(
                                     content = item.content,
                                     isStreaming = item.isStreaming,
@@ -4818,8 +5336,10 @@ fun ChatScreen(
                                         ),
                                     )
                                 }
+                                }
                             }
                         }
+                        } // ChatSearchRowScope
                         } // Box (alpha wrapper)
                     }
                     // [T-android-larky-longsession-followup] "Load older
@@ -4925,6 +5445,8 @@ fun ChatScreen(
                         onReadFromStart = if (isStreaming) null else {
                             { fullText -> selectionReader.speak(fullText) }
                         },
+                        // [T-multi-select-share] Last item of the selection bar.
+                        onShareChat = { messageId -> openSharePicker(messageId) },
                     ),
                 )
                 // iOS-style selection handle dots, one at each endpoint.
@@ -4935,6 +5457,18 @@ fun ChatScreen(
                 )
                 } // Box (selection scope)
                 } // CompositionLocalProvider
+
+                // [T-android-session-entering-dots] Entry "…". Fades in after a
+                // short delay so a session that opens at once never flashes it.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = enteringSession,
+                    modifier = Modifier.align(Alignment.Center),
+                    enter = fadeIn(tween(SessionEnteringDots.ENTER_MS, delayMillis = SessionEnteringDots.ENTER_DELAY_MS)),
+                    exit = fadeOut(tween(SessionEnteringDots.EXIT_MS)) +
+                        scaleOut(tween(SessionEnteringDots.EXIT_MS), targetScale = 0.92f),
+                ) {
+                    SessionEnteringDots()
+                }
 
                 // Floating tool status bar — shows only actual tool calls (not text/thinking/info).
                 // Matches iOS: filter on toolStatus != nil (text blocks have toolStatus = null).
@@ -4954,9 +5488,7 @@ fun ChatScreen(
                         viewModel.streamingById,
                     ) { msgs, stream ->
                         val merged = if (stream.isEmpty()) msgs else mergeStreamingOverlay(msgs, stream)
-                        merged.filter { it.role == "assistant" }
-                            .flatMap { it.toolBlocks }
-                            .filter { it.toolStatus != null && it.kind != "thinking" && it.kind != "info" }
+                        floatingToolBarBlocks(merged)
                     }.collect { lastToolBlocks = it }
                 }
                 val allToolBlocks = lastToolBlocks
@@ -4989,14 +5521,14 @@ fun ChatScreen(
                             .fillMaxWidth()
                             .onGloballyPositioned { toolBarHeightPx = it.size.height }
                             .padding(horizontal = 12.dp)
-                            .padding(bottom = 6.dp),
+                            .padding(bottom = FloatingToolBarMetrics.WRAPPER_BOTTOM_PADDING),
                     ) {
                         Column {
                         FloatingToolStatusBar(
                             toolBlocks = lastToolBlocks,
-                            // T14: per-card stop on the floating bar — same
-                            // global cancel as the message-list pill button.
-                            onStop = { viewModel.cancelStream() },
+                            // [T-android-stop-late-write] Same per-tool stop
+                            // as the message-list pill, for the shown block.
+                            onStop = { blockId -> viewModel.stopTool(blockId) },
                             onOpenTerminalWithCommand = onOpenTerminalWithCommand,
                             // T261: route detail open through the same VM
                             // state as in-list pills so both surfaces share
@@ -5726,7 +6258,13 @@ fun ChatScreen(
                 // free overlay primitive that doesn't need a Box wrapper,
                 // and an in-flow Row at the top with Arrangement.End is the
                 // cleanest equivalent.
-                val showMoveCapsule by viewModel.hasInjectedShareContent.collectAsState()
+                val shareInjected by viewModel.hasInjectedShareContent.collectAsState()
+                // [T-android-moveto-empty-content] Only while there is something
+                // to move: removing the shared attachments (or the text) left the
+                // capsule over an empty composer, and "moving" that emptiness
+                // carried it into the next chat. Same gate as iOS
+                // hasMovableShareContent [T-ios-moveto-empty-content].
+                val showMoveCapsule = shareInjected && hasMovableShareContent(inputText, attachments.size)
                 // Mirrors iOS swipe-up-to-send: drag the input bar upward —
                 // if it holds text, a floating send-arrow + "Release to send"
                 // capsule track the finger; releasing past `swipeArmFraction`
@@ -5740,6 +6278,10 @@ fun ChatScreen(
                         val slop = viewConfiguration.touchSlop
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            // [T-in-chat-search] The search bar sits over the
+                            // hidden composer: a swipe on it must not send the
+                            // draft that is still in the (invisible) field.
+                            if (chatSearch.isActive) return@awaitEachGesture
                             var totalDx = 0f
                             var totalDy = 0f
                             var claimed = false
@@ -5821,6 +6363,24 @@ fun ChatScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        // [T-in-chat-search] Hidden while searching but kept in
+                        // the layout (iOS ChatSearchComposerHider), so the list's
+                        // bottom inset does not jump; no touches, no a11y.
+                        .then(
+                            if (chatSearch.isActive) {
+                                Modifier
+                                    .alpha(0f)
+                                    .clearAndSetSemantics { }
+                                    .pointerInput(Unit) {
+                                        awaitPointerEventScope {
+                                            while (true) {
+                                                awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                                    .changes.forEach { it.consume() }
+                                            }
+                                        }
+                                    }
+                            } else Modifier,
+                        )
                         .drawBehind {
                             val radiusPx = 20.dp.toPx()
                             val canvas = drawContext.canvas.nativeCanvas
@@ -6164,6 +6724,9 @@ fun ChatScreen(
                     // branch below only serves captures started OUTSIDE the
                     // panel (none today, kept as a safety net).
                     if (com.openminis.app.ui.chat.voice.VoiceModePrefs.isVoiceActive) {
+                        // [T-readaloud-volume-bar] The read-aloud volume is no
+                        // longer a standing row here: it opens above the TTS
+                        // capsule from its speaker (SpeechPlayerCapsule).
                         com.openminis.app.ui.chat.voice.InlineVoiceInputPanel(
                             providerRepository = providerRepository,
                             inputText = inputText,
@@ -6266,6 +6829,14 @@ fun ChatScreen(
                         // accessibility note. Read live rather than cached so
                         // enabling the screen reader mid-session takes effect.
                         val screenReaderEnabled = rememberScreenReaderEnabled()
+                        // [T-port-composer-hint-carousel] The usage line's
+                        // context / quota pages take turns every 5 s for 3
+                        // rounds, then settle on the context page.
+                        val usagePage = rememberHintCarouselPage(
+                            usageLifecycle.hint,
+                            composerEmpty = inputFieldValue.text.isEmpty(),
+                            screenReaderOn = screenReaderEnabled,
+                        )
                         // [T-android-context-usage-second-focus] Shared tail of
                         // a "composer visit": rotate the placeholder when the
                         // usage line did not claim this visit for itself.
@@ -6281,6 +6852,9 @@ fun ChatScreen(
                                     sessionHasMessages = messages.isNotEmpty(),
                                     screenReaderOn = screenReaderEnabled,
                                     randomIndex = { bound -> kotlin.random.Random.nextInt(bound) },
+                                    // [T-port-composer-hint-carousel] The usage
+                                    // pages of the latest figures are entries too.
+                                    poolSize = ComposerPlaceholderPool.size(contextUsageHint),
                                 )
                                 composerHasFocusedBefore = true
                             }
@@ -6708,25 +7282,36 @@ fun ChatScreen(
                                         // the crossfade also animates the
                                         // hand-back when the line retires.
                                         val shownHint = usageLifecycle.hint
+                                        // [T-port-composer-hint-carousel] One
+                                        // key per (generation, page), so each
+                                        // page turn cross-fades. Usage entries
+                                        // of the focus rotation draw the same
+                                        // way, from the latest figures.
                                         Crossfade(
-                                            targetState = shownHint?.let { -it.generation - 1 }
+                                            targetState = shownHint?.let { -1 - (it.generation * 2 + usagePage) }
                                                 ?: placeholderIndex,
                                             animationSpec = tween(durationMillis = fadeMs),
                                             label = "composerPlaceholder",
                                         ) { key ->
+                                            val poolPage = ComposerPlaceholderPool.usagePage(key, contextUsageHint)
                                             if (key < 0 && shownHint != null) {
-                                                Text(
-                                                    contextUsageAnnotatedText(shownHint),
-                                                    color = MaterialTheme.colorScheme.onSurface
-                                                        .copy(alpha = 0.25f),
+                                                UsageHintPageText(
+                                                    hint = shownHint,
+                                                    page = shownHint.pages().getOrElse((-1 - key) % 2) { UsageHintPage.CONTEXT },
                                                     fontSize = 16.5.sp * chatInputFontScale,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
+                                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
+                                                )
+                                            } else if (poolPage != null && contextUsageHint != null) {
+                                                UsageHintPageText(
+                                                    hint = contextUsageHint!!,
+                                                    page = poolPage,
+                                                    fontSize = 16.5.sp * chatInputFontScale,
+                                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
                                                 )
                                             } else {
                                                 Text(
                                                     composerPlaceholderText(
-                                                        key.coerceAtLeast(0),
+                                                        ComposerPlaceholderPool.textIndex(key),
                                                         soulName.name,
                                                     ),
                                                     color = MaterialTheme.colorScheme.onSurface
@@ -6815,10 +7400,12 @@ fun ChatScreen(
                                     leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
                                     onClick = {
                                         showAttachMenu = false
-                                        mediaPickerLauncher.launch(
+                                        mediaPickerLauncher.safeLaunchPicker(
                                             androidx.activity.result.PickVisualMediaRequest(
                                                 ActivityResultContracts.PickVisualMedia.ImageAndVideo,
                                             ),
+                                            context,
+                                            "ChatScreen",
                                         )
                                     },
                                 )
@@ -6829,7 +7416,7 @@ fun ChatScreen(
                                         showAttachMenu = false
                                         // OpenMultipleDocuments takes a mime-
                                         // type array; "*/*" stays the wildcard.
-                                        filePickerLauncher.launch(arrayOf("*/*"))
+                                        filePickerLauncher.safeLaunchPicker(arrayOf("*/*"), context, "ChatScreen")
                                     },
                                 )
                             }
@@ -7330,24 +7917,108 @@ fun ChatScreen(
                         // inside composition would not recompose when the work
                         // starts or ends, so the button would appear late and
                         // linger after everything stopped.
-                        val agentWorkParents by AgentJobRegistry.parentsWithAgentWork.collectAsState()
+                        //
+                        // [T-scheduled-active-session-android] Now the tracker's
+                        // one "processing" set - own loop, sub agents, or a
+                        // scheduled task of this chat still due - the same set
+                        // the list spinner and keep-alive follow.
+                        val processingSessions by com.openminis.app.service.SessionActivityTracker
+                            .processingSessions.collectAsState()
                         val sessionBusy = isStreaming ||
-                            viewModel.currentSessionId in agentWorkParents
+                            viewModel.currentSessionId in processingSessions
                         val showStop = sessionBusy && !hasContent
                         if (showStop) {
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .background(Color(0xFFFF3B30), CircleShape)
-                                    .clip(CircleShape)
-                                    .clickable { viewModel.cancelStream() },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Default.Stop,
-                                    contentDescription = "Stop",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp),
+                            // [T-scheduled-active-session-android] Stop also turns
+                            // off this chat's scheduled tasks; ask first when
+                            // there is one to lose, as iOS does
+                            // ([T-scheduled-stop-confirm]). A plain "stop the
+                            // reply" stays immediate.
+                            // [T-stop-choice] Replaces that warning: with sub
+                            // agents or scheduled tasks to lose, ask what to stop.
+                            var stopChoice by remember { mutableStateOf<StopSummary?>(null) }
+                            var stopChoiceTurn by remember { mutableStateOf<Long?>(null) }
+                            // [T-stop-confirm] "Stop this task?" - the turn it
+                            // was opened for, so its Stop never ends the next.
+                            var confirmStop by remember { mutableStateOf(false) }
+                            var confirmStopTurn by remember { mutableStateOf<Long?>(null) }
+                            val scheduledOnly = !isStreaming &&
+                                viewModel.currentSessionId in
+                                com.openminis.app.service.SessionActivityTracker.scheduledSessions.collectAsState().value
+                            // [T-stop-mode-longpress] Tap stops (or asks first);
+                            // long-press picks Stop Immediately / Confirm Before
+                            // Stopping, like the Send button's Return-key chooser.
+                            ComposerStopButton(
+                                contentDescription = if (scheduledOnly) {
+                                    stringResource(R.string.chat_stop_scheduled_tasks)
+                                } else {
+                                    "Stop"
+                                },
+                                onStop = {
+                                    // [T-stop-confirm] Read at tap time so a
+                                    // change in Settings applies at once.
+                                    val confirmEnabled = com.openminis.app.ui.settings.getAppearancePrefs(context)
+                                        .getBoolean(StopConfirmPolicy.SETTINGS_KEY, StopConfirmPolicy.DEFAULT_ENABLED)
+                                    val summary = viewModel.stopSummary()
+                                    when (StopConfirmPolicy.onTap(summary.hasBackground, confirmEnabled)) {
+                                        StopConfirmPolicy.TapAction.CHOOSE_SCOPE -> {
+                                            stopChoiceTurn = viewModel.liveTurnToken()
+                                            stopChoice = summary
+                                        }
+                                        StopConfirmPolicy.TapAction.CONFIRM_STOP -> {
+                                            confirmStopTurn = viewModel.liveTurnToken()
+                                            confirmStop = true
+                                        }
+                                        StopConfirmPolicy.TapAction.STOP_NOW -> viewModel.stopByUser()
+                                    }
+                                },
+                            )
+                            if (confirmStop) {
+                                MinisAlertDialog(
+                                    onDismissRequest = { confirmStop = false },
+                                    title = stringResource(R.string.chat_stop_confirm_title),
+                                    text = stringResource(R.string.chat_stop_confirm_message),
+                                    confirmText = stringResource(R.string.chat_stop_confirm_stop),
+                                    dismissText = stringResource(R.string.chat_stop_confirm_keep_running),
+                                    isDestructive = true,
+                                    onConfirm = {
+                                        confirmStop = false
+                                        // The turn may have ended while the dialog
+                                        // was up (and a queued prompt started).
+                                        if (StopConfirmPolicy.confirmStillApplies(confirmStopTurn, viewModel.liveTurnToken(), sessionBusy)) {
+                                            viewModel.stopByUser()
+                                        } else {
+                                            com.openminis.app.logging.AppLogger.info(
+                                                "ChatScreen", "[StopConfirm] Stop tapped after the task ended; ignored",
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                            stopChoice?.let { summary ->
+                                StopChoiceDialog(
+                                    summary = summary,
+                                    // Only this chat's own turn has a current
+                                    // tool; with background work alone the
+                                    // choice is Stop All or keep running.
+                                    canStopToolOnly = stopChoiceTurn != null,
+                                    onDismiss = { stopChoice = null },
+                                    onToolOnly = {
+                                        stopChoice = null
+                                        // Never the next turn's tools.
+                                        if (StopConfirmPolicy.confirmStillApplies(stopChoiceTurn, viewModel.liveTurnToken(), sessionBusy)) {
+                                            viewModel.stopCurrentToolOnly()
+                                        } else {
+                                            com.openminis.app.logging.AppLogger.info(
+                                                "ChatScreen", "[StopChoice] Stop Current Tool Only tapped after the turn ended; ignored",
+                                            )
+                                        }
+                                    },
+                                    onStopAll = {
+                                        stopChoice = null
+                                        // Everything this chat runs, whichever
+                                        // turn is live now.
+                                        viewModel.stopByUser()
+                                    },
                                 )
                             }
                         } else {
@@ -7362,6 +8033,8 @@ fun ChatScreen(
                             // only sends when canActivate.
                             ComposerSendButton(
                                 canActivate = canActivate,
+                                busy = com.openminis.app.ui.chat.voice.VoiceModePrefs.isVoiceActive &&
+                                    com.openminis.app.ui.chat.voice.VoiceSendGate.isFinishingForSend,
                                 onSend = {
                                     // T-drag-send-queue: route through the
                                     // shared send-or-enqueue handler. Same
@@ -7378,6 +8051,14 @@ fun ChatScreen(
                             )
                         }
                     }
+                }
+                // [T-in-chat-search] The search bar, in the composer's place,
+                // over the hidden card (same Box, so the same height slot).
+                if (chatSearch.isActive) {
+                    com.openminis.app.ui.chat.search.ChatSearchBar(
+                        controller = chatSearch,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
                 }
             }
                 // --- Swipe-to-send floating hint (extracted helper) ---
@@ -7511,10 +8192,44 @@ fun ChatScreen(
                     },
                 )
             }
+            // [T-multi-select-share] The share picker (and, from it, the preview).
+            com.openminis.app.ui.chat.share.ChatShareDebugHost(sessionId, viewModel, openSharePicker)
+            shareRequest?.let { request ->
+                com.openminis.app.ui.chat.share.ChatShareSelectionDialog(
+                    request = request,
+                    onDismiss = { shareRequest = null },
+                )
+            }
             // [T-new-chat-menu-entry] Streaming guard for the menu's New Chat:
             // confirm → stop the running task, then navigate to a fresh draft;
             // dismiss → stay in the current chat.
-            if (showNewChatStopDialog) {
+            // [T-stop-choice] With sub agents or scheduled tasks running, leaving
+            // asks the same question as Stop: end only the current turn (they
+            // keep running and report back to this chat) or everything.
+            val newChatStopChoice = remember(showNewChatStopDialog) {
+                if (showNewChatStopDialog) viewModel.stopSummary().takeIf { it.hasBackground } else null
+            }
+            if (newChatStopChoice != null) {
+                StopChoiceDialog(
+                    summary = newChatStopChoice,
+                    canStopToolOnly = true,
+                    onDismiss = { showNewChatStopDialog = false },
+                    onToolOnly = {
+                        showNewChatStopDialog = false
+                        viewModel.stopCurrentToolOnly()
+                        onNewChat()
+                    },
+                    onStopAll = {
+                        showNewChatStopDialog = false
+                        viewModel.stopByUser()
+                        onNewChat()
+                    },
+                    title = stringResource(R.string.chat_menu_new_chat),
+                    toolOnlyText = stringResource(R.string.chat_new_chat_stop_turn_only),
+                    stopAllText = stringResource(R.string.chat_new_chat_stop_all),
+                    body = stringResource(R.string.chat_new_chat_stop_dialog_body),
+                )
+            } else if (showNewChatStopDialog) {
                 MinisAlertDialog(
                     onDismissRequest = { showNewChatStopDialog = false },
                     title = stringResource(R.string.chat_menu_new_chat),
@@ -8014,3 +8729,64 @@ private fun ThinkingLevelSheet(
 }
 
 
+
+/** [T-speed-tier] UI name of a speed tier. */
+@Composable
+private fun speedTierLabel(tier: com.openminis.app.data.SpeedTier): String = stringResource(
+    when (tier) {
+        com.openminis.app.data.SpeedTier.STANDARD -> R.string.chat_speed_standard
+        com.openminis.app.data.SpeedTier.FAST -> R.string.chat_speed_fast
+        com.openminis.app.data.SpeedTier.ULTRAFAST -> R.string.chat_speed_ultrafast
+    },
+)
+
+/**
+ * [T-speed-tier-icons] Leading glyph of a Speed submenu row, at the menu's
+ * standard icon size: speedometer / outline bolt / solid bolt (iOS
+ * `speedometer` / `bolt` / `bolt.fill`). Monochrome in the menu's content color.
+ */
+@Composable
+private fun SpeedTierMenuGlyph(tier: com.openminis.app.data.SpeedTier) {
+    MenuItemIcon(com.openminis.app.ui.components.SpeedTierIcons.forTier(tier))
+}
+
+/**
+ * [T-codex-fast-mode] Nav-bar speed badge ahead of the model name (iOS
+ * 9e3c76ef row-3 placement). [T-speed-tier-icons] One monochrome bolt: outline
+ * for Fast, solid for Ultrafast (iOS `bolt` / `bolt.fill`); the orange circle
+ * and the Ultrafast double bolt are gone. Nothing for Standard. The tier name
+ * is its content description, so TalkBack reads "Fast" / "Ultrafast".
+ */
+@Composable
+private fun SpeedTierNavBadge(tier: com.openminis.app.data.SpeedTier, textSize: TextUnit = 11.sp) {
+    if (tier == com.openminis.app.data.SpeedTier.STANDARD) return
+    // [T-android-ultrafast-align] The bolt is no taller than the capital letters
+    // of the model name beside it (iOS 43b3f006f: scaled to the font's cap
+    // height). A fixed 12dp box drew a bolt taller than the 11sp text. The cap
+    // height is measured from the text size, so it follows the font scale; the
+    // Row keeps the bolt vertically centred on the text.
+    val density = LocalDensity.current
+    val boxDp = remember(density, textSize) {
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            this.textSize = with(density) { textSize.toPx() }
+        }
+        val bounds = android.graphics.Rect()
+        paint.getTextBounds("H", 0, 1, bounds)
+        val ink = kotlin.math.ceil(bounds.height().toFloat())
+        with(density) { com.openminis.app.ui.components.SpeedTierIcons.boltBoxForInk(ink).toDp() }
+    }
+    Icon(
+        com.openminis.app.ui.components.SpeedTierIcons.forTier(tier),
+        contentDescription = speedTierLabel(tier),
+        tint = Color(0xFFFF9500),
+        modifier = Modifier.size(boxDp),
+    )
+}
+
+/**
+ * [T-android-moveto-empty-content] Whether the composer holds share content
+ * worth moving: non-blank text or at least one attachment. Port of iOS
+ * AIChatView.hasMovableShareContent.
+ */
+internal fun hasMovableShareContent(inputText: String, attachmentCount: Int): Boolean =
+    inputText.isNotBlank() || attachmentCount > 0

@@ -44,6 +44,20 @@
     <string name="check_update_section_header">Ažuriranje aplikacije</string>
     <string name="check_update_current_version">Trenutna verzija: %1$s</string>
     <string name="check_update_check_button">Provjeri ažuriranja</string>
+    <string name="update_channel_title">Kanal ažuriranja</string>
+    <string name="update_channel_stable">Stabilno</string>
+    <string name="update_channel_beta">Beta</string>
+    <string name="update_channel_stable_desc">Testirana izdanja. Preporučeno.</string>
+    <string name="update_channel_beta_desc">Ranija izdanja s novim značajkama; mogu biti manje stabilna.</string>
+    <string name="update_channel_beta_warning_title">Prijeći na Beta?</string>
+    <string name="update_channel_beta_warning_body">Beta izdanja ranije donose nove značajke i mogu sadržavati pogreške. Na Stabilno se možete vratiti u bilo kojem trenutku; tada zadržavate trenutačno izdanje dok ne izađe novije stabilno.</string>
+    <string name="update_channel_beta_confirm">Koristi Beta</string>
+    <string name="update_auto_check_title">Automatski provjeravaj ažuriranja</string>
+    <string name="check_update_skip_version">Preskoči ovu verziju</string>
+    <string name="check_update_later">Kasnije</string>
+    <string name="check_update_open_release">Otvori stranicu izdanja</string>
+    <string name="check_update_verify_failed">Preuzeta datoteka nije prošla provjeru. Pokušajte ponovno.</string>
+    <string name="check_update_package_invalid">Preuzeti paket nije novija verzija aplikacije Minis pa nije instaliran.</string>
     <string name="check_update_checking">Provjera…</string>
     <string name="check_update_up_to_date">Koristite najnoviju verziju.</string>
     <string name="check_update_no_release">Još nema objavljenog izdanja.</string>
@@ -330,10 +344,10 @@
     <string name="settings_feedback_telegram">Povratne informacije (Telegram)</string>
     <string name="settings_feedback_email">Povratne informacije (e-pošta)</string>
     <string name="about_title">O aplikaciji</string>
-    <string name="about_minis_tagline">Minis je vaš potpuno lokalni, potpuno privatni Agent na uređaju.</string>
+    <string name="about_minis_tagline">Minis je AI agent koji živi na vašem uređaju. Vaši ključevi i datoteke ostaju ovdje; razgovori se šalju samo AI pružatelju kojeg odaberete.</string>
     <string name="about_links">Poveznice</string>
     <string name="about_github_repository">GitHub repozitorij</string>
-    <string name="about_version_format">Verzija %1$s (%2$s)</string>
+    <string name="about_version_format">Verzija %1$s (build %2$s)</string>
     <string name="about_built_format">Izgrađeno %1$s</string>
 
     <!-- T172 — chat sheets i18n (MoveToSessionSheet / OffloadPermissionDialog /
@@ -363,11 +377,22 @@
     <string name="session_skills_footer">Uključite vještine samo za ovu sesiju. Zadane vrijednosti dolaze iz Postavke → Vještine.</string>
     <string name="session_skills_empty_title">Nema instaliranih vještina</string>
     <string name="session_skills_empty_subtitle">Uvezite vještine iz Postavke → Vještine.</string>
+    <string name="session_skill_other_files">Ostale datoteke</string>
     <!-- [T-mcp-integration-android] MCPs in Session sheet -->
     <string name="session_mcps_title">MCP-ovi u sesiji</string>
     <string name="session_mcps_footer">Uključite MCP poslužitelje samo za ovu sesiju. Zadane vrijednosti dolaze iz Postavke → MCP integracije.</string>
     <string name="session_mcps_empty_title">Nema MCP poslužitelja</string>
     <string name="session_mcps_empty_subtitle">Dodajte poslužitelje iz Postavke → MCP integracije.</string>
+    <string name="mcps_search_placeholder">Pretraži MCP poslužitelje</string>
+    <string name="mcps_search_no_match">Nijedan MCP poslužitelj ne odgovara upitu \"%1$s\".</string>
+    <string name="session_mcp_detail_transport">Prijenos</string>
+    <string name="session_mcp_detail_args">Argumenti</string>
+    <string name="session_mcp_detail_note">Bilješka</string>
+    <string name="session_mcp_detail_headers">Zaglavlja</string>
+    <string name="session_mcp_detail_env">Varijable okruženja</string>
+    <string name="session_mcp_detail_values_hidden">Vrijednosti su skrivene jer mogu sadržavati ključeve. Pregledajte ih ili uredite u Postavke → MCP integracije.</string>
+    <string name="session_mcp_oauth_not_authorized">Nije autorizirano</string>
+    <string name="session_mcp_url_copied">URL kopiran</string>
     <string name="skills_search_placeholder">Pretraži vještine</string>
     <string name="skills_search_no_match">Nijedna vještina ne odgovara \"%1$s\".</string>
     <string name="speech_lang_picker_title">Jezik govora</string>
@@ -599,6 +624,7 @@
     <string name="browser_settings_cookies_stored">Kolačići su pohranjeni na ovom uređaju</string>
     <string name="browser_settings_no_cookies">Nema pohranjenih kolačića</string>
     <string name="browser_settings_clear_cookies_for">Očisti kolačiće za %1$s</string>
+    <string name="browser_settings_clear_cookies_for_failed">Neke kolačiće za %1$s nije bilo moguće ukloniti. Upotrijebite „Očisti sve kolačiće &amp; podatke”.</string>
     <string name="browser_settings_clear_all_cookies">Očisti sve kolačiće &amp; podatke</string>
     <string name="browser_settings_clear_all_dialog_title">Očistiti sve podatke web-mjesta?</string>
     <string name="browser_settings_clear_all_dialog_message">Ovo će ukloniti sve kolačiće i podatke web-mjesta. Bit ćete odjavljeni sa svih web-mjesta.</string>
@@ -701,6 +727,7 @@
     <string name="appearance_auto_focus_after_reply_title">Automatski fokus na unos nakon odgovora</string>
     <string name="appearance_auto_focus_after_reply_footer">Kad je uključeno, tipkovnica se pojavljuje automatski nakon što model završi odgovor, pa je polje za unos spremno za nastavak. Uključeno je prema zadanom; isključite ako radije čitate odgovor bez neočekivane tipkovnice.</string>
     <string name="appearance_section_deep_thinking">Duboko razmišljanje</string>
+    <string name="chat_thinking_block_title">Duboko razmišljanje</string>
     <string name="appearance_auto_expand_thinking_title">Proširi razmišljanje tijekom strujanja</string>
     <string name="appearance_auto_expand_thinking_footer">Kad je uključeno, novi blok razmišljanja automatski se proširuje dok model razmišlja i sažima se kad završi. Kad je isključeno, blokovi razmišljanja ostaju sažeti — dodirnite ih za čitanje.</string>
     <string name="appearance_section_font_size">Veličina fonta</string>
@@ -910,6 +937,8 @@
     <string name="skill_detail_label_version">Verzija</string>
     <string name="skill_detail_label_modified">Zadnja izmjena</string>
     <string name="skill_detail_label_source">Izvor</string>
+    <string name="skill_copy_source_url">Kopiraj izvorni URL</string>
+    <string name="skill_source_url_copied">Izvorni URL kopiran</string>
     <string name="skill_detail_update_url">Ažuriraj s URL-a</string>
     <string name="skill_detail_update_file">Ažuriraj iz datoteke…</string>
     <string name="skill_detail_rescan">Ponovno skeniraj s diska</string>
@@ -1033,6 +1062,9 @@
     <!-- [T-android-json-open-provider-import-prompt] Shown when a JSON opened/shared into Minis looks like a Provider export. -->
     <string name="share_provider_json_title">Otkrivena konfiguracija pružatelja</string>
     <string name="share_expired_toast">Podijeljeni sadržaj je istekao. Podijelite ponovno.</string>
+    <string name="share_added_new_chat">Dodano u novi razgovor</string>
+    <string name="share_added_to_chat">Dodano u „%1$s”</string>
+    <string name="share_added_this_chat">Dodano u ovaj razgovor</string>
     <string name="share_provider_json_message">Ova JSON datoteka izgleda kao izvezeni pružatelj. Što želite učiniti?</string>
     <string name="share_provider_json_import">Uvezi pružatelja</string>
     <string name="share_provider_json_attach">Dodaj kao privitak razgovoru</string>
@@ -1232,6 +1264,10 @@
     <string name="notif_one_task_running">1 zadatak u tijeku</string>
     <string name="notif_n_tasks_running">%1$d zadataka u tijeku</string>
     <string name="notif_in_session">U sesiji</string>
+    <string name="chat_stop_scheduled_tasks">Zaustavi zakazane zadatke</string>
+    <string name="chat_scheduled_stop_confirm_title">Zakazani zadaci planirani</string>
+    <string name="chat_scheduled_stop_confirm_message">Ovaj razgovor ima planirane zakazane zadatke. Zaustavljanjem će i oni biti otkazani.</string>
+    <string name="chat_scheduled_stop_confirm_stop_all">Zaustavi sve</string>
     <string name="notif_task_completed_channel_name">Završetak zadatka</string>
     <string name="notif_task_completed_channel_description">Obavještava kad Agent sesija završi dok je aplikacija u pozadini.</string>
     <string name="notif_task_completed_default_title">Zadatak dovršen</string>
@@ -1305,6 +1341,10 @@
     <string name="chat_menu_browse_chat_files">Pregledaj datoteke razgovora</string>
     <string name="chat_menu_enhanced_cache">Prošireni predmemorij</string>
     <string name="chat_menu_fast_mode">Uključi brzi način</string>
+    <string name="chat_menu_fast_mode_tier">Brzi način rada</string>
+    <string name="chat_speed_standard">Standardno</string>
+    <string name="chat_speed_fast">Brzo</string>
+    <string name="chat_speed_ultrafast">Ultrafast</string>
     <string name="chat_menu_auto_compact">Automatsko sažimanje</string>
     <string name="context_near_capacity_title">Kontekst pri kraju kapaciteta</string>
     <string name="context_near_capacity_message">Kontekst razgovora gotovo je popunjen. Sažmite povijest da oslobodite prostor prije slanja. Uključivanjem automatskog sažimanja to će se ubuduće raditi samo od sebe.</string>
@@ -1550,6 +1590,31 @@
     <string name="backup_dest_create">Stvori</string>
     <string name="backup_dest_backend_label">%1$s — %2$s</string>
     <string name="backup_dest_row_subtitle">%1$s · /%2$s</string>
+    <string name="backup_dest_edit_connection_title">Uredi vezu</string>
+    <string name="backup_dest_configuration">Konfiguracija</string>
+    <string name="backup_dest_detail_footer">Dodirnite naziv ili mapu da biste ih promijenili, ili uredite vezu da biste promijenili adresu i lozinku.</string>
+    <string name="backup_dest_type">Vrsta</string>
+    <string name="backup_dest_name">Naziv</string>
+    <string name="backup_dest_backup_folder">Mapa sigurnosnih kopija</string>
+    <string name="backup_dest_added">Dodano</string>
+    <string name="backup_dest_edit_connection">Uredi vezu…</string>
+    <string name="backup_dest_test_connection">Testiraj vezu</string>
+    <string name="backup_dest_connected">Povezano.</string>
+    <string name="backup_dest_remove_destination">Ukloni odredište</string>
+    <string name="backup_dest_rename_title">Preimenuj odredište</string>
+    <string name="backup_dest_rename_hint">Samo slova, brojevi, - i _.</string>
+    <string name="backup_dest_save">Spremi</string>
+    <string name="backup_dest_remove_confirm_title">Ukloniti ovo odredište?</string>
+    <string name="backup_dest_remove_confirm_note">Sigurnosne kopije koje su već na poslužitelju neće biti obrisane.</string>
+    <string name="backup_dest_remove_action">Ukloni</string>
+    <string name="backup_dest_connection_header">Veza</string>
+    <string name="backup_dest_password_header">Lozinka</string>
+    <string name="backup_dest_new_password">Nova lozinka</string>
+    <string name="backup_dest_password_will_clear">Pohranjena lozinka bit će uklonjena.</string>
+    <string name="backup_dest_password_keep_hint">Ostavite prazno da biste zadržali trenutnu lozinku.</string>
+    <string name="backup_dest_no_password">Bez lozinke (anonimno)</string>
+    <string name="backup_dest_edit_failed">Povezivanje s ovim postavkama nije uspjelo pa nisu spremljene. %1$s</string>
+    <string name="backup_dest_remove_footer">Uklanjanjem se ovaj poslužitelj i njegova lozinka zaboravljaju na ovom uređaju. Sigurnosne kopije već pohranjene na poslužitelju ostaju netaknute.</string>
     <string name="mount_folders_title">Montirane mape</string>
     <string name="mount_folders_info_banner">Odabrane mape povezane su na /var/minis/mounts/&lt;name&gt;. Istodobno se može montirati do 10 mapa.</string>
     <string name="mount_picker_intro_title">Odaberite mapu</string>
@@ -1653,6 +1718,7 @@
     <string name="voice_panel_toggle_recording">Uključi/isključi snimanje</string>
     <string name="voice_panel_delete">Izbriši izdiktirani tekst</string>
     <string name="voice_panel_read_replies">Čitaj odgovore</string>
+    <string name="read_aloud_volume">Glasnoća čitanja naglas</string>
     <string name="tts_capsule_picker_title">Model glasovnog izlaza</string>
     <string name="tts_capsule_system_engine">Sustavski TTS</string>
     <string name="voice_system_tts_subtitle">Androidov ugrađeni pretvarač teksta u govor</string>
@@ -1771,11 +1837,8 @@
     <string name="import_zip_summary">Uvezeno %1$d od %2$d datoteka</string>
 
     <!-- T-imgsize: composer-side image-budget Snackbar messages -->
-    <string name="image_budget_compressed">Sažeto slika prije slanja: %1$d</string>
-    <string name="image_budget_dropped">Preskočeno prevelikih URL-ova: %1$d (&gt;5 MB)</string>
     <string name="image_budget_total_exceeded">Ukupna veličina slika premašuje 25 MB; kasnije slike su izostavljene</string>
     <!-- T-request-imgsize: request-level image-budget Snackbar message -->
-    <string name="image_budget_request_elided">Starijih slika izostavljeno iz zahtjeva radi ograničenja od 25 MB: %1$d</string>
     <string name="composer_swipe_release_to_send">Pustite za slanje</string>
     <string name="composer_swipe_release_to_queue">Pustite za stavljanje u red</string>
 
@@ -1784,7 +1847,6 @@
     <string name="chat_message_large_expand">Dodirnite za prikaz</string>
     <string name="chat_message_large_export">Izvezi u datoteku</string>
     <string name="chat_message_large_export_ok">Izvezeno</string>
-    <string name="chat_stream_degraded_notice">Zaštita performansi: pojednostavljeni prikaz tijekom strujanja</string>
     <string name="chat_resume_crash_warning">Prošli put aplikacija je prestala reagirati tijekom strujanja. Dodirnite ponovno za nastavak unatoč tome.</string>
     <string name="chat_message_large_export_fail">Izvoz nije uspio</string>
     <!-- T-android-update-check-403-hint — friendly update-check failure hints -->
@@ -1826,6 +1888,7 @@
     <string name="ok">U redu</string>
     <string name="sessionlist_scheduled_tasks">Zakazani zadaci</string>
     <string name="scheduled_tasks_title">Zakazani zadaci</string>
+    <string name="scheduled_tasks_show_home_badge">Prikaži broj na početnom zaslonu</string>
     <string name="scheduled_tasks_empty">Još nema zakazanih zadataka. Dodirnite + da zakažete upit koji se automatski pokreće u odabrano vrijeme.</string>
     <string name="scheduled_task_new">Novi zakazani zadatak</string>
     <string name="scheduled_task_edit">Uredi zakazani zadatak</string>
@@ -1903,6 +1966,9 @@
     <string name="chat_load_older_messages">↑ Učitaj starije poruke</string>
     <!-- [T-error-persist-android] Shown when the model returns an empty reply (no text, no tools). -->
     <string name="error_empty_response_generic">Model je vratio prazan odgovor. Pokušajte ponovno ili promijenite model.</string>
+    <string name="chat_error_model_refused">Model je odbio odgovoriti na ovaj zahtjev. Pokušajte drukčije formulirati ili prijeđite na drugi model.</string>
+    <string name="chat_error_max_tokens_truncated">Odgovor skraćen (dosegnut najveći broj tokena)</string>
+    <string name="chat_error_dsml_tool_call_leak">Poziv alata modela vraćen je u neispravnom obliku (završio je u njegovom razmišljanju), a ni 2 automatska ponovna pokušaja nisu uspjela. Dodirnite Nastavi za novi pokušaj.</string>
     <string name="error_empty_response_context_large">Model je vratio prazan odgovor. Kontekst razgovora možda je prevelik — pokušajte ga sažeti ili započnite novu sesiju.</string>
     <string name="error_empty_response_after_tool">Model nije vratio odgovor nakon rezultata alata, čak ni nakon podsjetnika. Možda je preopterećen — pokušajte ponovno ili promijenite model.</string>
     <!-- [T-thinking-render-perf-android] Inline windowed-tail hint + large-content viewer entry. -->
@@ -1939,6 +2005,10 @@
     <string name="browser_downloads_failed">Neuspjelo</string>
     <string name="browser_downloads_open">Otvori</string>
     <string name="provider_no_key_required">Ključ nije potreban</string>
+    <string name="provider_no_api_key">Nema API ključa</string>
+    <string name="appearance_font_scale_small">Malo</string>
+    <string name="appearance_font_scale_medium">Srednje</string>
+    <string name="appearance_font_scale_large">Veliko</string>
     <string name="split_no_conversation_title">Nije odabran razgovor</string>
     <string name="split_no_conversation_subtitle">Odaberite razgovor ili započnite novi</string>
     <string name="external_link_blocked">Blokirana poveznica na vanjsku aplikaciju (%1$s)</string>
@@ -2044,8 +2114,10 @@
     <string name="sub_agent_builtin_description">Otvoreni zadaci koji trebaju vlastitu petlju alata: istraživanje baze koda ili weba kroz više krugova, sažimanje velikih količina rezultata u zaključak ili paralelno vođenje neovisnih grana.</string>
     <string name="agent_model_group_unavailable">Pribodena grupa modela nije dostupna — izvedeno na modelu ovog razgovora</string>
     <string name="scheduled_card_label">Zakazani zadatak</string>
-    <string name="scheduled_card_next_fire">Sljedeće: %1$s</string>
-    <string name="scheduled_card_last_run">Ovo je bilo zadnje izvođenje</string>
+    <string name="scheduled_card_run">Izvođenje %1$d</string>
+    <string name="scheduled_card_left">Preostalo: %1$d</string>
+    <string name="scheduled_card_next">Sljedeće %1$s</string>
+    <string name="scheduled_card_task_complete">Zadatak dovršen</string>
     <string name="scheduled_card_cancel">Otkaži ovo zakazivanje</string>
     <string name="scheduled_card_cancel_confirm_title">Otkazati ovaj zakazani zadatak?</string>
     <string name="scheduled_card_cancel_confirm_body">“%1$s” će se prestati izvoditi. Dosadašnji rezultati ostaju u ovom razgovoru.</string>
@@ -2075,4 +2147,72 @@
     <string name="helper_resume_failed">Nije moguće nastaviti ovog podagenta</string>
     <string name="voice_mic_in_use">Mikrofon koristi druga aplikacija (npr. poziv ili snimanje). Pokušajte ponovno kada završi.</string>
     <string name="voice_mic_unavailable">Mikrofon nije moguće koristiti. Pokušajte ponovno.</string>
+    <string name="quota_source">Izvor</string>
+    <string name="quota_done">Gotovo</string>
+    <string name="quota_status_unknown">Nepoznato</string>
+    <string name="quota_status_low">Nisko</string>
+    <string name="quota_updated">Ažurirano</string>
+    <string name="quota_status_rate_limited">Ograničena učestalost zahtjeva</string>
+    <string name="chat_share_n_selected">Odabrano: %1$d</string>
+    <string name="chat_share_select_all">Odaberi sve</string>
+    <string name="chat_share_deselect_all">Poništi odabir svega</string>
+    <!-- [T-port-user-ask] user_ask card and settings; text from the iOS string catalog. -->
+    <string name="user_ask_needs_answer">Potreban je tvoj odgovor</string>
+    <string name="user_ask_needs_approval">Potrebno je tvoje odobrenje</string>
+    <string name="user_ask_high_risk">Radnja visokog rizika</string>
+    <string name="user_ask_recommended">Preporučeno</string>
+    <string name="user_ask_other">Drugo…</string>
+    <string name="user_ask_type_answer">Upiši odgovor…</string>
+    <string name="user_ask_you_decide">Ti odluči</string>
+    <string name="user_ask_add_note">Dodaj bilješku</string>
+    <string name="user_ask_cancel_with_reason">Otkaži uz razlog / učini ovo umjesto toga</string>
+    <string name="user_ask_previous">Prethodno</string>
+    <string name="user_ask_next">Dalje</string>
+    <string name="user_ask_submit">Pošalji</string>
+    <string name="user_ask_cancel">Odustani</string>
+    <string name="user_ask_allow">Dopusti</string>
+    <string name="user_ask_show_more">Prikaži više</string>
+    <string name="user_ask_show_less">Prikaži manje</string>
+    <string name="user_ask_time_left">Preostalo vrijeme</string>
+    <string name="user_ask_seconds_left">Još %1$d s</string>
+    <string name="user_ask_selected">Odabrano: %1$s</string>
+    <string name="user_ask_answered_with">Odgovor: %1$s</string>
+    <string name="user_ask_left_to_minis">Prepušteno Minisu</string>
+    <string name="user_ask_allowed_once">Dopušteno jednom</string>
+    <string name="user_ask_cancelled">Otkazano</string>
+    <string name="user_ask_timed_out">Isteklo vrijeme</string>
+    <string name="user_ask_skipped">Preskočeno</string>
+    <string name="user_ask_could_not_ask">Pitanje nije moguće</string>
+    <string name="user_ask_answered">Odgovoreno</string>
+    <string name="user_ask_n_of_m_answered">Odgovoreno %1$d od %2$d</string>
+    <string name="user_ask_replaced_by_message">Zamijenjeno tvojom novom porukom</string>
+    <string name="user_ask_stopped">Zaustavljeno</string>
+    <string name="user_ask_replaced_by_newer">Zamijenjeno novijim pitanjem</string>
+    <string name="user_ask_waiting">Čeka se tvoj odgovor…</string>
+    <string name="user_ask_question_for_you">Pitanje za tebe</string>
+    <string name="user_ask_your_answer">Tvoj odgovor</string>
+    <string name="user_ask_reason">Razlog / učini ovo umjesto toga</string>
+    <string name="user_ask_done">Gotovo</string>
+    <string name="user_ask_option">opcija</string>
+    <string name="user_ask_setting_title">Interakcija s korisnikom</string>
+    <string name="user_ask_setting_wait">Čekaj odgovor</string>
+    <string name="user_ask_setting_indefinitely">Neograničeno</string>
+    <string name="user_ask_setting_minutes">%1$d min</string>
+    <string name="user_ask_setting_footer">Omogućuje asistentu da te karticom u razgovoru zamoli da izabereš između opcija ili potvrdiš rizičnu radnju prije izvođenja. Samo u razgovorima u kojima sudjeluješ — nikad za podagente, Prečace ili zakazane zadatke. Kad je isključeno, asistent odlučuje sam i ne izvodi rizične radnje bez tvog odobrenja.</string>
+    <!-- [T-android-user-ask-notify] user_ask background notification. -->
+    <string name="user_ask_setting_notify">Obavijesti u pozadini</string>
+    <string name="user_ask_notif_high_risk">Potrebno odobrenje · Visok rizik</string>
+    <string name="user_ask_notif_open_app">Otvori aplikaciju</string>
+    <string name="user_ask_notif_hidden_body">Jedno pitanje čeka tvoj odgovor</string>
+    <string name="user_ask_notif_channel_name">Pitanja za tebe</string>
+    <string name="user_ask_notif_channel_description">Pitanja asistenta dok je Minis u pozadini, na koja možeš odgovoriti iz obavijesti</string>
+    <!-- [T-tool-preview-longpress-close] Long-press the tool status bar preview -->
+    <string name="tool_preview_close_menu">Zatvori prozor pregleda</string>
+    <string name="tool_preview_closed_toast">Prozor pregleda je zatvoren. Možete ga ponovno uključiti u Postavke &gt; Izgled.</string>
+    <!-- [T-mcp-oauth-signin-android] MCP browser sign-in (iOS #432) -->
+    <string name="mcp_form_auth_mode">Autorizacija</string>
+    <string name="mcp_form_auth_none">Ništa</string>
+    <string name="mcp_signin_not_signed_in">Niste prijavljeni</string>
+    <string name="mcp_signin_sign_in">Prijava</string>
+    <string name="mcp_signin_reset_confirm">Poništi</string>
 </resources>

@@ -70,6 +70,8 @@ import java.io.RandomAccessFile
 fun LogManagementScreen(
     onBack: () -> Unit,
     onLogFileClick: (fileName: String) -> Unit = {},
+    /** [T-config-readable] Opens a Config Changes record's detail page. */
+    onConfigAuditEntryClick: (auditId: String) -> Unit = {},
 ) {
     val context = LocalContext.current
     // T-logs-perf: capped, separated daily/crash lists. Pre-T-logs-perf the
@@ -94,7 +96,9 @@ fun LogManagementScreen(
     val initialTab = remember {
         com.openminis.app.deeplink.DeepLinkCoordinator.consumePendingLogsTab() ?: "logs"
     }
-    var tab by remember { mutableStateOf(initialTab) }
+    // rememberSaveable: coming back from a Config Changes record's detail
+    // page [T-config-readable] must land on the same tab.
+    var tab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(initialTab) }
 
     val refreshTrigger = remember { mutableStateOf(0) }
     LaunchedEffect(refreshTrigger.value) {
@@ -150,7 +154,7 @@ fun LogManagementScreen(
 
         if (tab == "config-audit") {
             // Audit body. Owns its own scrolling.
-            ConfigAuditScreen(modifier = Modifier.fillMaxSize())
+            ConfigAuditScreen(modifier = Modifier.fillMaxSize(), onOpenEntry = onConfigAuditEntryClick)
         } else {
             // Logs body — original layout. The LazyColumn picks up
             // viewport height since the scaffold gave us a Column slot.

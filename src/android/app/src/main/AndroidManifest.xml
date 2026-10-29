@@ -112,6 +112,12 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- [T-431] android-speech languages resolves the voice-search
+             activity (RecognizerIntent.getVoiceDetailsIntent) to find the
+             recognizer's language-details receiver. -->
+        <intent>
+            <action android:name="android.speech.action.WEB_SEARCH" />
+        </intent>
         <!-- T234: needed for androidx.browser CustomTabsClient.bindCustomTabsService
              to discover the user's Chrome (or any Custom Tabs provider) under
              Android 11+ package-visibility rules. Without this the bind silently
@@ -174,6 +180,8 @@
     <application
         android:name=".MinisApp"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:largeHeap="true"
         android:requestLegacyExternalStorage="true"
         android:preserveLegacyExternalStorage="true"
@@ -521,6 +529,16 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- [T-oauth-wait-fgs] Keeps the process out of the cached-apps
+             freezer while an OAuth sign-in waits for its localhost redirect
+             (the browser is on top, so Minis is a background process). Runs
+             only between OAuthCallbackServer start and stop, capped at 5 min
+             per flow; dataSync, same permission as the backup service. -->
+        <service
+            android:name=".service.OAuthWaitService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- Alarm broadcast receiver (also handles BOOT_COMPLETED and
              MY_PACKAGE_REPLACED for re-scheduling). [T-android-alarm-reschedule-on-restart]
              AlarmManager drops pending alarms on reboot AND whenever the app is
@@ -551,6 +569,12 @@
              which drives the agent loop headlessly. -->
         <receiver
             android:name=".scheduled.ScheduledTaskAlarmReceiver"
+            android:exported="false" />
+
+        <!-- [T-android-user-ask-notify] Answers given in a user_ask notification
+             (option buttons, Allow / Cancel, the "Other…" text reply). -->
+        <receiver
+            android:name=".notification.UserAskNotificationReceiver"
             android:exported="false" />
 
         <!-- Notification listener — lets android-notification read active notifications.

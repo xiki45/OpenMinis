@@ -233,10 +233,16 @@ enum class ImageEndpointMode {
  * Controls when fallback to the next model in the group is triggered.
  * - default: only on rate limiting (429) or server errors (5xx)
  * - always: on any error, including network errors, auth failures, etc.
+ *
+ * [B01 cross-platform read] iOS calls `default` `limited` (its
+ * FallbackStrategy has `limited` and `always`), so an iOS backup's group
+ * reads as `default` by name. Decoding only: Android still writes `default`
+ * for its own config; the backup exporter writes `limited` for iOS.
  */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 enum class FallbackStrategy {
-    default,
+    @kotlinx.serialization.json.JsonNames("limited") default,
     always,
 }
 

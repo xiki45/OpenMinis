@@ -234,13 +234,34 @@ class OpenCodeSessionHeaderTest {
         // [T-titlegen-group-order] Both title paths now build each candidate's
         // provider in TitleCandidates.providerFor, which tags it; the callers
         // hand it the chat's id.
-        val list = ProductionSources.read("ui/sessions/SessionListViewModel.kt")
+        // [T-sessions-cli-update] Regenerate Title moved to SessionTitleRegenerator.
+        val list = ProductionSources.read("ui/sessions/SessionTitleRegenerator.kt")
         assertTrue(list.contains("providerRepository, context, entry, sessionId = id,"))
         val vm = ProductionSources.read("ui/chat/ChatViewModel.kt")
         assertTrue(vm.contains("TitleCandidates.providerFor(providerRepository, context, entry, activeSessionId)"))
         val titles = ProductionSources.read("ui/chat/TitleCandidates.kt")
         assertTrue(titles.contains("sessionId = sessionId, overrides = entry.overrides"))
         val modelUse = ProductionSources.read("sandbox/offload/ModelUseOffloadHandler.kt")
-        assertTrue(modelUse.contains("sessionId = request.sessionId, overrides = entry.overrides"))
+        // [T-offload-caller-session] f83976520: the request's session is resolved
+        // to the chat it belongs to (a sub agent's hidden session maps to its
+        // parent chat) before it tags the provider.
+        assertTrue(modelUse.contains("val caller = OffloadCallerSession.resolve(request.sessionId)"))
+        assertTrue(modelUse.contains("val callerSid = caller.sid"))
+        val create = modelUse.substringAfter("val provider = ProviderFactory.create(").substringBefore("\n        )\n")
+        assertTrue(create.contains("sessionId = callerSid, overrides = entry.overrides"))
+    }
+
+    @Test
+    fun `quick test is its own conversation with a fresh random id`() {
+        // [T-android-quicktest-opencode-session] Without an id OpenCode Go answers
+        // 400 "missing x-opencode-session", so every Quick Test of an OpenCode
+        // entry failed (Pixel 4a + Pixel 6, 2026-10-07).
+        val sheet = ProductionSources.read("ui/components/QuickTestSheet.kt")
+        assertTrue(sheet.contains("sessionId = ProviderFactory.oneOffSessionId(),"))
+        assertTrue(ProductionSources.read("provider/ProviderFactory.kt").contains("fun oneOffSessionId(): String = java.util.UUID.randomUUID().toString()"))
+        val id = java.util.UUID.randomUUID().toString()
+        assertTrue("a random UUID counts as a persisted id", OpenCodeSessionHeader.isPersistedSessionId(id))
+        assertEquals(mapOf("x-opencode-session" to id), OpenCodeSessionHeader.headersFor("https://opencode.ai/zen/go/v1", id))
+        assertTrue("other hosts still get nothing", OpenCodeSessionHeader.headersFor("https://api.deepseek.com", id).isEmpty())
     }
 }

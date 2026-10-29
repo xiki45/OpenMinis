@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">Mostrar todo o raciocínio</string>
+    <string name="thinking_full_title">Raciocínio completo</string>
+    <string name="thinking_full_char_count">%1$s caracteres</string>
+    <string name="thinking_full_load_more">Carregar mais</string>
+    <string name="thinking_full_copy_failed">Longo demais para copiar</string>
+</resources>

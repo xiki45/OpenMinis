@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -490,35 +489,27 @@ fun UnifiedModelPickerSheet(
                                                 ),
                                         )
                                         Spacer(Modifier.width(10.dp))
-                                        Text(
-                                            entry.model.displayName.ifBlank { entry.model.id },
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            modifier = Modifier.weight(1f, fill = false),
+                                        // [T-model-row-premature-wrap] Name and badge on one
+                                        // line when they fit, else the name keeps the width
+                                        // and the badge drops below (iOS ViewThatFits).
+                                        FitOrWrapLine(
+                                            modifier = Modifier.weight(1f),
+                                            lead = {
+                                                Text(
+                                                    entry.model.displayName.ifBlank { entry.model.id },
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                )
+                                            },
+                                            tags = {
+                                                // Badge only in the group-follow case:
+                                                // it explains WHY a row is checked when
+                                                // the user didn't pick it. With an
+                                                // explicit override the check is
+                                                // self-explanatory and the badge would
+                                                // just be noise.
+                                                if (isActive && selectedId == null) ModelActiveBadge()
+                                            },
                                         )
-                                        // Badge only in the group-follow case:
-                                        // it explains WHY a row is checked when
-                                        // the user didn't pick it. With an
-                                        // explicit override the check is
-                                        // self-explanatory and the badge would
-                                        // just be noise.
-                                        if (isActive && selectedId == null) {
-                                            Spacer(Modifier.width(6.dp))
-                                            // Main picker's green "Active"
-                                            // badge (ChatModelPickerSheet:1178).
-                                            Text(
-                                                stringResource(R.string.model_picker_active_badge),
-                                                fontSize = 9.sp,
-                                                lineHeight = 11.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                color = Color(0xFF34C759),
-                                                modifier = Modifier
-                                                    .background(
-                                                        Color(0xFF34C759).copy(alpha = 0.1f),
-                                                        RoundedCornerShape(50),
-                                                    )
-                                                    .padding(horizontal = 5.dp, vertical = 1.dp),
-                                            )
-                                        }
                                     }
                                 }
                                 // The last member's 10dp row padding alone left
@@ -598,19 +589,7 @@ fun UnifiedModelPickerSheet(
                                     }
                                     if (systemInEffect && selectedId == null) {
                                         Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            stringResource(R.string.model_picker_active_badge),
-                                            fontSize = 9.sp,
-                                            lineHeight = 11.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = Color(0xFF34C759),
-                                            modifier = Modifier
-                                                .background(
-                                                    Color(0xFF34C759).copy(alpha = 0.1f),
-                                                    RoundedCornerShape(50),
-                                                )
-                                                .padding(horizontal = 5.dp, vertical = 1.dp),
-                                        )
+                                        ModelActiveBadge()
                                     }
                                 }
                             }
@@ -810,25 +789,27 @@ fun UnifiedModelPickerSheet(
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 fontWeight = FontWeight.SemiBold,
                                             )
-                                            // FlowRow, NOT Row: with 3-4 chips
-                                            // next to a long model id an
-                                            // overflowing Row squeezes each
-                                            // Text into a vertical letter
-                                            // column; here whole chips wrap to
-                                            // the next line instead.
-                                            FlowRow(
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                                itemVerticalAlignment = Alignment.CenterVertically,
-                                            ) {
-                                                Text(
-                                                    entry.baseModel.id,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
-                                                modalityBadges(entry.model).forEach { badge ->
-                                                    ModalityBadge(badge)
-                                                }
-                                            }
+                                            // [T-model-row-premature-wrap] Id, "·" and the
+                                            // modality chips on one line when they fit;
+                                            // else the id keeps the full width and the
+                                            // chips drop below it (iOS entryRow). The
+                                            // chips never break internally (ModalityBadge).
+                                            val badges = modalityBadges(entry.model)
+                                            FitOrWrapLine(
+                                                separator = if (badges.isNotEmpty()) {
+                                                    { ModelRowSeparatorDot() }
+                                                } else {
+                                                    null
+                                                },
+                                                lead = {
+                                                    Text(
+                                                        entry.baseModel.id,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                },
+                                                tags = { badges.forEach { badge -> ModalityBadge(badge) } },
+                                            )
                                         }
                                         IconButton(
                                             onClick = { quickTestEntry = entry },

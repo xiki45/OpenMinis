@@ -17,6 +17,8 @@ data class BrowserActionInput(
     val amount: Int? = null,
     val script: String? = null,
     val userAgent: UserAgentProfile? = null,
+    /** [ISS-033] The user_agent argument as given, for the error text when it is unknown. */
+    val userAgentRaw: String? = null,
     val maxDepth: Int? = null,
     val tabId: Int? = null,
     /** Viewport width override (set_viewport action). */
@@ -61,7 +63,8 @@ data class BrowserActionInput(
                     direction = obj.optString("direction").ifEmpty { null }?.let { ScrollDirection.fromString(it) },
                     amount = if (obj.has("amount")) obj.optInt("amount") else null,
                     script = obj.optString("script").ifEmpty { null },
-                    userAgent = obj.optString("user_agent").ifEmpty { null }?.let { UserAgentProfile.fromString(it) },
+                    userAgent = UserAgentProfile.parse(obj.optString("user_agent").ifEmpty { null }),
+                    userAgentRaw = obj.optString("user_agent").ifEmpty { null },
                     maxDepth = if (obj.has("max_depth")) obj.optInt("max_depth") else null,
                     tabId = if (obj.has("tab_id")) obj.optInt("tab_id") else null,
                     viewportWidth = if (obj.has("viewport_width")) obj.optInt("viewport_width") else null,

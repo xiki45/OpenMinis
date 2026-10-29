@@ -1,5 +1,8 @@
 package com.openminis.app.config
 
+import com.openminis.app.config.readable.ReadableLine
+import com.openminis.app.config.readable.RedactedConfigValue
+
 /**
  * A dynamically-keyed group of fields, e.g. one ProviderInstance per id,
  * one ModelEntry per uuid, one ModelGroup per id. Mirrors iOS
@@ -43,4 +46,27 @@ interface ConfigCollection {
 
     /** Remove a child. Throws on missing id or non-removable. */
     fun remove(id: String)
+
+    // [T-config-readable] Human-readable descriptions — no defaults, so a new
+    // collection does not compile until it says how it reads. Mirrors iOS.
+
+    /**
+     * Localization key naming a child's field in a sentence, with the
+     * child's name as %1$@ and the field label as %2$@, e.g.
+     * "Group “%1$@” – %2$@".
+     */
+    val readableSubjectFormat: String
+
+    /**
+     * The child's user-facing name (group name, provider label, …), or null
+     * when [id] is not a child. Called before the write, so a removed child
+     * is still named.
+     */
+    fun entityLabel(id: String): String?
+
+    /** Sentences describing an `add`. The payload is already secret-masked. */
+    fun readableForAdd(payload: RedactedConfigValue): List<ReadableLine>
+
+    /** Sentences describing a `remove`, rendered BEFORE the removal. */
+    fun readableForRemove(id: String): List<ReadableLine>
 }

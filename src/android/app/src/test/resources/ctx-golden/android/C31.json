@@ -1,0 +1,470 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          },
+          {
+            "image": {
+              "base64Len": 381700,
+              "bytes": 286273,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5331e4580e0282e3",
+              "w": 900
+            },
+            "inResultOf": "call_shot1",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The page shows a heading."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks, now what?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          },
+          {
+            "image": {
+              "base64Len": 381700,
+              "bytes": 286273,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5331e4580e0282e3",
+              "w": 900
+            },
+            "inResultOf": "fn:browser_use",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The page shows a heading."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks, now what?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by browser_use (tool_call_id: call_shot1)]"
+          },
+          {
+            "image": {
+              "base64Len": 381700,
+              "bytes": 286273,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5331e4580e0282e3",
+              "w": 900
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The page shows a heading."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks, now what?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by browser_use]"
+          },
+          {
+            "image": {
+              "base64Len": 381700,
+              "bytes": 286273,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5331e4580e0282e3",
+              "w": 900
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The page shows a heading."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks, now what?"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The page shows a heading."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks, now what?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The page shows a heading."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks, now what?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The page shows a heading."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks, now what?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "The page shows a heading."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks, now what?"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Devre dışı</string>
+    <string name="env_var_status_duplicate">Yinelenen ad</string>
+    <string name="env_var_enabled_toggle">Etkin</string>
+    <string name="env_var_enabled_footer">Kapalıyken değişkenin değeri ve notu korunur ancak kabuklara, terminallere veya MCP sunucularına aktarılmaz.</string>
+    <string name="env_var_disabled_highlight">Bu değişken devre dışı. Yeniden kullanmak için açın.</string>
+    <string name="env_var_action_disable">Devre dışı bırak</string>
+    <string name="env_var_action_enable">Etkinleştir</string>
+    <string name="mcp_form_env_disabled_warning">%1$s devre dışı ve boş değer olarak aktarılacak.</string>
+</resources>

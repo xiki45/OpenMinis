@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Config Changes record detail page and the approval
+     dialog's batch summary. Wording and translations mirror iOS
+     ConfigAuditDetailView / ConfigConfirmSheet. -->
+<resources>
+    <string name="config_audit_detail_status">Stan</string>
+    <string name="config_audit_detail_reverted">Cofnięto</string>
+</resources>

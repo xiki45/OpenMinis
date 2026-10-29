@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Config Changes record detail page and the approval
+     dialog's batch summary. Wording and translations mirror iOS
+     ConfigAuditDetailView / ConfigConfirmSheet. -->
+<resources>
+    <string name="config_audit_summary_header">Overzicht van goedgekeurde wijzigingen</string>
+    <string name="config_audit_detail_title">Wijzigingsdetails</string>
+    <string name="config_audit_detail_status">Status</string>
+    <string name="config_audit_detail_changed_by">Gewijzigd door</string>
+    <string name="config_audit_detail_requested">Aangevraagd</string>
+    <string name="config_audit_detail_resolved">Afgehandeld</string>
+    <string name="config_audit_detail_note">Notitie van de assistent</string>
+    <string name="config_audit_detail_what_changed">Wat is er gewijzigd</string>
+    <string name="config_audit_detail_predates">Dit record is ouder dan de leesbare beschrijvingen, dus alleen de ruwe wijziging wordt getoond.</string>
+    <string name="config_audit_detail_raw">Ruwe wijziging</string>
+    <string name="config_audit_detail_setting">Instelling</string>
+    <string name="config_audit_detail_before">Voor</string>
+    <string name="config_audit_detail_after">Na</string>
+    <string name="config_audit_detail_revert">Deze wijziging terugdraaien</string>
+    <string name="config_audit_detail_reverted">Teruggedraaid</string>
+    <string name="config_audit_revert_undoes">Dit maakt ongedaan:</string>
+    <string name="config_audit_actor_assistant">Assistent</string>
+    <string name="config_audit_actor_you">Jij</string>
+    <string name="config_audit_actor_assistant_revert">Assistent (terugdraaien)</string>
+    <string name="config_audit_actor_you_revert">Jij (terugdraaien)</string>
+</resources>

@@ -30,6 +30,38 @@ open class VoiceProvider(
     val baseURL: String,
     val apiKey: String? = null,
 ) {
+    /**
+     * [T-android-provider-entry-rules] The instance's custom User-Agent, set by
+     * [VoiceProviderFactory]. Voice requests are hand-built per vendor and
+     * carried no User-Agent at all (OkHttp's own), unlike every chat request.
+     */
+    var customUserAgent: String? = null
+
+    /**
+     * Shadows the shared [Companion.httpClient] for every request this provider
+     * sends (same connection pool): the instance's custom User-Agent, else the
+     * branded default - unless a vendor request set its own User-Agent.
+     */
+    private val baseHttpClient: OkHttpClient by lazy {
+        Companion.httpClient.newBuilder().addInterceptor { chain ->
+            val request = chain.request()
+            val custom = customUserAgent?.trim()?.takeIf { it.isNotEmpty() }
+            val ua = custom ?: if (request.header("User-Agent") == null) {
+                com.openminis.app.provider.MinisUserAgent.DEFAULT
+            } else {
+                null
+            }
+            chain.proceed(if (ua == null) request else request.newBuilder().header("User-Agent", ua).build())
+        }.build()
+    }
+
+    /**
+     * [FEAT-261021-16] Speech requests follow the default route in Settings >
+     * Network (voice providers have no route of their own); [baseHttpClient]
+     * itself when nothing is configured.
+     */
+    val httpClient: OkHttpClient get() = com.openminis.app.network.NetworkHttp.client(com.openminis.app.network.NetworkHttp.DEFAULT_TAG, baseHttpClient)
+
     companion object {
         private const val TAG = "VoiceProvider"
 

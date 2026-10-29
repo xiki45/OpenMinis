@@ -4,6 +4,7 @@ import com.openminis.app.R
 import com.openminis.app.ui.components.DialogTextField
 import com.openminis.app.ui.components.MinisTextButton
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,18 +13,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -33,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -63,17 +69,32 @@ fun EnvironmentVariablesScreen(
     // with `create_key`, the env screen should open with a prefilled Add
     // sheet so the user only has to paste the value.
     var prefill by remember { mutableStateOf<DeepLinkCoordinator.EnvVarCreate?>(null) }
+    // [T-envvar-disable] Set when a deep link names a variable that exists but
+    // is disabled: the edit sheet then highlights its Enabled switch.
+    var highlightEnabled by remember { mutableStateOf(false) }
     val visibleKeys = remember { mutableStateOf(setOf<String>()) }
     val clipboardManager = LocalClipboardManager.current
 
     LaunchedEffect(Unit) {
-        DeepLinkCoordinator.consumePendingEnvVarCreate()?.let {
-            prefill = it
-            showAddSheet = true
+        DeepLinkCoordinator.consumePendingEnvVarCreate()?.let { link ->
+            prefill = link
+            // [T-envvar-disable] A link for a name that already exists opens that
+            // variable instead of an Add form that could only say "duplicate".
+            // It stays as it is - a disabled one is NOT switched on by the link;
+            // the sheet highlights the switch so the user can decide.
+            val existing = envVarRepository.entries.value
+                .firstOrNull { it.key.equals(link.key.trim(), ignoreCase = true) }
+            if (existing != null) {
+                editEntryId = existing.id
+                highlightEnabled = !existing.enabled
+            } else {
+                showAddSheet = true
+            }
         }
     }
 
     val privacyEnabled by com.openminis.app.data.EnvVarPrivacyStore.enabled.collectAsState()
+    val duplicateKeys = remember(entries) { envVarRepository.duplicateKeys() }
 
     SettingsScaffold(
         title = stringResource(R.string.env_var_title),
@@ -136,14 +157,19 @@ fun EnvironmentVariablesScreen(
                     // value on one line and the optional note on a second.
                     // SettingsRow only has one subtitle slot, so concatenate
                     // with a newline; both render in the same secondary style.
-                    val subtitleText = if (entry.note.isNotEmpty()) {
-                        "$displayValue\n${entry.note}"
-                    } else {
-                        displayValue
-                    }
+                    // [T-envvar-disable] A first line of tags: disabled, and a name
+                    // shared with another entry (only an older build, a restore or
+                    // a merged file can produce one; the form refuses it).
+                    val tags = listOfNotNull(
+                        if (!entry.enabled) stringResource(R.string.env_var_status_disabled) else null,
+                        if (entry.key.uppercase() in duplicateKeys) "⚠ " + stringResource(R.string.env_var_status_duplicate) else null,
+                    ).joinToString(" · ").ifEmpty { null }
+                    val subtitleText = listOfNotNull(tags, displayValue, entry.note.ifEmpty { null }).joinToString("\n")
                     SettingsRow(
                         title = entry.key,
                         subtitle = subtitleText,
+                        titleColor = if (entry.enabled) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                         showChevron = false,
                         showDivider = index < entries.size - 1,
                         onClick = { editEntryId = entry.id },
@@ -168,6 +194,19 @@ fun EnvironmentVariablesScreen(
                                     Icon(
                                         Icons.Default.ContentCopy,
                                         contentDescription = stringResource(R.string.common_copy),
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                // [T-envvar-disable] The row's own on / off action,
+                                // next to Delete (iOS puts it beside Delete in the
+                                // swipe actions; these inline buttons are the
+                                // Android row's equivalent).
+                                IconButton(onClick = { envVarRepository.setEnabled(entry.id, !entry.enabled) }) {
+                                    Icon(
+                                        if (entry.enabled) Icons.Outlined.Block else Icons.Outlined.CheckCircle,
+                                        contentDescription = stringResource(
+                                            if (entry.enabled) R.string.env_var_action_disable else R.string.env_var_action_enable
+                                        ),
                                         modifier = Modifier.size(20.dp),
                                     )
                                 }
@@ -197,11 +236,13 @@ fun EnvironmentVariablesScreen(
             prefillKey = prefill?.key.orEmpty(),
             prefillValue = prefill?.value.orEmpty(),
             prefillNote = prefill?.note.orEmpty(),
+            highlightEnabled = highlightEnabled,
             envVarRepository = envVarRepository,
             onDismiss = {
                 showAddSheet = false
                 editEntryId = null
                 prefill = null
+                highlightEnabled = false
             },
         )
     }
@@ -239,13 +280,25 @@ private fun EnvVarFormSheet(
     prefillKey: String = "",
     prefillValue: String = "",
     prefillNote: String = "",
+    highlightEnabled: Boolean = false,
 ) {
-    val sheetState = rememberModalBottomSheetState()
+    // Fully expanded: half-expanded, the Enabled switch and Save sat below the
+    // screen edge on a 6" phone.
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var keyText by remember { mutableStateOf(editEntry?.key ?: prefillKey) }
+    // A deep link that opened an existing variable with a value / note fills
+    // those in; an empty one leaves what is stored.
     var valueText by remember {
-        mutableStateOf(editEntry?.let { envVarRepository.getValue(it.key) } ?: prefillValue)
+        mutableStateOf(
+            prefillValue.takeIf { editEntry != null && it.isNotEmpty() }
+                ?: editEntry?.let { envVarRepository.getValue(it.key) }
+                ?: prefillValue
+        )
     }
-    var noteText by remember { mutableStateOf(editEntry?.note ?: prefillNote) }
+    var noteText by remember {
+        mutableStateOf(prefillNote.takeIf { editEntry != null && it.isNotEmpty() } ?: editEntry?.note ?: prefillNote)
+    }
+    var enabled by remember { mutableStateOf(editEntry?.enabled ?: true) }
 
     val isEditing = editEntry != null
     val normalizedKey = keyText.trim().uppercase()
@@ -327,6 +380,47 @@ private fun EnvVarFormSheet(
                 singleLine = true,
             )
 
+            // [T-envvar-disable] On / off, editing only (a new variable starts on).
+            if (isEditing) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (highlightEnabled && !enabled) Modifier.background(
+                                MaterialTheme.colorScheme.primaryContainer,
+                                RoundedCornerShape(12.dp),
+                            ) else Modifier
+                        )
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                ) {
+                    if (highlightEnabled && !enabled) {
+                        Text(
+                            text = stringResource(R.string.env_var_disabled_highlight),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.env_var_enabled_toggle),
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(checked = enabled, onCheckedChange = { enabled = it })
+                    }
+                    Text(
+                        text = stringResource(R.string.env_var_enabled_footer),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
@@ -337,7 +431,10 @@ private fun EnvVarFormSheet(
                 MinisTextButton(
                     onClick = {
                         val success = if (isEditing) {
-                            envVarRepository.update(editEntry!!.id, keyText, valueText, noteText)
+                            // update() never touches the enabled state; the switch
+                            // is applied on its own, only when it changed.
+                            envVarRepository.update(editEntry!!.id, keyText, valueText, noteText) &&
+                                (enabled == editEntry.enabled || envVarRepository.setEnabled(editEntry.id, enabled))
                         } else {
                             envVarRepository.add(keyText, valueText, noteText)
                         }

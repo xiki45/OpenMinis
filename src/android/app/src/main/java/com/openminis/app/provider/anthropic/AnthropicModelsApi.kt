@@ -2,6 +2,7 @@ package com.openminis.app.provider.anthropic
 
 import android.content.Context
 import com.openminis.app.data.model.LLMModel
+import com.openminis.app.provider.openai.OpenAIModelsApi
 import com.openminis.app.provider.ModelsDevApi
 import com.openminis.app.provider.applyUserAgentOverride
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +36,9 @@ object AnthropicModelsApi {
         // [T-provider-custom-user-agent] Per-provider UA override; null/blank
         // keeps the default UA. Threaded from ProviderRepository.refreshModels.
         customUserAgent: String? = null,
+        // [FEAT-261021-16] The instance's Settings > Network tag (prov:<id>);
+        // null follows the default route.
+        netTag: String? = null,
     ): List<LLMModel> = withContext(Dispatchers.IO) {
         // Cache key: base URL included so the same API key across proxies doesn't
         // share cached model lists (vLLM vs api.anthropic.com can differ).
@@ -95,7 +99,7 @@ object AnthropicModelsApi {
             android.util.Log.d("AnthropicModels", "Fetching models (level=$idx): ${request.url} isOAuth=$isOAuth headers=${request.headers}")
 
             val response: Response = try {
-                client.newCall(request).execute()
+                com.openminis.app.network.NetworkHttp.client(netTag, client).newCall(request).execute()
             } catch (e: Exception) {
                 android.util.Log.e("AnthropicModels", "Fetch error (level=$idx): ${e.message}")
                 continue
@@ -155,7 +159,24 @@ object AnthropicModelsApi {
                 // catalogued yet (e.g. Opus 4.8). Both OAuth and API-key direct
                 // Anthropic instances flow through here.
                 val reasoning = if (AnthropicProvider.supportsThinking(id)) true else null
-                parsed.add(LLMModel(id, displayName, "Anthropic", supportsReasoning = reasoning))
+                // [T-anthropic-list-reported-limits] An Anthropic-compatible
+                // relay that reports `context_length` / `max_output_tokens`
+                // (or any spelling OpenAIModelsApi.reportedLimits reads) is
+                // the authority on them, as on the OpenAI-compatible path
+                // ([OpenMinis#438]). This list read none: a relay serving
+                // `cn:deepseek-v4-pro` with a 1M window landed with no window
+                // and the model fell to its family's 128K guess (Windows reads
+                // them here too, minis-providers models_api.rs).
+                val (reportedContext, reportedOutput) = OpenAIModelsApi.reportedLimits(obj)
+                parsed.add(
+                    LLMModel(
+                        id, displayName, "Anthropic",
+                        contextWindow = reportedContext,
+                        maxOutputTokens = reportedOutput,
+                        limitsReportedByEndpoint = if (reportedContext != null || reportedOutput != null) true else null,
+                        supportsReasoning = reasoning,
+                    ),
+                )
             }
             android.util.Log.i("AnthropicModels", "Parsed ${parsed.size} models: ${parsed.map { it.id }.joinToString()}")
             if (parsed.isEmpty()) return fallback

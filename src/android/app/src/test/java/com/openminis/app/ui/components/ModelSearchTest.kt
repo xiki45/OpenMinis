@@ -86,11 +86,11 @@ class ModelSearchTest {
     @Test
     fun `a provider-name hit shows that provider's whole list`() {
         val r = ModelSearch.search(
-            listOf("host.example.com" to listOf(entry("/models/Qwen3.8-27B.gguf")), "Other" to listOf(entry("gpt-5"))),
+            listOf("llm.example.net" to listOf(entry("/models/Qwen3.8-27B.gguf")), "Other" to listOf(entry("gpt-5"))),
             label = { it },
-            query = "wsen",
+            query = "example",
         )
-        assertEquals(listOf("host.example.com"), r.sections.map { it.key })
+        assertEquals(listOf("llm.example.net"), r.sections.map { it.key })
         assertEquals(1, r.sections.single().entries.size)
     }
 

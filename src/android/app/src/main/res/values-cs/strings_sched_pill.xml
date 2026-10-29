@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Běží</string>
+    <string name="sched_pill_waiting">Čeká</string>
+    <string name="sched_pill_run_now">Spustit teď</string>
+    <string name="sched_pill_hide">Skrýt toto odpočítávání</string>
+    <string name="sched_pill_cancel_all">Zrušit všechny naplánované úlohy</string>
+    <string name="sched_pill_cancel_all_title">Zrušit všechny naplánované úlohy?</string>
+    <string name="sched_pill_cancel_all_confirm">Zrušit vše</string>
+    <string name="sched_pill_not_now">Teď ne</string>
+    <string name="sched_pill_cancel_all_message">Všechny úlohy, které jsou v této konverzaci ještě naplánované, budou zrušeny.</string>
+    <string name="sched_pill_a11y_title">Nadcházející naplánovaná úloha</string>
+    <string name="sched_pill_a11y_running">Běh probíhá</string>
+    <string name="sched_pill_a11y_waiting">Čeká na dokončení jiné úlohy</string>
+    <string name="sched_pill_a11y_upcoming_left">Nadcházející běh · zbývá: %1$d</string>
+    <string name="sched_pill_a11y_upcoming">Nadcházející běh</string>
+    <string name="sched_pill_a11y_run_of">Běh %1$d z %2$d</string>
+    <string name="sched_pill_a11y_run">Běh %1$d</string>
+    <string name="sched_pill_a11y_next_in">Další běh za %1$s</string>
+    <string name="sched_pill_a11y_more">Další: +%1$d</string>
+    <string name="sched_pill_a11y_hint">Otevře podrobnosti úlohy</string>
+</resources>

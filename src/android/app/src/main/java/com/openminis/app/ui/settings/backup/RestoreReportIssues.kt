@@ -78,3 +78,21 @@ internal fun restoreIssues(report: BackupImporter.Report): List<RestoreIssue> = 
         }
     }
 }
+
+/**
+ * The restore report's credentials line, keyed on the providers category
+ * (iOS parity, fix 93cad55ae): keys written, keys kept, or none in the package.
+ *
+ * [B01 cross-platform read] null - no line - when the restore wrote no
+ * provider: "restored providers have no credentials, enter each API key" was
+ * shown under a provider_config.json that could not be read at all, where
+ * nothing had been restored and the line sent the user to fix the wrong thing.
+ */
+internal enum class RestoreCredentialsNotice { RESTORED, KEPT, NONE_IN_PACKAGE }
+
+internal fun restoreCredentialsNotice(providers: BackupImporter.CategoryReport): RestoreCredentialsNotice? = when {
+    providers.credentialsRestored > 0 -> RestoreCredentialsNotice.RESTORED
+    providers.credentialsKept > 0 -> RestoreCredentialsNotice.KEPT
+    providers.imported + providers.updated > 0 -> RestoreCredentialsNotice.NONE_IN_PACKAGE
+    else -> null
+}

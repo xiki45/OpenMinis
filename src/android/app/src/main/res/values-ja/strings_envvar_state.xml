@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">無効</string>
+    <string name="env_var_status_duplicate">名前が重複</string>
+    <string name="env_var_enabled_toggle">有効</string>
+    <string name="env_var_enabled_footer">オフにすると、値とメモは保持されますが、シェル・ターミナル・MCP サーバーには渡されません。</string>
+    <string name="env_var_disabled_highlight">この変数は無効です。オンにすると再び使えるようになります。</string>
+    <string name="env_var_action_disable">無効にする</string>
+    <string name="env_var_action_enable">有効にする</string>
+    <string name="mcp_form_env_disabled_warning">%1$s は無効のため、空の値として渡されます。</string>
+</resources>

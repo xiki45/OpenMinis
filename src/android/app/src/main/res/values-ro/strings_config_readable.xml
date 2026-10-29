@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">Cheie API</string>
+    <string name="cfgr_all_models">Toate modelele</string>
+    <string name="cfgr_allow_minis_config">Permite minis-config</string>
+    <string name="cfgr_applies_to">Se aplică pentru</string>
+    <string name="cfgr_audio_input">Intrare audio</string>
+    <string name="cfgr_audio_output">Ieșire audio</string>
+    <string name="cfgr_automatic">Automat</string>
+    <string name="cfgr_chinese">Chineză</string>
+    <string name="cfgr_custom">Personalizat</string>
+    <string name="cfgr_custom_user_agent">User-Agent personalizat</string>
+    <string name="cfgr_dark">Întunecată</string>
+    <string name="cfgr_default">Implicit</string>
+    <string name="cfgr_disabled">Dezactivat</string>
+    <string name="cfgr_display_name">Nume afișat</string>
+    <string name="cfgr_enabled">Activat</string>
+    <string name="cfgr_english">English</string>
+    <string name="cfgr_hidden">Ascuns</string>
+    <string name="cfgr_high">Ridicat</string>
+    <string name="cfgr_image_input">Intrare imagine</string>
+    <string name="cfgr_image_output">Ieșire imagine</string>
+    <string name="cfgr_label">Etichetă</string>
+    <string name="cfgr_light">Luminoasă</string>
+    <string name="cfgr_low">Scăzut</string>
+    <string name="cfgr_max">Maxim</string>
+    <string name="cfgr_med">Mediu</string>
+    <string name="cfgr_medium">Mediu</string>
+    <string name="cfgr_models">Modele</string>
+    <string name="cfgr_name">Nume</string>
+    <string name="cfgr_not_set">Nesetat</string>
+    <string name="cfgr_note">Notă</string>
+    <string name="cfgr_off">Dezactivat</string>
+    <string name="cfgr_on">Activat</string>
+    <string name="cfgr_pdf_input">Intrare PDF</string>
+    <string name="cfgr_privacy_mode">Mod confidențial</string>
+    <string name="cfgr_send">Trimite</string>
+    <string name="cfgr_status">Stare</string>
+    <string name="cfgr_system">De sistem</string>
+    <string name="cfgr_theme">Temă</string>
+    <string name="cfgr_ultra">Ultra</string>
+    <string name="cfgr_video_input">Intrare video</string>
+    <string name="cfgr_video_output">Ieșire video</string>
+    <string name="cfgr_xhigh">Foarte ridicat</string>
+    <string name="cfgr_fold_consecutive_tool_calls">Restrânge apelurile consecutive de instrumente</string>
+</resources>

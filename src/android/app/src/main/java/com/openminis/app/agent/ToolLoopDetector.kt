@@ -44,9 +44,15 @@ data class ToolLoopConfig(
     val unknownToolThreshold: Int = 10,
     val criticalThreshold: Int = 20,
     val globalCircuitBreakerThreshold: Int = 30,
+    /**
+     * [T-tool-title-reminder] Remind about a missing `tool_title` on the 1st,
+     * (N+1)th, (2N+1)th… missing-title call. Mirrors iOS.
+     */
+    val toolTitleReminderEvery: Int = 10,
 ) {
     init {
         require(warningThreshold > 0) { "warningThreshold must be positive" }
+        require(toolTitleReminderEvery > 0) { "toolTitleReminderEvery must be positive" }
         require(warningThreshold < criticalThreshold) {
             "warningThreshold ($warningThreshold) must be < criticalThreshold ($criticalThreshold)"
         }
@@ -98,10 +104,67 @@ class ToolLoopDetector(private val config: ToolLoopConfig = ToolLoopConfig()) {
     // so the LLM doesn't get the same warning attached on every single tool call.
     private val warningBuckets = HashMap<String, Int>()
 
+    /**
+     * [T-tool-title-reminder] Cumulative count of titled tool calls that came
+     * back without a `tool_title`. Not windowed like [history]; cleared by
+     * [reset] with everything else.
+     */
+    private var missingTitleCount = 0
+
+    /**
+     * [T-loop-reminder-scheduled-exempt] 1 after a scheduled-task fire, until
+     * the next recorded call consumes it. Never above 1, never below 0.
+     */
+    private var scheduledFireExemption = 0
+
     /** Drop all in-flight state. Call on session reset / new chat. */
     fun reset() = synchronized(lock) {
         history.clear()
         warningBuckets.clear()
+        missingTitleCount = 0
+        scheduledFireExemption = 0
+    }
+
+    /**
+     * [T-tool-title-reminder] Called after a tool ran, next to [record]. Counts
+     * calls of a tool that declares `tool_title` but arrived without a usable
+     * one, and returns the soft reminder when one is due: on the 1st, 11th,
+     * 21st… such call ([ToolLoopConfig.toolTitleReminderEvery]). The caller
+     * appends it to the model-facing tool result exactly like a loop warning.
+     * Same lock, same [warningBuckets] throttle, same [reset] lifecycle.
+     * Mirrors iOS `ToolLoopDetector.recordToolTitle`.
+     */
+    fun recordToolTitle(args: JSONObject, titleDeclared: Boolean): String? {
+        if (!titleDeclared || !com.openminis.app.ui.chat.ToolTitleReminder.isMissingTitle(args)) return null
+        return synchronized(lock) {
+            missingTitleCount += 1
+            if (!shouldEmitEvery("title:missing", missingTitleCount, config.toolTitleReminderEvery)) {
+                null
+            } else {
+                AppLogger.info("ToolLoopDetector", "loop-detector: tool_title missing count=$missingTitleCount — soft reminder due")
+                com.openminis.app.ui.chat.ToolTitleReminder.TEXT
+            }
+        }
+    }
+
+    /**
+     * [T-loop-reminder-scheduled-exempt] Called when a scheduled task (a
+     * `minis-scheduled` timer / loop) fires into this session. Polling on a
+     * schedule repeats the same call by design — e.g. reading the same terminal
+     * screen every 2 minutes — and each fire used to add one identical call to
+     * the window, so ten fires raised "[LOOP WARNING] ... identical arguments"
+     * (and 30 unchanged screens the global circuit breaker): a false positive
+     * that also polluted the model's context.
+     *
+     * Decrements the repeat count by one per fire, floored at zero: the next
+     * recorded call is not counted. The exemption does not stack (it is 0 or
+     * 1), so fires that make no tool call cannot bank credit for later user
+     * turns, and a fire that runs away within itself is still caught from its
+     * second call. Same semantics as iOS ToolLoopDetector
+     * `exemptNextCallForScheduledFire()`.
+     */
+    fun exemptNextCallForScheduledFire() = synchronized(lock) {
+        scheduledFireExemption = 1
     }
 
     /** Test-only window inspection. */
@@ -192,6 +255,14 @@ class ToolLoopDetector(private val config: ToolLoopConfig = ToolLoopConfig()) {
         errorMessage: String? = null,
         toolCallId: String? = null,
     ): LoopCheckResult = synchronized(lock) {
+        // [T-loop-reminder-scheduled-exempt] A scheduled fire's call is its
+        // expected repeat (the poll it exists to run): not counted, so fire
+        // after fire of the same command never adds up to a loop warning.
+        if (scheduledFireExemption > 0) {
+            scheduledFireExemption -= 1
+            AppLogger.info("ToolLoopDetector", "loop-detector: $toolName exempted (scheduled fire) — not counted")
+            return@synchronized LoopCheckResult.NONE
+        }
         val argsHash = argsHashFor(toolName, params)
         val resultHash = resultHashFor(result, errorMessage)
         val unknownToolName = extractUnknownToolName(errorMessage)
@@ -290,6 +361,15 @@ class ToolLoopDetector(private val config: ToolLoopConfig = ToolLoopConfig()) {
      * so a 30-call repeat loop emits only at counts 10, 20, 30 — not on every
      * tool turn after threshold is crossed.
      */
+    private fun shouldEmitEvery(warningKey: String, count: Int, period: Int): Boolean {
+        // [T-tool-title-reminder] First-hit buckets: fires on 1, period+1, …
+        val bucket = (count - 1) / period.coerceAtLeast(1)
+        val last = warningBuckets[warningKey]
+        if (last != null && last >= bucket) return false
+        warningBuckets[warningKey] = bucket
+        return true
+    }
+
     private fun shouldEmitWarning(warningKey: String, currentCount: Int): Boolean {
         val bucket = currentCount / config.warningThreshold
         val last = warningBuckets[warningKey]

@@ -60,9 +60,10 @@ internal class StderrDrain(
         /**
          * Debug-only lines of our own proot extensions, printed when
          * MINIS_NOFF_DEBUG is set (DEV_TOOLS builds). `[fake_netlink] ` joined
-         * when its startup line moved from note(INFO) to the debug switch.
+         * when its startup line moved from note(INFO) to the debug switch;
+         * `[xnet] ` is the transparent forwarding extension (FEAT-261021-11).
          */
-        private val PROOT_DEBUG_PREFIXES = listOf("[native_offload] ", "[fake_netlink] ")
+        private val PROOT_DEBUG_PREFIXES = listOf("[native_offload] ", "[fake_netlink] ", "[xnet] ")
 
         fun isProotDebugLine(line: String): Boolean = PROOT_DEBUG_PREFIXES.any { line.startsWith(it) }
     }

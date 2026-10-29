@@ -55,6 +55,22 @@ object GlobalShellThrottle {
     const val PROCESS_BUDGET = 16
 
     /**
+     * [T-loadtest-limits] The budget admission uses: [PROCESS_BUDGET] unless a
+     * DEV_TOOLS build overrides it for a load test. In memory only.
+     */
+    @Volatile
+    var processBudget: Int = PROCESS_BUDGET
+        private set
+
+    /** [T-loadtest-limits] DEV_TOOLS only: set the budget (null = default), 4..64. */
+    fun debugSetProcessBudget(n: Int?): Int {
+        if (!com.openminis.app.BuildConfig.DEV_TOOLS) return processBudget
+        processBudget = (n ?: PROCESS_BUDGET).coerceIn(PROCESSES_PER_COMMAND, 64)
+        Log.i(TAG, "[T-loadtest-limits] processBudget=$processBudget")
+        return processBudget
+    }
+
+    /**
      * What a command is assumed to cost before its processes show up in
      * /proc: a fresh-process `sleep` is 4 (libproot, its tracee loader, sh,
      * the command), measured on a Pixel 4a. Also the headroom a new command
@@ -139,7 +155,7 @@ object GlobalShellThrottle {
             }
             queuedMs += clock() - admitStart
             if (liveAtAdmission == null) {
-                Log.w(TAG, "[$tag] gave up after ${queuedMs}ms in the queue (live=$lastLive budget=$PROCESS_BUDGET)")
+                Log.w(TAG, "[$tag] gave up after ${queuedMs}ms in the queue (live=$lastLive budget=$processBudget)")
                 return Outcome.QueueTimedOut(queuedMs, lastLive)
             }
             val token = Any()
@@ -182,7 +198,7 @@ object GlobalShellThrottle {
             if (announced) return
             announced = true
             onQueued(live)
-            Log.i(TAG, "[$tag] queued: $why (live=$live running=${running.get()} waiting=${waiting.get()} budget=$PROCESS_BUDGET)")
+            Log.i(TAG, "[$tag] queued: $why (live=$live running=${running.get()} waiting=${waiting.get()} budget=$processBudget)")
         }
         waiting.incrementAndGet()
         try {
@@ -207,7 +223,7 @@ object GlobalShellThrottle {
             val live = safeCount()
             val reserved = reservedProcesses(live)
             // An idle gate always admits: see the class comment.
-            if (running.get() == 0 || live + reserved + PROCESSES_PER_COMMAND <= PROCESS_BUDGET) return live
+            if (running.get() == 0 || live + reserved + PROCESSES_PER_COMMAND <= processBudget) return live
             announce(live, "process budget full")
             delay(POLL_MS)
         }

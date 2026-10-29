@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [#451] Terminal "Copy All". Translations from the iOS catalog ("Copy All", "Copied"). -->
+<resources>
+    <string name="terminal_copy_all">کپی همه</string>
+    <string name="terminal_copied_all">کپی شد</string>
+</resources>

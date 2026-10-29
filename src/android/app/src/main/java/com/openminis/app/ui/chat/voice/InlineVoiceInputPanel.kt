@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
@@ -56,8 +55,6 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -339,6 +336,9 @@ internal fun InlineVoiceInputPanel(
             return
         }
         isCorrecting = true
+        // [T-voice-correction-stale-result] The composition this correction is
+        // for; a send bumps the generation.
+        val startGeneration = VoiceSendGate.generation
         // [T-android-voice-viewport-context] Snapshot the screen NOW, on the
         // main thread, before anything scrolls.
         val screenSnapshot = runCatching { captureScreen() }.getOrNull()
@@ -353,8 +353,23 @@ internal fun InlineVoiceInputPanel(
             }
             val suggestion = engine.correct(text, context = convoContext)
             isCorrecting = false
+            // [T-voice-correction-stale-result] With a 15 s budget per model and
+            // up to three models (4633ee38e), a correction can land minutes
+            // after the tap. If the user dictated more, edited, or sent in the
+            // meantime, applying it would overwrite the newer text or put a
+            // sent message back in the composer: drop it, quietly (no toast for
+            // text that is no longer on screen).
+            if (transcript.trim() != text || VoiceSendGate.generation != startGeneration) {
+                com.openminis.app.speech.VoicePipelineLog.event(
+                    "correction.stale",
+                    "changed" to (transcript.trim() != text),
+                    "sent" to (VoiceSendGate.generation != startGeneration),
+                )
+                return@launch
+            }
             when {
                 suggestion.hasChange -> {
+                    VoiceSendGate.abandonFinishForSend("AI correction")
                     setTranscript(suggestion.corrected)
                     // Applying a correction the user ASKED for is itself the
                     // acceptance signal; requiring a second confirming tap is
@@ -376,10 +391,15 @@ internal fun InlineVoiceInputPanel(
                     ).show()
                 }
                 else -> {
+                    // [T-voice-correction-fallback] Every model failed: say why,
+                    // on a second line, instead of only "failed".
+                    val reason = com.openminis.app.speech.correction.CorrectionFailureReason.res(suggestion)
+                    val message = panelContext.getString(R.string.voice_correction_failed) +
+                        (reason?.let { "\n" + panelContext.getString(it) } ?: "")
                     android.widget.Toast.makeText(
                         panelContext,
-                        panelContext.getString(R.string.voice_correction_failed),
-                        android.widget.Toast.LENGTH_SHORT,
+                        message,
+                        android.widget.Toast.LENGTH_LONG,
                     ).show()
                 }
             }
@@ -488,11 +508,15 @@ internal fun InlineVoiceInputPanel(
         when {
             isTranscribing -> {
                 // Spinner while idle → X cancels the in-flight transcription.
+                // [T-voice-send-busy] Before the cancel: its IDLE must not read
+                // as "recognition finished" to a pending send.
+                VoiceSendGate.abandonFinishForSend("transcription cancelled")
                 com.openminis.app.speech.VoicePipelineLog.event("panel.cancel", "src" to "micTap")
                 SpeechRecognitionManager.cancelRecording()
             }
             isRecording -> stopCapture()
             else -> scope.launch {
+                VoiceSendGate.abandonFinishForSend("mic tapped to record again")
                 // Re-check on every tap: a permission granted moments after a
                 // DENIED race (settings-gate cancel) must not dead-end the mic.
                 if (!ensureMicPermission()) {
@@ -526,6 +550,8 @@ internal fun InlineVoiceInputPanel(
     }
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
+            // [T-voice-send-busy] Voice mode or the chat was left.
+            VoiceSendGate.abandonFinishForSend("voice panel closed")
             if (SpeechRecognitionManager.state.value != RecognitionState.IDLE) {
                 com.openminis.app.speech.VoicePipelineLog.event("panel.cancel", "src" to "dispose")
                 SpeechRecognitionManager.cancelRecording()
@@ -731,8 +757,12 @@ internal fun InlineVoiceInputPanel(
                     modelLabel = modelLabel,
                     contextUsageLine = shownUsageHint,
                     onMicTap = { handleMicTap() },
-                    onTranscriptChange = { setTranscript(it) },
+                    onTranscriptChange = {
+                        VoiceSendGate.abandonFinishForSend("text edited")
+                        setTranscript(it)
+                    },
                     onBeginEdit = {
+                        VoiceSendGate.abandonFinishForSend("editing")
                         if (!isEditing) {
                             if (SpeechRecognitionManager.state.value != RecognitionState.IDLE) {
                                 com.openminis.app.speech.VoicePipelineLog.event("panel.cancel", "src" to "beginEdit")
@@ -743,7 +773,10 @@ internal fun InlineVoiceInputPanel(
                         }
                     },
                     onExitEdit = { leaveEditMode() },
-                    onDeleteLast = { if (transcript.isNotEmpty()) setTranscript(transcript.dropLast(1)) },
+                    onDeleteLast = {
+                        VoiceSendGate.abandonFinishForSend("backspace")
+                        if (transcript.isNotEmpty()) setTranscript(transcript.dropLast(1))
+                    },
                     onOpenSelector = { showModelSelector = true },
                     asrStalled = asrStalled,
                     onSwitchModel = onSwitchModel,
@@ -1109,24 +1142,17 @@ private fun TranscriptArea(
     val screenH = LocalConfiguration.current.screenHeightDp.dp
     val bandMax = screenH * 0.6f - ExpandedBase
     if (isEditing) {
-        val focus = remember { FocusRequester() }
-        BasicTextField(
+        // [T-android-voice-dblclick-select] A platform editor, so a double tap
+        // selects the word under the finger as on iOS; see VoiceTranscriptEditor.
+        VoiceTranscriptEditor(
             value = transcript,
             onValueChange = onTranscriptChange,
-            textStyle = TextStyle(
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 16.sp,
-                textAlign = TextAlign.Center,
-            ),
-            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+            maxHeight = bandMax,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 28.dp, max = bandMax)
-                .padding(horizontal = 32.dp)
-                .verticalScroll(rememberScrollState())
-                .focusRequester(focus),
+                .padding(horizontal = 32.dp),
         )
-        LaunchedEffect(Unit) { focus.requestFocus() }
     } else {
         Box(
             modifier = Modifier

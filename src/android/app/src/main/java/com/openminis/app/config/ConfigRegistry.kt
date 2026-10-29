@@ -9,11 +9,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Single source of truth for every configurable setting in the app.
  *
- * Add a new setting in three steps:
+ * Add a new setting in four steps:
  *   1. Pick a dot-path id (`appearance.theme`, `browser.uaProfile`, …).
  *   2. Construct a [ConfigField] (or a [ConfigCollection] for dynamic
  *      children) and register it in `ConfigBuiltins`.
- *   3. Done — the offload bridge, confirmation gate, audit log, revert
+ *   3. Say how it reads to a person: pass `readable =` (a ConfigReadable —
+ *      bool / enum labels / number unit / id → name …) and add its label
+ *      keys to ConfigReadableStrings + strings_config_readable.xml.
+ *      [T-config-readable] This is required: the field does not compile
+ *      without it, `ConfigReadable.generic(reason)` is the only (logged)
+ *      opt-out, and ConfigReadableKeysTest fails on a key with no zh /
+ *      zh-rTW translation.
+ *   4. Done — the offload bridge, confirmation gate, audit log, revert
  *      flow, and topic-help output all derive from this registry.
  *
  * Mirrors iOS `ConfigRegistry`. The Android side is plain mutable maps
@@ -90,6 +97,20 @@ class ConfigRegistry internal constructor() {
     }
 
     fun collection(basePath: String): ConfigCollection? = collections[basePath]
+
+    /**
+     * [T-config-readable] Every registered field, plus one representative
+     * child's fields per collection. Used by the launch-time readable-template
+     * validation only.
+     */
+    fun allFieldsForValidation(): List<ConfigField> {
+        val out = ArrayList<ConfigField>(fields.values)
+        for (c in collections.values) {
+            val first = runCatching { c.childIds().firstOrNull() }.getOrNull() ?: continue
+            out.addAll(runCatching { c.fields(forId = first) }.getOrDefault(emptyList()))
+        }
+        return out.sortedBy { it.path }
+    }
 
     /** All registered top-level field paths (excluding hidden), sorted. */
     fun allVisibleFieldPaths(): List<String> =
@@ -195,6 +216,19 @@ class ConfigRegistry internal constructor() {
                     ConfigBuiltins.registerInto(
                         r, context, providerRepository, envVarRepository, chatRepository,
                     )
+                    // [T-config-readable] Off the main thread: init runs in
+                    // Application.onCreate, and expanding a collection child
+                    // reads the database (thinking rules use runBlocking DAO
+                    // calls). The check only logs, so nothing waits for it.
+                    Thread({
+                        runCatching {
+                            com.openminis.app.config.readable.ConfigReadableRenderer
+                                .validateRegistry(r.allFieldsForValidation())
+                        }
+                    }, "ConfigReadableValidate").apply {
+                        isDaemon = true
+                        priority = Thread.MIN_PRIORITY
+                    }.start()
                 }
                 INSTANCE = r
                 return r

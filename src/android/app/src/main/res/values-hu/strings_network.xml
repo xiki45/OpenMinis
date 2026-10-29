@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Hálózat</string>
+    <string name="network_status">Állapot</string>
+    <string name="network_status_starting">Indítás…</string>
+    <string name="network_status_connecting">Csatlakozás…</string>
+    <string name="network_status_off">Ki</string>
+    <string name="network_device_name">Eszköz neve</string>
+    <string name="network_device_name_automatic">Automatikus</string>
+    <string name="network_exit_node_none">Nincs</string>
+    <string name="network_sign_out">Kijelentkezés</string>
+    <string name="network_scope_shell">Shell</string>
+    <string name="network_scope_browser">Böngésző</string>
+    <string name="network_scope_backup">Biztonsági mentés</string>
+    <string name="network_proxy_type">Típus</string>
+    <string name="network_proxy_server">Szerver</string>
+    <string name="network_proxy_authentication">Hitelesítés</string>
+    <string name="network_proxy_password">Jelszó</string>
+    <string name="network_proxy_bypass">Megkerülés</string>
+    <string name="network_proxy_test">Kapcsolat tesztelése</string>
+    <string name="network_cancel">Mégse</string>
+    <string name="network_save">Mentés</string>
+    <string name="network_provider_route">Hálózat</string>
+</resources>

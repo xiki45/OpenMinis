@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Сеть</string>
+    <string name="network_default_route">Маршрут по умолчанию</string>
+    <string name="network_default_route_footer">Используется всеми частями приложения с настройкой «Как по умолчанию». Пока Tailscale включён, адреса вашей tailnet всегда идут через Tailscale независимо от маршрута.</string>
+    <string name="network_tailscale_footer">Работает внутри Minis, без профиля VPN: к вашей tailnet подключаются только соединения самого Minis и только пока Minis запущен. «Использовать маршруты подсетей» направляет через Tailscale адреса, которыми делятся другие устройства (например, домашняя сеть).</string>
+    <string name="network_status">Статус</string>
+    <string name="network_status_starting">Запуск…</string>
+    <string name="network_status_connected">Подключено</string>
+    <string name="network_status_not_logged_in">Вход не выполнен</string>
+    <string name="network_status_connecting">Подключение…</string>
+    <string name="network_status_off">Выкл.</string>
+    <string name="network_login_browser">Войти через браузер</string>
+    <string name="network_copy_login_link">Скопировать ссылку для входа</string>
+    <string name="network_login_auth_key">Войти с Auth Key</string>
+    <string name="network_device_name">Имя устройства</string>
+    <string name="network_device_name_automatic">Автоматически</string>
+    <string name="network_use_subnet_routes">Использовать маршруты подсетей</string>
+    <string name="network_exit_node">Выходной узел</string>
+    <string name="network_exit_node_none">Нет</string>
+    <string name="network_peer_offline">%1$s (не в сети)</string>
+    <string name="network_devices">Устройства</string>
+    <string name="network_sign_out">Выйти</string>
+    <string name="network_sign_out_clear_ellipsis">Выйти и очистить…</string>
+    <string name="network_sign_out_clear_title">Выйти и удалить это устройство из Tailscale?</string>
+    <string name="network_sign_out_clear">Выйти и очистить</string>
+    <string name="network_sign_out_clear_message">Ключ устройства будет удалён. При повторном включении Tailscale это устройство добавится как новая машина.</string>
+    <string name="network_proxies">Прокси</string>
+    <string name="network_add_proxy">Добавить прокси</string>
+    <string name="network_edit_proxy">Изменить прокси</string>
+    <string name="network_used_by">Где используется</string>
+    <string name="network_scope_shell">Терминал</string>
+    <string name="network_scope_browser">Браузер</string>
+    <string name="network_scope_backup">Резервная копия</string>
+    <string name="network_route_follow_default">Как по умолчанию</string>
+    <string name="network_route_direct">Напрямую</string>
+    <string name="network_proxy_name">Название (необязательно)</string>
+    <string name="network_proxy_type">Тип</string>
+    <string name="network_proxy_server">Сервер</string>
+    <string name="network_proxy_authentication">Аутентификация</string>
+    <string name="network_proxy_password">Пароль</string>
+    <string name="network_proxy_bypass">В обход</string>
+    <string name="network_proxy_bypass_footer">Эти узлы подключаются напрямую. Разделяйте записи запятыми или переводом строки; «*.example.com» охватывает и поддомены. Локальные адреса всегда идут мимо прокси.</string>
+    <string name="network_proxy_test">Проверить подключение</string>
+    <string name="network_proxy_test_ok">Подключено за %1$d мс</string>
+    <string name="network_proxy_delete">Удалить прокси</string>
+    <string name="network_cancel">Отмена</string>
+    <string name="network_save">Сохранить</string>
+    <string name="network_auth_key_footer">Создайте Auth Key в консоли администратора Tailscale в разделе «Настройки &gt; Ключи». Он используется один раз для добавления этого устройства и не сохраняется.</string>
+    <string name="network_log_in">Войти</string>
+    <string name="network_provider_route">Сеть</string>
+    <string name="network_provider_route_footer">Как подключаются запросы этого провайдера. Tailscale и прокси настраиваются в «Настройки &gt; Сеть».</string>
+    <!-- [FEAT-261021-04] Settings > Network section -->
+    <string name="network_routing_title">Маршрутизация сети</string>
+</resources>

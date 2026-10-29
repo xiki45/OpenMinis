@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-in-chat-search] Translations from the iOS catalog. -->
+<resources>
+    <string name="chat_search_in_chat">Cerca nella chat</string>
+    <string name="chat_search_placeholder">Cerca in questa chat</string>
+    <string name="chat_search_wrapped_first">Ricerca ripresa dal primo risultato</string>
+    <string name="chat_search_wrapped_last">Ricerca ripresa dall\'ultimo risultato</string>
+    <string name="chat_search_previous">Risultato precedente</string>
+    <string name="chat_search_next">Risultato successivo</string>
+    <string name="chat_search_result_of">Risultato %1$d di %2$d</string>
+    <string name="chat_search_no_results">Nessun risultato</string>
+    <string name="chat_search_clear">Cancella</string>
+    <string name="chat_search_done">Fine</string>
+</resources>

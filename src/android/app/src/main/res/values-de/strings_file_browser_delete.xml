@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">„%1$s“ ist ein Ordner, den Minis hier einhängt, daher kann er im Dateibrowser nicht gelöscht werden. Es wurde nichts gelöscht. Externe Ordner entfernst du unter Einstellungen › Externe Ordner einbinden.</string>
+</resources>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Config Changes record detail page and the approval
+     dialog's batch summary. Wording and translations mirror iOS
+     ConfigAuditDetailView / ConfigConfirmSheet. -->
+<resources>
+    <string name="config_audit_summary_header">Riepilogo delle modifiche approvate</string>
+    <string name="config_audit_detail_title">Dettagli della modifica</string>
+    <string name="config_audit_detail_status">Stato</string>
+    <string name="config_audit_detail_changed_by">Modificato da</string>
+    <string name="config_audit_detail_requested">Richiesta</string>
+    <string name="config_audit_detail_resolved">Risolta</string>
+    <string name="config_audit_detail_note">Nota dell\'assistente</string>
+    <string name="config_audit_detail_what_changed">Cosa è cambiato</string>
+    <string name="config_audit_detail_predates">Questo record è precedente alle descrizioni leggibili, quindi viene mostrata solo la modifica grezza.</string>
+    <string name="config_audit_detail_raw">Modifica grezza</string>
+    <string name="config_audit_detail_setting">Impostazione</string>
+    <string name="config_audit_detail_before">Prima</string>
+    <string name="config_audit_detail_after">Dopo</string>
+    <string name="config_audit_detail_revert">Annulla questa modifica</string>
+    <string name="config_audit_detail_reverted">Annullata</string>
+    <string name="config_audit_revert_undoes">Questo annulla:</string>
+    <string name="config_audit_actor_assistant">Assistente</string>
+    <string name="config_audit_actor_you">Tu</string>
+    <string name="config_audit_actor_assistant_revert">Assistente (annullamento)</string>
+    <string name="config_audit_actor_you_revert">Tu (annullamento)</string>
+</resources>

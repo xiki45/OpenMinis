@@ -98,6 +98,7 @@ import com.openminis.app.ui.components.MinisMenu
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.MinisOutlinedButton
 import com.openminis.app.ui.components.MinisTextButton
+import com.openminis.app.ui.components.safeLaunchPicker
 import com.openminis.app.ui.settings.SettingsScaffold
 import com.openminis.app.ui.settings.SettingsSection
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -646,7 +647,7 @@ private fun BackupTab(
             if (r.localOnly && pkg != null && pkg.exists()) {
                 LocalExportActions(
                     saving = saveState is com.openminis.app.backup.BackupRunController.SaveState.Saving,
-                    onSave = { saveLauncher.launch(pkg.name) },
+                    onSave = { saveLauncher.safeLaunchPicker(pkg.name, context, "Backup") },
                     onShare = { shareBackupPackage(context, pkg) },
                 )
                 saveStateLine(saveState)?.let { (text, isError) ->
@@ -1011,6 +1012,7 @@ private fun RestoreTab(
     val destinations by vm.destinations.collectAsState()
     LaunchedEffect(Unit) { vm.refreshDestinations() }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     val pickLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) vm.loadPackage(uri) }
@@ -1077,7 +1079,7 @@ private fun RestoreTab(
                 label = if (running) status ?: stringResource(R.string.backup_reading)
                 else stringResource(R.string.backup_choose_file),
                 enabled = !running,
-                onClick = { pickLauncher.launch(arrayOf("*/*")) },
+                onClick = { pickLauncher.safeLaunchPicker(arrayOf("*/*"), context, "Backup") },
                 showDivider = true,
             )
             RestoreSourceRow(
@@ -1152,7 +1154,7 @@ private fun RestoreTab(
     // Category selection with per-category counts from the manifest.
     SettingsSection(
         header = stringResource(R.string.backup_section_restore),
-        footer = stringResource(R.string.backup_restore_footer),
+        footer = stringResource(R.string.backup_restore_merge_footer),
     ) {
         // Declaration order (BackupCategory.entries), NOT key-alphabetical, so
         // the Restore list matches the Backup tab and iOS's
@@ -1226,12 +1228,19 @@ private fun RestoreTab(
         // in the same recomposition scope as a counter updating several times
         // a second. Moving the collect down here is the whole fix; the
         // subtitle reads a separate flow for the same reason.
+        // [T-restore-lock-passphrase] The passphrase field is disabled while a
+        // restore runs; starting one also takes the focus away, so the keyboard
+        // is down for the whole run instead of rising over the progress line.
+        val restoreFocus = androidx.compose.ui.platform.LocalFocusManager.current
         RestoreProgressSection(
             vm = vm,
             running = running,
             enabled = !running && restoreSelected.isNotEmpty(),
             statusText = status,
-            onStart = { vm.startRestore(passphrase.takeIf { p.manifest.encryption != null }) },
+            onStart = {
+                restoreFocus.clearFocus(force = true)
+                vm.startRestore(passphrase.takeIf { p.manifest.encryption != null })
+            },
         )
         MinisOutlinedButton(
             onClick = { vm.cancelRestore(); onPassphraseChange("") },
@@ -1325,13 +1334,14 @@ private fun RestoreReport(
     val prov = report.categories.firstOrNull {
         it.category == BackupCategory.PROVIDERS.key
     }
-    if (prov != null) {
-        val msg = when {
-            prov.credentialsRestored > 0 ->
-                stringResource(R.string.backup_creds_restored, prov.credentialsRestored)
-            prov.credentialsKept > 0 ->
-                stringResource(R.string.backup_creds_kept)
-            else ->
+    val credentials = prov?.let { restoreCredentialsNotice(it) }
+    if (prov != null && credentials != null) {
+        val msg = when (credentials) {
+            RestoreCredentialsNotice.RESTORED ->
+                stringResource(R.string.backup_restore_creds_restored, prov.credentialsRestored)
+            RestoreCredentialsNotice.KEPT ->
+                stringResource(R.string.backup_restore_creds_kept)
+            RestoreCredentialsNotice.NONE_IN_PACKAGE ->
                 stringResource(R.string.backup_creds_none)
         }
         SettingsSection(footer = msg) {}
@@ -1649,6 +1659,8 @@ internal fun RestoreSourceRow(
     onClick: () -> Unit,
     showDivider: Boolean,
     subtitle: String? = null,
+    /** [T-android-backup-dest-edit] e.g. the server list's details button. */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Column {
         Row(
@@ -1684,6 +1696,7 @@ internal fun RestoreSourceRow(
                     )
                 }
             }
+            trailing?.invoke()
         }
         if (showDivider) {
             Box(

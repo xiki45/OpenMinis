@@ -73,7 +73,7 @@ class OAuthForegroundExchangeTest {
 
     @Test
     fun `openrouter waits for the foreground before exchanging`() =
-        assertGatedBefore("OpenRouterOAuthManager", "exchangeCode(code, verifier)")
+        assertGatedBefore("OpenRouterOAuthManager", "exchangeCode(code, verifier,")
 
     @Test
     fun `xai waits for the foreground before exchanging`() =

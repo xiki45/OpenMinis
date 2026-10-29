@@ -3,7 +3,8 @@ package com.openminis.app.provider.anthropic
 import android.util.Base64
 import com.openminis.app.data.model.AgentContentPart
 import com.openminis.app.data.model.AgentToolDefinition
-import com.openminis.app.data.model.sanitizeToolId
+import com.openminis.app.data.model.WireToolIdMap
+import com.openminis.app.data.model.logWireToolIds
 import com.openminis.app.data.model.LLMError
 import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.data.model.LLMModel
@@ -45,8 +46,15 @@ class AnthropicProvider(
      * request. Only set for custom-base Anthropic-compat instances.
      */
     private val customUserAgent: String? = null,
-) : LLMProvider {
+) : LLMProvider, com.openminis.app.network.NetworkTagged {
     override val name = "Anthropic"
+
+    /**
+     * [T-quota-claude-subscription] The instance this provider serves, set by
+     * ProviderFactory for OAuth (Claude subscription) instances only. Every
+     * reply's `anthropic-ratelimit-unified-*` headers feed its quota.
+     */
+    var quotaInstanceId: String? = null
     override val defaultMaxOutputTokens: Int get() = 64_000
 
     /**
@@ -73,7 +81,7 @@ class AnthropicProvider(
     /** Use Bearer auth for custom (non-Anthropic) base URLs or OAuth. */
     private val isCustomEndpoint: Boolean = basePath != "https://api.anthropic.com"
 
-    private val client = OkHttpClient.Builder()
+    private val baseClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -81,6 +89,17 @@ class AnthropicProvider(
         // Network-transition eviction must reach provider connections.
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
         .build()
+
+    /** [T-net-android-phase3] Policy tag (prov:<instanceId>), set by ProviderFactory. */
+    override var netTag: String? = null
+
+    /**
+     * [T-net-android-phase3] The client for this request: [baseClient] itself
+     * unless Settings > Network routes this provider through the local entry
+     * (NetworkHttp). Read per request, so a route change applies to the next
+     * request without rebuilding the provider.
+     */
+    private val client: OkHttpClient get() = com.openminis.app.network.NetworkHttp.client(netTag, baseClient)
 
     override suspend fun sendMessageClamped(
         messages: List<LLMMessage>,
@@ -94,6 +113,7 @@ class AnthropicProvider(
         val body = buildRequestBody(messages, systemPrompt, maxTokens, stream = false, temperature = temperature, imageParts = imageParts, tools = tools, thinkingLevel = thinkingLevel)
         val request = buildRequest(body.toString(), body)
         val response = client.newCall(request).execute()
+        if (isOAuth) com.openminis.app.quota.QuotaObservationSink.recordAnthropicResponse(quotaInstanceId, response.headers)
         val responseBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
@@ -143,6 +163,8 @@ class AnthropicProvider(
 
         val response = client.newCall(request).execute()
         val durationMs = System.currentTimeMillis() - startTime
+        // [T-quota-claude-subscription] Errors included: a 429 still reports usage.
+        if (isOAuth) com.openminis.app.quota.QuotaObservationSink.recordAnthropicResponse(quotaInstanceId, response.headers)
 
         if (!response.isSuccessful) {
             val errorBody = response.body?.string() ?: ""
@@ -275,9 +297,16 @@ class AnthropicProvider(
                         event.optJSONObject("usage")?.let { usage ->
                             send(LLMStreamChunk.Usage(parseUsage(usage)))
                         }
-                        val stopReason = event.optJSONObject("delta")
-                            ?.safeOptString("stop_reason", "")?.ifEmpty { null }
-                        send(LLMStreamChunk.Finished(stopReason))
+                        val delta = event.optJSONObject("delta")
+                        val stopReason = delta?.safeOptString("stop_reason", "")?.ifEmpty { null }
+                        // [FIX-261018-12] A refusal's stop_details says why
+                        // (category "cyber", the policy explanation).
+                        val details = if (stopReason == "refusal") delta?.optJSONObject("stop_details") else null
+                        send(LLMStreamChunk.Finished(
+                            stopReason,
+                            refusalCategory = details?.safeOptString("category", "")?.ifEmpty { null },
+                            refusalExplanation = details?.safeOptString("explanation", "")?.ifEmpty { null },
+                        ))
                     }
                     // [T-android-fallback-providererror] Anthropic can emit an
                     // `error` frame MID-STREAM (overloaded_error, rate-limit,
@@ -414,7 +443,8 @@ class AnthropicProvider(
         com.openminis.app.logging.AppLogger.info(
             "Thinking",
             "[resolve] provider=anthropic model=${model.id} level=${thinkingLevel.name} " +
-                "shape=[${thinkShape.keys.sorted().joinToString(",")}]",
+                "shape=[${thinkShape.keys.sorted().joinToString(",")}]" +
+                (if (thinkingLevel.isEnabled) "" else " off=${offThinking(model.id).name}"),
         )
         if (thinkingLevel.isEnabled) {
             if (modelUsesAdaptiveThinking(model.id)) {
@@ -447,22 +477,35 @@ class AnthropicProvider(
                     }
                 }
             }
-        } else if (modelAcceptsExplicitThinkingDisabled(model.id)) {
-            // Claude 4.6-4.x think by DEFAULT when the request carries no
-            // thinking field at all — "off" must be sent explicitly, or
-            // small-maxTokens calls burn the whole budget on thinking_tokens and
-            // return zero text (iOS ea86dd8a observed: max_tokens=256 →
-            // stop_reason=max_tokens, thinking_tokens=256/256, empty body).
-            // Legacy (<=4.5) models default to no thinking, so absence is fine
-            // there.
+        } else {
+            // Thinking OFF. [T-claude5-thinking-off] The literal is per model
+            // (offThinking): omitting the field is NOT off on Claude 5 — it is
+            // adaptive thinking at the model's default effort, so every OFF caller
+            // (title generation, voice correction, a chat set to Off) used to think
+            // at full effort. iOS ef86ed890 hit it as a voice-correction timeout on
+            // claude-sonnet-5-5.
             //
-            // [T-android-claude5-thinking-disabled-400] Note this asks
-            // modelAcceptsExplicitThinkingDisabled, NOT modelUsesAdaptiveThinking:
-            // the latter is true for 4.6+ AND 5+, but Claude 5 rejects the literal
-            // with `"thinking.type.disabled" is not supported for this model` and
-            // treats an absent field as adaptive — which is exactly what OFF
-            // wants. Ported from iOS 69be65763.
-            body.put("thinking", JSONObject().put("type", "disabled"))
+            // Claude 4.6-4.x (and Sonnet 5) take `disabled`: they think by default,
+            // and a small-maxTokens call otherwise burns its whole budget on
+            // thinking and returns zero text (iOS ea86dd8a: max_tokens=256 →
+            // stop_reason=max_tokens, thinking_tokens=256/256, empty body).
+            // Legacy (<=4.5) models are off by default, so absence is right there.
+            when (offThinking(model.id)) {
+                OffThinking.OMIT -> Unit
+                OffThinking.DISABLED ->
+                    body.put("thinking", JSONObject().put("type", "disabled"))
+                OffThinking.BETWEEN_TOOLS ->
+                    body.put("thinking", JSONObject().put("type", "between_tools"))
+                OffThinking.LOW_EFFORT -> {
+                    // Thinking cannot be switched off on this model: ask for as
+                    // little as it allows, in the same shape as the enabled path.
+                    body.put("thinking", JSONObject().apply {
+                        put("type", "adaptive")
+                        put("display", "summarized")
+                    })
+                    body.put("output_config", JSONObject().put("effort", "low"))
+                }
+            }
         }
 
         // System prompt blocks — mirrors iOS AnthropicProvider.resolveSystemPrompt.
@@ -584,6 +627,9 @@ class AnthropicProvider(
      * even when supportsReasoning=true. Independent of the user's thinking
      * toggle — DeepSeek V4 emits thinking even when we don't request it.
      */
+    /** [T-ctx-count-reasoning] Unsigned interleaved thinking is replayed only here. */
+    override fun echoesReasoningContent(thinkingLevel: ThinkingLevel): Boolean = shouldEchoInterleavedThinking()
+
     private fun shouldEchoInterleavedThinking(): Boolean {
         val modelMayReason = model.supportsReasoning != false
         val modelRequiresInterleave = model.interleavedReasoningField != null
@@ -601,6 +647,8 @@ class AnthropicProvider(
         // [T-android-anthropic-thinking-echo] (issue #70) Compute once — the
         // gate depends only on the model + endpoint, not the message.
         val echoThinking = shouldEchoInterleavedThinking()
+        // [B02] Wire tool ids of this request: raw ids stay in the history.
+        val wireIds = WireToolIdMap()
         val messagesArray = JSONArray()
         for ((index, msg) in messages.withIndex()) {
             val obj = JSONObject()
@@ -633,12 +681,13 @@ class AnthropicProvider(
                             })
                         }
                         is AgentContentPart.ToolUse -> {
-                            // Anthropic requires tool ids to match ^[a-zA-Z0-9_-]+$.
-                            // OpenAI Responses can emit ids like `call_abc|fc_def`
-                            // (pipe), so echo every id through sanitizeToolId.
+                            // Anthropic requires tool ids to match ^[a-zA-Z0-9_-]+$,
+                            // and Bedrock-class backends cap their length. OpenAI
+                            // Responses stores ids like `call_abc|fc_def`, so every
+                            // id goes out as its wire id (B02, wireToolId).
                             contentArray.put(JSONObject().apply {
                                 put("type", "tool_use")
-                                put("id", sanitizeToolId(part.id))
+                                put("id", wireIds.idFor(part.id))
                                 put("name", part.name)
                                 put("input", part.input)
                             })
@@ -659,7 +708,7 @@ class AnthropicProvider(
                             }
                             contentArray.put(JSONObject().apply {
                                 put("type", "tool_result")
-                                put("tool_use_id", sanitizeToolId(part.id))
+                                put("tool_use_id", wireIds.idFor(part.id))
                                 put("content", resultContent)
                                 if (part.isError) put("is_error", true)
                             })
@@ -717,6 +766,7 @@ class AnthropicProvider(
 
             messagesArray.put(obj)
         }
+        logWireToolIds("anthropic", wireIds)
         return messagesArray
     }
 
@@ -782,6 +832,18 @@ class AnthropicProvider(
                     contentBlocks.addAll(thinking)
                     contentBlocks.addAll(other)
                     contentBlocks.addAll(toolUse)
+                } else if (role == "user" && contentBlocks.any { it.optString("type") == "tool_result" }) {
+                    // [T-404-summary-after-tool-results] tool_result blocks first,
+                    // everything else after, each group in its original order
+                    // (iOS reorderUserContent). Anthropic requires the results to
+                    // lead the user turn that follows tool_use; a text block
+                    // ahead of them (#404: a compaction summary) is a 400. A
+                    // user turn without tool_result is untouched.
+                    val results = contentBlocks.filter { it.optString("type") == "tool_result" }
+                    val rest = contentBlocks.filter { it.optString("type") != "tool_result" }
+                    contentBlocks.clear()
+                    contentBlocks.addAll(results)
+                    contentBlocks.addAll(rest)
                 }
                 val merged = JSONObject().apply {
                     put("role", role)
@@ -828,6 +890,21 @@ class AnthropicProvider(
                 lastBlock.put("cache_control", ephemeralCacheControl())
             }
         }
+    }
+
+    /** How "thinking off" goes on the wire; see [Companion.offThinking]. */
+    enum class OffThinking {
+        /** Send no thinking field (legacy models, where off is already the default). */
+        OMIT,
+        /** `thinking: {"type": "disabled"}`. */
+        DISABLED,
+        /** `thinking: {"type": "between_tools"}` — no up-front thinking. Sonnet 5.5 only. */
+        BETWEEN_TOOLS,
+        /**
+         * `thinking: {"type": "adaptive"}` + `output_config.effort: "low"` —
+         * thinking cannot be switched off, so ask for as little as the model allows.
+         */
+        LOW_EFFORT,
     }
 
     companion object {
@@ -898,39 +975,43 @@ class AnthropicProvider(
         }
 
         /**
-         * [T-android-claude5-thinking-disabled-400] Whether this model accepts an
-         * explicit `thinking: {"type": "disabled"}` on the wire. Ported from iOS
-         * `AnthropicProvider.modelAcceptsExplicitThinkingDisabled` (69be65763).
+         * How "thinking off" is encoded on the wire for this model. Port of iOS
+         * `AnthropicProvider.offThinking(for:)` (ef86ed890).
          *
-         * Claude 4.6-4.x adaptive models DO: they think by default when the field
-         * is absent, so "thinking off" has to be stated, or a small-maxTokens call
-         * burns its whole budget on thinking and returns empty text (the reason the
-         * disabled literal exists at all).
+         * Per-model vendor contract, from the model table in Anthropic's
+         * "Troubleshooting thinking" doc:
          *
-         * Claude 5+ does NOT. The API rejects the value outright:
+         *     model                      no thinking field   type "disabled"   lowest setting
+         *     <= 4.5                     off                 -                 omit the field
+         *     4.6 - 4.x                  off / on            accepted          disabled
+         *     Sonnet 5                   ON                  accepted          disabled
+         *     Sonnet 5.5                 ON                  400               between_tools
+         *     Opus 5                     ON                  accepted <= high  adaptive + low (below)
+         *     Opus 5.5, Fable/Mythos 5+  always on           400               adaptive + low
          *
-         *     [invalid_request_error] "thinking.type.disabled" is not supported
-         *     for this model. Thinking defaults to adaptive mode when not
-         *     specified; use "thinking.type.enabled" with "budget_tokens" for
-         *     extended thinking.
+         * [T-android-claude5-thinking-disabled-400] Fable 5 400'd on `disabled`,
+         * which led to sending NO field for every 5+ model. But an absent field is
+         * not off on Claude 5: it is adaptive thinking at the model's default effort
+         * (high; medium on Opus 5.5). [T-claude5-thinking-off] Voice correction on
+         * Sonnet 5.5 thought ~4.4 s with no field and hit its 5 s budget before
+         * emitting a single text token (iOS).
          *
-         * So on 5+ the correct encoding of "off" is to send NO thinking field —
-         * the server's adaptive default handles it. Reported on iOS against fable 5
-         * (Claude Opus 5, official OAuth) where every non-thinking message 400'd;
-         * Android had the same conflation and the same exposure for claude-sonnet-5.
-         *
-         * This is the split iOS made: `modelUsesAdaptiveThinking` answers "does
-         * this model think by default / take an effort tier" (4.6+ AND 5+), while
-         * this predicate answers "may we send thinking.type=disabled" (4.6-4.x
-         * only). They are NOT the same question.
-         *
-         * Deliberately keyed on the parsed version rather than a model allowlist:
-         * this is a generation-wide API contract change, and an allowlist would
-         * 400 again on the next Claude 5 variant nobody remembered to add.
+         * Opus 5 does accept `disabled`, but the vendor warns that with thinking
+         * disabled it leaks tool calls and `<thinking>` tags into text on tool-heavy
+         * workloads and recommends low effort instead, so it takes LOW_EFFORT. An
+         * unknown future 5+ model takes LOW_EFFORT too: every adaptive model accepts
+         * adaptive thinking, while `disabled` and `between_tools` are per-model and
+         * 400 where unsupported.
          */
-        fun modelAcceptsExplicitThinkingDisabled(modelId: String): Boolean {
-            val (major, minor) = parseClaudeVersion(modelId) ?: return false
-            return major == 4 && minor >= 6
+        fun offThinking(modelId: String): OffThinking {
+            val (major, minor) = parseClaudeVersion(modelId) ?: return OffThinking.OMIT
+            if (major < 4 || (major == 4 && minor < 6)) return OffThinking.OMIT
+            if (major == 4) return OffThinking.DISABLED
+            if (major == 5 && modelId.lowercase().contains("sonnet")) {
+                if (minor == 0) return OffThinking.DISABLED
+                if (minor == 5) return OffThinking.BETWEEN_TOOLS
+            }
+            return OffThinking.LOW_EFFORT
         }
 
         /**
@@ -1152,16 +1233,12 @@ class AnthropicProvider(
         return LLMResponse(text, stopReason, usage)
     }
 
-    private fun parseUsage(json: JSONObject): LLMUsage {
-        val inputTokens = json.optInt("input_tokens", 0)
-        return LLMUsage(
-            inputTokens = inputTokens,
-            outputTokens = json.optInt("output_tokens", 0),
-            cacheCreationInputTokens = json.optInt("cache_creation_input_tokens").takeIf { it > 0 },
-            cacheReadInputTokens = json.optInt("cache_read_input_tokens").takeIf { it > 0 },
-            latestContextTokens = inputTokens,
-        )
-    }
+    // [T-usage-step1] Shared parser. Absent fields stay null in the attached
+    // chunk, so a message_delta carrying only output_tokens no longer wipes the
+    // input and cache that message_start reported (the stream consumer merges
+    // with UsageChunkMerger instead of replacing).
+    private fun parseUsage(json: JSONObject): LLMUsage =
+        com.openminis.app.usage.ProviderUsageParser.anthropic(json).toLLMUsage()
 
     private fun mapHttpError(statusCode: Int, body: String): LLMError {
         if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
@@ -1188,6 +1265,9 @@ class AnthropicProvider(
 
     private fun mapError(error: Throwable): LLMError {
         if (error is LLMError) return error
+        // [T-android-tls-trust-error] A rejected certificate is not a network
+        // blip: named, not retried on the same model, explained to the user.
+        com.openminis.app.provider.TlsFailure.toLLMError(error, basePath)?.let { return it }
         if (error is java.io.IOException) return LLMError.NetworkError(error)
         return LLMError.Unknown(error)
     }

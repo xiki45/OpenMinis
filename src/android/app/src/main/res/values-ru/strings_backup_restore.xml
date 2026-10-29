@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-backup-restore-semantics / B01] Restore page copy for the restore semantics
+     decided 2026-10-15: the backup wins items present on both sides (API keys
+     included, OAuth sign-ins only when expired); nothing only on this device is
+     deleted. Replaces backup_restore_footer / backup_creds_restored /
+     backup_creds_kept, whose text promised the opposite. -->
+<resources>
+    <string name="backup_restore_merge_footer">При восстановлении копия объединяется с данными на этом устройстве. Если элемент есть в обоих местах — провайдер, настройки модели или группа моделей с тем же названием, — используется версия из копии, даже если на этом устройстве она новее. Это относится и к ключам API; аккаунт, в который выполнен вход на этом устройстве, сохраняется, если только срок входа не истёк. То, что есть только на этом устройстве, не удаляется.</string>
+    <string name="backup_restore_creds_restored">Учётные данные восстановлены из копии для провайдеров: %1$d. Ключи API из копии заменяют ключи на этом устройстве; аккаунт, в который выполнен вход на этом устройстве, сохраняется, если только срок входа не истёк.</string>
+    <string name="backup_restore_creds_kept">Учётные данные не изменены: ключи API на этом устройстве уже совпадают с копией, а аккаунты с выполненным входом сохранены, так как их вход не отмечен как истёкший.</string>
+</resources>

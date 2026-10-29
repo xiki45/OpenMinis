@@ -41,10 +41,12 @@ import androidx.compose.material.icons.outlined.FormatSize
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Keyboard
+import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Launch
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.ScreenLockPortrait
+import androidx.compose.material.icons.outlined.UnfoldLess
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.Icon
@@ -84,6 +86,12 @@ const val KEY_LAUNCH_SESSION = "launch_session"    // 0=Auto, 1=LastSession, 2=N
 const val KEY_RETURN_KEY_BEHAVIOR = "returnKeyBehavior"  // Int 0=Newline (default), 1=Send
 const val KEY_KEEP_SCREEN_AWAKE = "keepScreenAwakeDuringTasks"  // Boolean, default false
 const val KEY_TOOL_PREVIEW = "tool_preview"        // Boolean, default true
+/**
+ * [T-port-fold-tools] Fold consecutive tool calls into one row.
+ * [PAR-261022-05] Default ON on every platform; a stored choice is kept.
+ */
+const val KEY_FOLD_TOOLS = "fold_consecutive_tools" // Boolean, default true
+const val FOLD_TOOLS_DEFAULT = true
 // [T-keyboard-auto-pop default flip] Default ON — most users want the
 // composer ready for a follow-up immediately after the model finishes.
 // Key name mirrors iOS `@AppStorage("chat.autoFocusAfterReply")` so a
@@ -155,7 +163,13 @@ fun autoExpandThinkingEnabled(context: Context): Boolean =
  */
 private val APP_ICON_TILE_MAX_WIDTH = 192.dp
 
-private val fontScaleLabels = listOf("XS", "Small", "Default", "Medium", "Large", "XL")
+// [T-eu-locales] Slider labels are resources (they read "Default" in every
+// language before); XS and XL are size codes, the same everywhere.
+private val fontScaleLabelRes: List<Int?> = listOf(
+    null, R.string.appearance_font_scale_small, R.string.common_default,
+    R.string.appearance_font_scale_medium, R.string.appearance_font_scale_large, null,
+)
+private val fontScaleCodes = listOf("XS", "", "", "", "", "XL")
 private val fontScaleValues = listOf(-2, -1, 0, 1, 2, 3)
 private val fontScaleMultipliers = listOf(0.88f, 0.94f, 1.0f, 1.06f, 1.12f, 1.21f)
 
@@ -234,6 +248,18 @@ private val languageOptions = listOf(
     // categories (one/few/other) and NO "many" \u2014 unlike Polish, so the
     // counts pl sends to `many` land on `other` here.
     LanguageOption("hr", "\uD83C\uDDED\uD83C\uDDF7", "Hrvatski"),
+    // it: flag \uD83C\uDDEE\uD83C\uDDF9 (IT), self-name Italiano.
+    LanguageOption("it", "\uD83C\uDDEE\uD83C\uDDF9", "Italiano"),
+    // nl: flag \uD83C\uDDF3\uD83C\uDDF1 (NL), self-name Nederlands.
+    LanguageOption("nl", "\uD83C\uDDF3\uD83C\uDDF1", "Nederlands"),
+    // hu: flag \uD83C\uDDED\uD83C\uDDFA (HU), self-name Magyar.
+    LanguageOption("hu", "\uD83C\uDDED\uD83C\uDDFA", "Magyar"),
+    // cs: flag \uD83C\uDDE8\uD83C\uDDFF (CZ), self-name \u010Ce\u0161tina.
+    LanguageOption("cs", "\uD83C\uDDE8\uD83C\uDDFF", "\u010Ce\u0161tina"),
+    // fa: flag \uD83C\uDDEE\uD83C\uDDF7 (IR), self-name \u0641\u0627\u0631\u0633\u06CC (Farsi).
+    // The app's only right-to-left language; its text is Persian but the
+    // layout stays left-to-right - see LocaleWrap.forceLtr.
+    LanguageOption("fa", "\uD83C\uDDEE\uD83C\uDDF7", "\u0641\u0627\u0631\u0633\u06CC"),
 )
 
 fun getAppearancePrefs(context: Context): SharedPreferences =
@@ -263,7 +289,11 @@ fun AppearanceScreen(
     var returnKeyBehavior by remember { mutableIntStateOf(prefs.getInt(KEY_RETURN_KEY_BEHAVIOR, 0)) }
     var keepScreenAwake by remember { mutableStateOf(prefs.getBoolean(KEY_KEEP_SCREEN_AWAKE, false)) }
     var toolPreview by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_PREVIEW, true)) }
+    var foldTools by remember { mutableStateOf(prefs.getBoolean(KEY_FOLD_TOOLS, FOLD_TOOLS_DEFAULT)) }
     var autoFocusAfterReply by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_FOCUS_AFTER_REPLY, true)) }
+    var confirmBeforeStopping by remember {
+        mutableStateOf(prefs.getBoolean(com.openminis.app.ui.chat.StopConfirmPolicy.SETTINGS_KEY, com.openminis.app.ui.chat.StopConfirmPolicy.DEFAULT_ENABLED))
+    }
     var autoExpandThinking by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_EXPAND_THINKING, true)) }
     var showChatTitle by remember { mutableStateOf(prefs.getBoolean(KEY_SHOW_CHAT_TITLE, true)) }
     var autoGrouping by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_GROUPING, true)) }
@@ -435,6 +465,26 @@ fun AppearanceScreen(
             )
         }
 
+        // [T-port-fold-tools] -- Tool Calls --
+        // Fold a run of consecutive tool calls into one "Ran N tools" line.
+        // An open chat re-folds at once through its prefs listener.
+        SettingsSection(
+            header = stringResource(R.string.tool_fold_section),
+            footer = stringResource(R.string.tool_fold_setting_footer),
+        ) {
+            SettingsSwitchRow(
+                icon = Icons.Outlined.UnfoldLess,
+                iconColor = tileTeal,
+                title = stringResource(R.string.tool_fold_setting_title),
+                checked = foldTools,
+                onCheckedChange = {
+                    foldTools = it
+                    prefs.edit().putBoolean(KEY_FOLD_TOOLS, it).apply()
+                },
+                showDivider = false,
+            )
+        }
+
         // [T-thinking-auto-expand-toggle] -- Deep Thinking --
         // Whether a NEW streaming thinking block opens expanded (historical
         // behavior, default ON) or stays collapsed. Only affects the streaming
@@ -472,6 +522,26 @@ fun AppearanceScreen(
                 onCheckedChange = {
                     autoFocusAfterReply = it
                     prefs.edit().putBoolean(KEY_AUTO_FOCUS_AFTER_REPLY, it).apply()
+                },
+                showDivider = false,
+            )
+        }
+
+        // -- Confirm Before Stopping (T-stop-confirm) --
+        // The composer's stop button asks "Stop this task?" first. Default OFF
+        // since [T-stop-mode-longpress]; same key and default as iOS Settings >
+        // Appearance, also switched from the stop button's long-press.
+        SettingsSection(
+            footer = stringResource(R.string.appearance_confirm_before_stopping_footer),
+        ) {
+            SettingsSwitchRow(
+                icon = Icons.Outlined.StopCircle,
+                iconColor = Color(0xFFFF3B30),
+                title = stringResource(R.string.appearance_confirm_before_stopping_title),
+                checked = confirmBeforeStopping,
+                onCheckedChange = {
+                    confirmBeforeStopping = it
+                    prefs.edit().putBoolean(com.openminis.app.ui.chat.StopConfirmPolicy.SETTINGS_KEY, it).apply()
                 },
                 showDivider = false,
             )
@@ -790,7 +860,8 @@ private fun FontScaleSliderRow(
 ) {
     val idx = fontScaleValues.indexOf(level).coerceIn(0, fontScaleValues.lastIndex)
     var sliderPos by remember(level) { mutableFloatStateOf(idx.toFloat()) }
-    val currentLabel = fontScaleLabels.getOrElse(sliderPos.roundToInt()) { "Default" }
+    val labelIdx = sliderPos.roundToInt().coerceIn(0, fontScaleCodes.lastIndex)
+    val currentLabel = fontScaleLabelRes[labelIdx]?.let { stringResource(it) } ?: fontScaleCodes[labelIdx]
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(

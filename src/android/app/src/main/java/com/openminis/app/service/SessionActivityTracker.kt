@@ -3,6 +3,12 @@ package com.openminis.app.service
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.openminis.app.agent.jobs.AgentJobRegistry
+import com.openminis.app.notification.BackgroundTurnOutcome
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +47,49 @@ object SessionActivityTracker {
      */
     private val _presentSessions = MutableStateFlow<Set<String>>(emptySet())
     val presentSessions: StateFlow<Set<String>> = _presentSessions.asStateFlow()
+
+    /**
+     * [T-scheduled-active-session-android] Chats a scheduled task keeps ACTIVE
+     * between its fires (ScheduledSessionHold: a follow-up aimed back at the
+     * chat that created it, still due), written by MinisApp's collector.
+     *
+     * Deliberately NOT folded into [activeSessions], which keeps meaning "this
+     * chat's own loop is running now": keep-screen-awake, the live
+     * notification's run timer and completion, the completion listener, Resume
+     * / interrupted-tail detection, the badge reconcile and VM eviction all read
+     * that and must not see a 60-second loop as one endless turn.
+     */
+    private val _scheduledSessions = MutableStateFlow<Set<String>>(emptySet())
+    val scheduledSessions: StateFlow<Set<String>> = _scheduledSessions.asStateFlow()
+
+    /**
+     * [T-scheduled-active-session-android] THE read point for "this chat is
+     * processing" (iOS `busySessions`): its own loop is running
+     * ([activeSessions]), a scheduled task of its own is still due
+     * ([scheduledSessions]), or sub agents are working for it
+     * ([AgentJobRegistry.parentsWithAgentWork]). The composer's Stop, the list
+     * spinner and the debug `isRunning` read this; keep-alive reads the same
+     * notion through [shouldRunService]. Republished synchronously on every
+     * change of the first two and by a collector for the third (see [init]).
+     */
+    private val _processingSessions = MutableStateFlow<Set<String>>(emptySet())
+    val processingSessions: StateFlow<Set<String>> = _processingSessions.asStateFlow()
+
+    /**
+     * Synchronous form of [processingSessions] for one chat. Asks the registry
+     * directly (hasAgentWork) rather than its flow, whose `.value` trails its
+     * inputs by a collector hop.
+     */
+    fun isProcessing(sessionId: String): Boolean =
+        sessionId in _activeSessions.value || sessionId in _scheduledSessions.value ||
+            AgentJobRegistry.hasAgentWork(sessionId)
+
+    private fun processingUnion(): Set<String> =
+        _activeSessions.value + _scheduledSessions.value + AgentJobRegistry.parentsWithAgentWork.value
+
+    private fun publishProcessing() {
+        _processingSessions.value = processingUnion()
+    }
 
     private val _currentToolStatus = MutableStateFlow("Idle")
     val currentToolStatus: StateFlow<String> = _currentToolStatus.asStateFlow()
@@ -398,7 +447,11 @@ object SessionActivityTracker {
 
     private fun shouldRunService(): Boolean =
         _activeSessions.value.isNotEmpty() || _presentSessions.value.isNotEmpty() ||
-            _overlayCompletionPending.value
+            _overlayCompletionPending.value ||
+            // [T-scheduled-active-session-android] A chat waiting on its own
+            // scheduled task is not finished: keep the process alive between
+            // fires. See setScheduledSessions for why it never STARTS it.
+            _scheduledSessions.value.isNotEmpty()
 
     /**
      * [T-android-overlay-completion-survives-stop] True while a finished turn
@@ -457,6 +510,13 @@ object SessionActivityTracker {
     private val pendingErrorFlag = mutableSetOf<String>()
 
     /**
+     * [T-bgnotif-outcome] Sessions whose run is ending unfinished (resumable,
+     * or stopped by the user), so the notification says "paused" instead of
+     * "completed". Same lifecycle as [pendingErrorFlag]; an error wins.
+     */
+    private val pendingInterruptFlag = mutableSetOf<String>()
+
+    /**
      * T180-bg-notif: completion listener. Wired in MinisApp.onCreate to
      * a [com.openminis.app.notification.BackgroundTaskNotifier] so when
      * an agent loop ends while the app is backgrounded, the user gets a
@@ -468,9 +528,9 @@ object SessionActivityTracker {
      * direct ChatRepository / Notifier dependencies preserves its
      * "pure session-tracking" responsibility.
      */
-    private var completionListener: ((sessionId: String, isError: Boolean) -> Unit)? = null
+    private var completionListener: ((sessionId: String, outcome: BackgroundTurnOutcome) -> Unit)? = null
 
-    fun setCompletionListener(listener: ((sessionId: String, isError: Boolean) -> Unit)?) {
+    fun setCompletionListener(listener: ((sessionId: String, outcome: BackgroundTurnOutcome) -> Unit)?) {
         completionListener = listener
     }
 
@@ -529,6 +589,86 @@ object SessionActivityTracker {
      */
     fun init(context: Context) {
         appContext = context.applicationContext
+        // [T-scheduled-active-session-android] Sub agents start and finish
+        // without passing through this object; follow them into the union.
+        if (agentWorkCollectorStarted.compareAndSet(false, true)) {
+            CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+                AgentJobRegistry.parentsWithAgentWork.collect { publishProcessing() }
+            }
+        }
+    }
+
+    private val agentWorkCollectorStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * [T-scheduled-active-session-android] The chats scheduled tasks keep
+     * active, from ScheduledSessionHold. Keeps the foreground service but never
+     * STARTS it: this changes from the background (an alarm's bookkeeping, a
+     * restart), where startForegroundService is not allowed and would throw.
+     * A service that is running is refreshed or, once nothing needs it, stopped;
+     * one that is not running is started by what already starts it - the next
+     * turn's [setActive] (the alarm that fires it carries the start exemption)
+     * or the user opening a chat ([setPresent]).
+     */
+    fun setScheduledSessions(sessions: Set<String>) {
+        if (_scheduledSessions.value == sessions) return
+        _scheduledSessions.value = sessions
+        publishProcessing()
+        Log.d(TAG, "Scheduled sessions: ${sessions.size} [${sessions.joinToString(",") { it.take(8) }}]")
+        if (!shouldRunService()) {
+            if (AgentForegroundService.isAlive) stopService()
+        } else if (AgentForegroundService.isAlive) {
+            updateService()
+        }
+    }
+
+    /**
+     * [T-port-sched-wait-notification] The next scheduled run the ongoing
+     * notification counts down to while a chat waits between fires (null when
+     * no task holds a chat). Read only by [AgentForegroundService]; it never
+     * changes [activeSessions] or [processingSessions], so screen-awake, the
+     * overlay and every other reader of those sets are unaffected.
+     */
+    private val _scheduledWait = MutableStateFlow<com.openminis.app.scheduled.ScheduledWait?>(null)
+    val scheduledWait: StateFlow<com.openminis.app.scheduled.ScheduledWait?> = _scheduledWait.asStateFlow()
+
+    /** Like [setScheduledSessions]: refreshes a running service, never starts one. */
+    fun setScheduledWait(wait: com.openminis.app.scheduled.ScheduledWait?) {
+        if (_scheduledWait.value == wait) return
+        _scheduledWait.value = wait
+        if (AgentForegroundService.isAlive && shouldRunService()) updateService()
+    }
+
+    /**
+     * [T-port-sched-running-counter] The scheduled fire running right now in a
+     * chat it keeps active, for the "· 2/30" counter on the running
+     * notification. Read only by [AgentForegroundService]; never changes the
+     * session sets.
+     */
+    private val _scheduledFiring = MutableStateFlow<com.openminis.app.scheduled.ScheduledFiring?>(null)
+    val scheduledFiring: StateFlow<com.openminis.app.scheduled.ScheduledFiring?> = _scheduledFiring.asStateFlow()
+
+    /** Like [setScheduledWait]: refreshes a running service, never starts one. */
+    fun setScheduledFiring(firing: com.openminis.app.scheduled.ScheduledFiring?) {
+        if (_scheduledFiring.value == firing) return
+        _scheduledFiring.value = firing
+        if (AgentForegroundService.isAlive && shouldRunService()) updateService()
+    }
+
+    /**
+     * [T-scheduled-active-session-android] The notification's Stop: stop every
+     * running loop AND turn off the scheduled tasks of every chat they keep
+     * active. Without the second half the scheduled hold keeps
+     * [shouldRunService] true and the next refresh brings the service straight
+     * back, so Stop would look like it did nothing.
+     */
+    fun stopAllByUser() {
+        cancelAllActiveStreams()
+        val context = appContext ?: return
+        val manager = com.openminis.app.scheduled.ScheduledTaskManager(context)
+        for (sid in _scheduledSessions.value) {
+            manager.disableAllCreatedBy(sid, "user stopped from the notification")
+        }
     }
 
     /**
@@ -546,7 +686,11 @@ object SessionActivityTracker {
         // "begins" only on the empty → non-empty edge. A second concurrent
         // session joining an in-flight run must not restart the clock.
         val wasRunIdle = _activeSessions.value.isEmpty()
+        // [T-bgnotif-outcome] A fresh run never inherits the last one's outcome.
+        synchronized(pendingErrorFlag) { pendingErrorFlag.remove(sessionId) }
+        synchronized(pendingInterruptFlag) { pendingInterruptFlag.remove(sessionId) }
         _activeSessions.value = _activeSessions.value + sessionId
+        publishProcessing()
         if (onStop != null) {
             synchronized(streamCancellers) { streamCancellers[sessionId] = onStop }
         }
@@ -585,12 +729,14 @@ object SessionActivityTracker {
     fun setInactive(sessionId: String) {
         val wasActive = sessionId in _activeSessions.value
         _activeSessions.value = _activeSessions.value - sessionId
+        publishProcessing()
         // [T-android-overlay-multitask] The run is over but the capsule may
         // still be showing this task, so the slot stays (and keeps its number)
         // until the linger drops it via removeOverlayTask.
         markTaskFinished(sessionId)
         synchronized(streamCancellers) { streamCancellers.remove(sessionId) }
         val wasError = synchronized(pendingErrorFlag) { pendingErrorFlag.remove(sessionId) }
+        val wasInterrupted = synchronized(pendingInterruptFlag) { pendingInterruptFlag.remove(sessionId) }
         Log.d(TAG, "Session deactivated: $sessionId (total: ${_activeSessions.value.size})")
 
         if (_activeSessions.value.isEmpty()) {
@@ -632,7 +778,12 @@ object SessionActivityTracker {
         // Skip if the session was never marked active (defensive — keeps
         // the "completed" semantic honest).
         if (wasActive) {
-            completionListener?.invoke(sessionId, wasError)
+            completionListener?.invoke(
+                sessionId,
+                BackgroundTurnOutcome.decide(
+                    streamError = wasError, turnError = false, canResume = wasInterrupted, userStopped = false,
+                ),
+            )
         }
     }
 
@@ -644,6 +795,18 @@ object SessionActivityTracker {
      */
     fun markStreamError(sessionId: String) {
         synchronized(pendingErrorFlag) { pendingErrorFlag.add(sessionId) }
+    }
+
+    /**
+     * [T-bgnotif-outcome] The run is ending unfinished (resumable, or stopped
+     * by the user): the completion listener reports
+     * [BackgroundTurnOutcome.INTERRUPTED]. Call BEFORE [setInactive]. Ignored
+     * for a session that is no longer active, so a late call from a job that
+     * unwinds after Stop already deactivated it cannot leak into the next run.
+     */
+    fun markStreamInterrupted(sessionId: String) {
+        if (sessionId !in _activeSessions.value) return
+        synchronized(pendingInterruptFlag) { pendingInterruptFlag.add(sessionId) }
     }
 
     /**
@@ -879,6 +1042,41 @@ object SessionActivityTracker {
     /** Last dispatched intent: true = running, false = stopped. */
     private var serviceWanted = false
 
+    /**
+     * [T-fgs-start-not-allowed-guard] The last start was refused by the system
+     * (background, no exemption). [onAppForegrounded] retries it.
+     */
+    @Volatile
+    var startRefused: Boolean = false
+        private set
+
+    /** Dispatch a start / refresh and record whether the system accepted it. */
+    private fun dispatchStart(context: Context) {
+        val started = AgentForegroundService.startService(
+            context,
+            sessionCountForNotification(),
+            statusForNotification(),
+        )
+        startRefused = !started
+        if (!started) serviceWanted = false
+    }
+
+    /**
+     * [T-fgs-start-not-allowed-guard] The app came to the foreground, where a
+     * foreground-service start is allowed again. If a start was refused while
+     * in the background and something still needs the service, start it now,
+     * so the ongoing notification and its Stop come back for a run that kept
+     * going without them.
+     */
+    fun onAppForegrounded() {
+        if (!startRefused) return
+        startRefused = false
+        if (shouldRunService() && !AgentForegroundService.isAlive) {
+            Log.d(TAG, "retrying the foreground service start refused in the background")
+            startServiceIfNeeded()
+        }
+    }
+
     private fun startServiceIfNeeded() {
         val context = appContext ?: run {
             Log.w(TAG, "Context not initialized, cannot start service")
@@ -893,11 +1091,7 @@ object SessionActivityTracker {
                 return
             }
             serviceWanted = true
-            AgentForegroundService.startService(
-                context,
-                sessionCountForNotification(),
-                statusForNotification(),
-            )
+            dispatchStart(context)
         }
     }
 
@@ -912,11 +1106,7 @@ object SessionActivityTracker {
                 return
             }
             serviceWanted = true
-            AgentForegroundService.startService(
-                context,
-                sessionCountForNotification(),
-                statusForNotification(),
-            )
+            dispatchStart(context)
         }
     }
 
@@ -927,9 +1117,11 @@ object SessionActivityTracker {
      * but idle. Two-bucket display keeps the count honest without
      * double-counting a session that's both present and streaming.
      */
-    private fun sessionCountForNotification(): Int =
+    internal fun sessionCountForNotification(): Int =
         if (_activeSessions.value.isNotEmpty()) _activeSessions.value.size
-        else _presentSessions.value.size
+        // [T-scheduled-active-session-android] Between fires, the chats the
+        // service is kept for count too.
+        else (_presentSessions.value + _scheduledSessions.value).size
 
     /**
      * Tool status fallback: when nothing is streaming, expose "In session"
@@ -944,7 +1136,7 @@ object SessionActivityTracker {
      * `_currentToolStatus.value` when set; otherwise we synthesize
      * "%d task(s) running".
      */
-    private fun statusForNotification(): String {
+    internal fun statusForNotification(): String {
         val ctx = appContext
         val activeCount = _activeSessions.value.size
         return when {
@@ -962,6 +1154,12 @@ object SessionActivityTracker {
                     if (activeCount == 1) "1 task running" else "$activeCount tasks running"
                 }
             }
+            // [T-scheduled-active-session-android] Between fires. The ongoing
+            // notification shows its WAITING phase from [scheduledWait]
+            // ([T-port-sched-wait-notification]); this is only the status line
+            // of the idle phase, used when there is no wait to show.
+            _scheduledSessions.value.isNotEmpty() ->
+                ctx?.getString(com.openminis.app.R.string.notif_scheduled_waiting) ?: "Waiting for scheduled tasks"
             _presentSessions.value.isNotEmpty() ->
                 ctx?.getString(com.openminis.app.R.string.notif_in_session) ?: "In session"
             else -> "Idle"

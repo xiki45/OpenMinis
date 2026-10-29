@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Sort
@@ -60,6 +62,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import com.openminis.app.ui.components.DialogTextField
+import com.openminis.app.ui.components.safeLaunchPicker
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -283,12 +286,25 @@ fun SkillsManagementScreen(
             } else {
                 filteredSkills.forEachIndexed { index, skill ->
                     val (badgeIcon, badgeColor) = sourceIconAndColor(skill.importSource)
+                    // [T-android-skill-copy-source-url] Long-press offers "Copy
+                    // Source URL" for a skill installed from one; the others
+                    // keep a plain tappable row.
+                    val sourceUrl = SkillSourceUrl.copyable(skill)
+                    var menuExpanded by remember(skill.id) { mutableStateOf(false) }
+                    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                    Box {
                     SettingsRow(
                         title = skill.name,
                         subtitle = skill.description.takeIf { it.isNotEmpty() }?.let { stripMarkdown(it) },
                         showChevron = true,
                         showDivider = index < filteredSkills.size - 1,
                         onClick = { onSkillClick(skill.id) },
+                        onLongClick = sourceUrl?.let {
+                            {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                menuExpanded = true
+                            }
+                        },
                         trailing = {
                             // Source badge + Switch. Wrapping in a Row keeps
                             // them visually grouped before the row's chevron.
@@ -307,6 +323,22 @@ fun SkillsManagementScreen(
                             }
                         },
                     )
+                    if (sourceUrl != null) {
+                        com.openminis.app.ui.components.MinisMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.skill_copy_source_url)) },
+                                leadingIcon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    SkillSourceUrl.copy(context, sourceUrl)
+                                },
+                            )
+                        }
+                    }
+                    }
                 }
             }
         }
@@ -501,7 +533,7 @@ private fun SkillImportSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     MinisTextButton(
-                        onClick = { fileLauncher.launch("*/*") },
+                        onClick = { fileLauncher.safeLaunchPicker("*/*", context, "SkillsManagement") },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(stringResource(R.string.skill_import_file_button)) }
                 }
@@ -557,11 +589,10 @@ private fun downloadSkillFromUrl(url: String): String? {
         withFile.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/").replace("/tree/", "/")
     } else url
 
-    val connection = java.net.URL(rawUrl).openConnection() as java.net.HttpURLConnection
-    connection.connectTimeout = 15_000
-    connection.readTimeout = 15_000
-    return try { if (connection.responseCode == 200) connection.inputStream.bufferedReader().readText() else null }
-    finally { connection.disconnect() }
+    // [FEAT-261021-16] Follows the default route in Settings > Network.
+    return com.openminis.app.network.NetworkUrlRequest.open(
+        com.openminis.app.network.NetworkHttp.DEFAULT_TAG, rawUrl, connectTimeoutMs = 15_000, readTimeoutMs = 15_000,
+    ).use { r -> if (r.code == 200) r.text() else null }
 }
 
 // ─── Skill Detail Sheet ─────────────────────────────────────────────────────
@@ -731,8 +762,18 @@ fun SkillDetailScreen(
                 }
                 DetailDivider()
 
-                // Source
-                DetailRow {
+                // Source. [T-android-skill-copy-source-url] Long-press copies
+                // the URL the skill was installed from, when it has one.
+                val sourceUrl = SkillSourceUrl.copyable(skill)
+                val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                DetailRow(
+                    onLongClick = sourceUrl?.let {
+                        {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            SkillSourceUrl.copy(context, it)
+                        }
+                    },
+                ) {
                     Text(stringResource(R.string.skill_detail_label_source), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(120.dp))
                     Spacer(Modifier.weight(1f))
                     Text(sourceLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -771,7 +812,7 @@ fun SkillDetailScreen(
 
                 DetailRow(clickable = !isBusy, onClick = {
                     if (isBusy) return@DetailRow
-                    fileUpdateLauncher.launch("*/*")
+                    fileUpdateLauncher.safeLaunchPicker("*/*", context, "SkillsManagement")
                 }) {
                     SettingsActionIcon(Icons.Outlined.Description, SettingsIconBlue)
                     Spacer(Modifier.width(14.dp))
@@ -970,16 +1011,29 @@ private fun DetailSection(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun DetailRow(
     clickable: Boolean = false,
     onClick: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (clickable) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(
+                when {
+                    // Usually a long-press-only row: a tap then does nothing.
+                    onLongClick != null -> Modifier.combinedClickable(
+                        enabled = true,
+                        onClick = { if (clickable) onClick() },
+                        onLongClick = onLongClick,
+                    )
+                    clickable -> Modifier.clickable(onClick = onClick)
+                    else -> Modifier
+                },
+            )
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1081,7 +1135,8 @@ private fun SettingsActionIcon(
  * Output is trimmed and capped at 120 characters.
  */
 private fun stripMarkdown(text: String): String {
-    return text
+    // [T-md-inline-html] <br> → space, whitelisted style tags out (code untouched).
+    return com.openminis.app.ui.markdown.InlineHtmlTags.stripForPreview(text)
         .replace(Regex("```[\\s\\S]*?```"), "")           // fenced code blocks
         .replace(Regex("`([^`]+)`"), "$1")                  // inline code
         .replace(Regex("!?\\[([^\\]]+)\\]\\([^)]+\\)"), "$1") // [text](url) → text
@@ -1186,14 +1241,16 @@ fun SkillFileViewerScreen(
         },
     ) { padding ->
         if (isEditing) {
-            DialogTextField(
+            // [T-android-editor-keyboard-overlap] The caret stays above the
+            // keyboard; see DocumentEditorField.
+            com.openminis.app.ui.components.DocumentEditorField(
                 value = editContent,
                 onValueChange = { editContent = it },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
                     .padding(horizontal = 8.dp),
-                singleLine = false,
+                outlined = true,
                 textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             )
         } else {

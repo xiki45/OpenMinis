@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Berjalan</string>
+    <string name="sched_pill_waiting">Menunggu</string>
+    <string name="sched_pill_run_now">Jalankan Sekarang</string>
+    <string name="sched_pill_hide">Sembunyikan hitung mundur ini</string>
+    <string name="sched_pill_cancel_all">Batalkan semua tugas terjadwal</string>
+    <string name="sched_pill_cancel_all_title">Batalkan semua tugas terjadwal?</string>
+    <string name="sched_pill_cancel_all_confirm">Batalkan semua</string>
+    <string name="sched_pill_not_now">Nanti Saja</string>
+    <string name="sched_pill_cancel_all_message">Semua tugas yang masih terjadwal di percakapan ini akan dibatalkan.</string>
+    <string name="sched_pill_a11y_title">Tugas terjadwal berikutnya</string>
+    <string name="sched_pill_a11y_running">Sedang berjalan</string>
+    <string name="sched_pill_a11y_waiting">Menunggu tugas lain selesai</string>
+    <string name="sched_pill_a11y_upcoming_left">Jalankan berikutnya · sisa %1$d</string>
+    <string name="sched_pill_a11y_upcoming">Jalankan berikutnya</string>
+    <string name="sched_pill_a11y_run_of">Jalankan ke-%1$d dari %2$d</string>
+    <string name="sched_pill_a11y_run">Jalankan ke-%1$d</string>
+    <string name="sched_pill_a11y_next_in">Jalankan berikutnya dalam %1$s</string>
+    <string name="sched_pill_a11y_more">+%1$d lagi</string>
+    <string name="sched_pill_a11y_hint">Membuka detail tugas</string>
+</resources>

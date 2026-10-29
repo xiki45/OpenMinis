@@ -8,7 +8,6 @@ import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.ui.chat.ChatViewModel
 import com.openminis.app.ui.chat.ChatViewModelStore
 import com.openminis.app.ui.chat.InputAttachment
-import com.openminis.app.ui.chat.addAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -281,7 +280,6 @@ internal object HeadlessChatRunner {
                     timedOut = false,
                 )
             }
-            for (att in attachments) vm.addAttachment(att)
             // [T-android-submit-outcome] Ask the funnel what it did instead of
             // assuming. This used to call sendMessage() (Unit) and report "Running"
             // unconditionally — a queued prompt, a refused prompt, or one parked
@@ -291,7 +289,11 @@ internal object HeadlessChatRunner {
             val rowsBeforeSubmit = if (com.openminis.app.scheduled.ScheduledTaskMarker.isMarkerText(text)) {
                 app(context).chatRepository.dao.loadMessages(sessionId).size
             } else -1
-            val outcome = vm.submitPrompt(text, prefill)
+            // [T-headless-own-attachments] The files go with the prompt, not
+            // through the composer: staging them there put them in front of the
+            // user (or into their next send) whenever the session was busy and
+            // the queued prompt went out without them.
+            val outcome = vm.submitPrompt(text, prefill, attachments)
             if (outcome is ChatViewModel.SubmitOutcome.Rejected) {
                 return@withContext PromptResult(status = "Rejected", responseText = outcome.reason, timedOut = false)
             }

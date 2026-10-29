@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Отключено</string>
+    <string name="env_var_status_duplicate">Повторяющееся имя</string>
+    <string name="env_var_enabled_toggle">Включено</string>
+    <string name="env_var_enabled_footer">Отключённая переменная сохраняет значение и заметку, но не передаётся в оболочки, терминалы и MCP-серверы.</string>
+    <string name="env_var_disabled_highlight">Эта переменная отключена. Включите её, чтобы снова использовать.</string>
+    <string name="env_var_action_disable">Отключить</string>
+    <string name="env_var_action_enable">Включить</string>
+    <string name="mcp_form_env_disabled_warning">%1$s отключена и будет передана как пустое значение.</string>
+</resources>

@@ -100,12 +100,33 @@ internal class MinisMarkdownTextToolbar(
      * to THIS bar — keeping all actions in one row instead of a separate popup.
      */
     internal val selectionController: SelectionController? = null,
+    /**
+     * [T-multi-select-share] Opens the share picker with the round of the selected
+     * message preselected (null when it cannot be told which message). Null hides
+     * the action; shown last, as on iOS.
+     */
+    private val onShareChat: ((String?) -> Unit)? = null,
+    /**
+     * [T-in-chat-search] "Search in Chat" with the selection as the query
+     * (iOS: the assistant text selection menu). Null hides the action.
+     */
+    private val onSearchInChat: ((String) -> Unit)? = null,
 ) : TextToolbar {
 
     internal var state by mutableStateOf(ToolbarState())
         private set
 
     internal val canAddToInput: Boolean get() = onAddToInput != null
+
+    internal val canShareChat: Boolean get() = onShareChat != null
+
+    internal fun shareChat() {
+        val sink = onShareChat ?: return
+        sink(
+            selectionController?.singleMessageId()
+                ?: selectionController?.selection?.value?.start?.shard?.messageId,
+        )
+    }
 
     override val status: TextToolbarStatus
         get() = if (state.visible) TextToolbarStatus.Shown else TextToolbarStatus.Hidden
@@ -150,6 +171,13 @@ internal class MinisMarkdownTextToolbar(
     }
 
     internal val canReadAloud: Boolean get() = onReadAloud != null
+
+    internal val canSearchInChat: Boolean get() = onSearchInChat != null
+
+    internal fun searchSelectionInChat() {
+        val sink = onSearchInChat ?: return
+        withSelection(sink)
+    }
 
     /**
      * [T-android-readaloud-selection-vs-reply] Speak the WHOLE message that
@@ -340,6 +368,14 @@ internal fun MinisMarkdownTextToolbarHost(toolbar: MinisMarkdownTextToolbar) {
                         toolbar.hide()
                     }
                 }
+                // [T-in-chat-search] The selection becomes the query.
+                if (toolbar.canSearchInChat) {
+                    ToolbarDivider()
+                    ToolbarButton(label = stringResource(R.string.chat_search_in_chat)) {
+                        toolbar.searchSelectionInChat()
+                        toolbar.hide()
+                    }
+                }
                 // [T-android-selection-readaloud] Speak just the selected
                 // substring through Minis TTS (provider voice with the system
                 // engine as fallback), mirroring iOS's "Read Aloud / Read
@@ -415,6 +451,14 @@ internal fun MinisMarkdownTextToolbarHost(toolbar: MinisMarkdownTextToolbar) {
                     ToolbarButton(label = stringResource(R.string.markdown_table_copy_table_image)) {
                         tableActions.copyTableImage()
                         toolbar.hide()
+                    }
+                }
+                // [T-multi-select-share] "Share Chat…" is the last item.
+                if (toolbar.canShareChat) {
+                    ToolbarDivider()
+                    ToolbarButton(label = stringResource(R.string.chat_share_share_chat)) {
+                        toolbar.hide()
+                        toolbar.shareChat()
                     }
                 }
             }

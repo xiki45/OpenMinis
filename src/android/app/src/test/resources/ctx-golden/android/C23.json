@@ -1,0 +1,436 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read both"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "call_e",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolResult",
+            "text": "Error: '/var/minis/workspace/shot.heic' exists (4120 bytes) but is not a decodable image. Supported: PNG, JPEG, GIF, WebP, BMP."
+          },
+          {
+            "id": "call_e",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/rotated.jpg | 4032x3024 | 191177 bytes]"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "inResultOf": "call_e",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read both"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "Error: '/var/minis/workspace/shot.heic' exists (4120 bytes) but is not a decodable image. Supported: PNG, JPEG, GIF, WebP, BMP."
+          },
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/rotated.jpg | 4032x3024 | 191177 bytes]"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "inResultOf": "fn:read_image",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read both"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "call_e",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolResult",
+            "text": "Error: '/var/minis/workspace/shot.heic' exists (4120 bytes) but is not a decodable image. Supported: PNG, JPEG, GIF, WebP, BMP."
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_e",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/rotated.jpg | 4032x3024 | 191177 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by read_image (tool_call_id: call_e)]"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read both"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_e",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolResult",
+            "text": "Error: '/var/minis/workspace/shot.heic' exists (4120 bytes) but is not a decodable image. Supported: PNG, JPEG, GIF, WebP, BMP."
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_e",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/rotated.jpg | 4032x3024 | 191177 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by read_image]"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read both"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "call_e",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolResult",
+            "text": "Error: '/var/minis/workspace/shot.heic' exists (4120 bytes) but is not a decodable image. Supported: PNG, JPEG, GIF, WebP, BMP."
+          },
+          {
+            "id": "call_e",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/rotated.jpg | 4032x3024 | 191177 bytes]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read both"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "Error: '/var/minis/workspace/shot.heic' exists (4120 bytes) but is not a decodable image. Supported: PNG, JPEG, GIF, WebP, BMP."
+          },
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/rotated.jpg | 4032x3024 | 191177 bytes]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read both"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "call_e",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolResult",
+            "text": "Error: '/var/minis/workspace/shot.heic' exists (4120 bytes) but is not a decodable image. Supported: PNG, JPEG, GIF, WebP, BMP."
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_e",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/rotated.jpg | 4032x3024 | 191177 bytes]"
+          }
+        ],
+        "role": "tool"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read both"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_e",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_h",
+            "kind": "toolResult",
+            "text": "Error: '/var/minis/workspace/shot.heic' exists (4120 bytes) but is not a decodable image. Supported: PNG, JPEG, GIF, WebP, BMP."
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_e",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/rotated.jpg | 4032x3024 | 191177 bytes]"
+          }
+        ],
+        "role": "tool"
+      }
+    ]
+  }
+}

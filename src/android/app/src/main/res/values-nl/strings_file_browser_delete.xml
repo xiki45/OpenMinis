@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">‘%1$s’ is een map die Minis hier koppelt, dus die kan niet in de bestandsbrowser worden verwijderd. Er is niets verwijderd. Een externe map verwijder je via Instellingen › Externe mappen koppelen.</string>
+</resources>

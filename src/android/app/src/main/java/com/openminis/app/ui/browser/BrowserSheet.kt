@@ -109,7 +109,10 @@ fun BrowserSheet(
     val canGoBack = selectedTab?.manager?.canGoBack?.collectAsState()?.value ?: false
     val canGoForward = selectedTab?.manager?.canGoForward?.collectAsState()?.value ?: false
     val isAgentBusy = tabPool.isAgentBusy
-    val userAgentProfile = tabPool.currentUserAgentProfile.collectAsState().value
+    // [ISS-033] The selected tab's own mode (set_user_agent can make it differ
+    // from the default); the default only when no tab is open.
+    val defaultProfile = tabPool.currentUserAgentProfile.collectAsState().value
+    val userAgentProfile = selectedTab?.manager?.profileFlow?.collectAsState()?.value ?: defaultProfile
 
     var urlInput by remember(currentURL) { mutableStateOf(currentURL) }
     var showHistory by remember { mutableStateOf(false) }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-confirm-i18n] minis-config approval dialog (ConfigConfirmDialog).
+     Wording and translations copied from iOS Localizable.xcstrings
+     (ConfigConfirmSheet keys); a locale iOS lacks falls back to English. -->
+<resources>
+    <string name="config_confirm_title_one">Kumpirmahin ang pagbabago</string>
+    <string name="config_confirm_title_many">Kumpirmahin ang %1$d pagbabago</string>
+    <string name="config_confirm_cancel">Kanselahin</string>
+    <string name="config_confirm_apply">Ilapat</string>
+    <string name="config_confirm_reject_all">Tanggihan Lahat</string>
+    <string name="config_confirm_risk_destructive">Maaari nitong maapektuhan ang susunod na mga tool call.</string>
+    <string name="config_confirm_risk_sensitive">Maibabalik, pero mabuting tingnan muna.</string>
+</resources>

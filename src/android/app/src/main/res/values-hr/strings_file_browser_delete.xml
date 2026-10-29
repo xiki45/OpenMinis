@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">„%1$s” je mapa koju Minis ovdje montira, pa se ne može izbrisati iz preglednika datoteka. Ništa nije izbrisano. Vanjsku mapu uklonite u Postavke › Montiraj vanjske mape.</string>
+</resources>

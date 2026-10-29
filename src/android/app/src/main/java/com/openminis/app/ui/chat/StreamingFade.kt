@@ -149,18 +149,21 @@ internal object FadeShownText {
 // for every frozen/history block, which keeps the plain per-block cache.
 internal val LocalLiveIncremental = compositionLocalOf { false }
 
-// [T-android-stream-fade] Fade made more legible after the dual-path flush +
-// smooth scroll landed: a flush batch is ~5–12 words and the newline fast-path
-// can fire again in <100ms, so a tight 100ms stagger window made the whole
-// batch light up almost together and the per-word reveal was invisible.
-// Widening the stagger window to 300ms (and the per-word cap to 90ms) spreads
-// the words within a batch into a clearly sequential left-to-right reveal even
-// when the next batch arrives quickly; the 350ms per-word fade is unchanged
-// (longer starts to feel laggy).
-private const val FADE_DURATION_MS = 350L
-private const val STAGGER_WINDOW_MS = 300L
-private const val PER_WORD_STAGGER_MS = 90L
+// [T-android-stream-fade] Timings are iOS TextFadeAnimator's
+// (`wordFadeDuration` 0.45 s, `staggerWindow` 0.10 s split evenly across the
+// batch's words, no per-word floor): every batch finishes in ~window+duration
+// no matter how many words it carries, and consecutive batches overlap rather
+// than queueing. Android used to spread a batch over 300 ms (90 ms a word, 350 ms
+// fade) to make the left-to-right ripple more visible; next to the iOS build it
+// read as text trailing the stream, so it now matches iOS exactly.
+// [T-android-stream-fade-ios-timing]
+internal const val FADE_DURATION_MS = 450L
+internal const val STAGGER_WINDOW_MS = 100L
 private const val MAX_FADE_WORDS = 160
+
+/** iOS `TextFadeAnimator.stagger(forWordCount:)`: the window divided across the batch. */
+internal fun perWordStaggerMs(wordCount: Int): Long =
+    if (wordCount <= 0) 0L else STAGGER_WINDOW_MS / wordCount
 
 private data class FadeRange(
     val start: Int,
@@ -262,8 +265,8 @@ internal class FadeController {
         // Whitespace-only suffix: nothing visible to fade — skip.
         if (words.isEmpty()) return
 
-        // Stagger budget mirrors iOS: window is fixed (100ms), so per-word
-        // stagger shrinks as word count grows; capped at 60ms per word.
+        // Stagger budget mirrors iOS: the window is fixed, so the per-word
+        // stagger shrinks as the batch grows.
         val totalWords = words.size + rangesState.size
         if (totalWords > MAX_FADE_WORDS) {
             // Too many in flight — flush everything to α=1 and skip the new
@@ -273,7 +276,7 @@ internal class FadeController {
             alphas.clear()
             return
         }
-        val perWordStaggerMs = minOf(PER_WORD_STAGGER_MS, STAGGER_WINDOW_MS / words.size.coerceAtLeast(1))
+        val perWordStaggerMs = perWordStaggerMs(words.size)
 
         for ((idx, wr) in words.withIndex()) {
             val absStart = base + wr.first

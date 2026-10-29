@@ -39,13 +39,15 @@ import java.util.concurrent.TimeUnit
  *
  * ## Identity on the wire
  *
- * The headers mirror [OpenAIProvider]'s inference request EXACTLY — same
+ * The client identity matches [OpenAIProvider]'s inference request — same
  * `Originator: codex_cli_rs`, same `codex_cli_rs/<v> (Android; arm64)` UA, same
- * `Version`, same `Openai-Beta`. This is deliberate and load-bearing in two
+ * client version (one constant). This is deliberate and load-bearing in two
  * directions: OpenAI gates model availability on the advertised client version,
  * so discovery must not advertise a different one than inference (a model
  * listed under one version and refused under another is the worst outcome), and
  * the account must not see two different client identities from one app.
+ * [T-codex-discovery-client-version] The Responses-only headers (`Version`,
+ * `Openai-Beta`) are no longer sent here; see [discoveryRequest].
  *
  * The upstream reference implementation this was checked against uses its own
  * `originator: omp`; that is *its* identity, not ours, and is not copied.
@@ -81,6 +83,9 @@ object CodexModelsApi {
      * API-key `/v1/models` result for the same account can never collide.
      */
     private val cache = ProviderModelsCache("codex-oauth")
+
+    /** `visibility` values that keep a discovered model out of the picker (same set as iOS). */
+    internal val HIDDEN_VISIBILITIES = setOf("hide", "hidden", "internal", "none")
 
     /** Outcome of one discovery attempt. */
     sealed interface Result {
@@ -122,6 +127,9 @@ object CodexModelsApi {
         clientVersion: String,
         context: Context? = null,
         forceRefresh: Boolean = false,
+        // [FEAT-261021-16] The instance's Settings > Network tag (prov:<id>);
+        // null follows the default route.
+        netTag: String? = null,
     ): Result = withContext(Dispatchers.IO) {
         val key = cacheKey(accountId, accessToken, clientVersion)
         // hasAccountId, never the id itself. It gates BOTH the
@@ -133,26 +141,18 @@ object CodexModelsApi {
         )
         if (!forceRefresh && context != null) {
             cache.load(context, key)?.let {
-                AppLogger.info(TAG, "discovery cache hit (${it.size} models)")
+                // Ids only (never the token or account), so "why is model X
+                // missing" can be answered from the log.
+                AppLogger.info(TAG, "discovery cache hit (${it.size} models): ${it.joinToString { m -> m.id }}")
+                recordUltrafast(context, it)
                 return@withContext Result.Success(it)
             }
         }
 
-        val url = "$MODELS_URL?client_version=$clientVersion"
-        val builder = Request.Builder()
-            .url(url)
-            .get()
-            // Same identity as the inference request — see the class comment.
-            .header("Authorization", "Bearer $accessToken")
-            .header("Version", clientVersion)
-            .header("Openai-Beta", "responses=experimental")
-            .header("User-Agent", "codex_cli_rs/$clientVersion (Android; arm64)")
-            .header("Originator", "codex_cli_rs")
-            .header("Accept", "application/json")
-        accountId?.takeIf { it.isNotBlank() }?.let { builder.header("Chatgpt-Account-Id", it) }
+        val builder = discoveryRequest(accessToken, accountId, clientVersion)
 
         val (status, body) = try {
-            client.newCall(builder.build()).execute().use { resp ->
+            com.openminis.app.network.NetworkHttp.client(netTag, client).newCall(builder.build()).execute().use { resp ->
                 resp.code to (resp.body?.string() ?: "")
             }
         } catch (e: Exception) {
@@ -192,7 +192,50 @@ object CodexModelsApi {
             "discovery OK (${enriched.size} models): ${enriched.joinToString { it.id }}",
         )
         if (context != null) cache.save(context, key, enriched)
+        recordUltrafast(context, enriched)
         Result.Success(enriched)
+    }
+
+    /**
+     * [T-android-ultrafast-align] Records which models this account's catalogue
+     * declares Ultrafast for (SpeedTiers.catalogDeclaresUltrafast; iOS
+     * recordCatalogUltrafast), and logs it in iOS's words, so "why is Ultrafast
+     * offered / sent" can be read from the log.
+     */
+    private fun recordUltrafast(context: Context?, models: List<LLMModel>) {
+        val ids = models.filter { m -> m.serviceTiers?.contains("ultrafast") == true }.map { it.id.lowercase() }
+        com.openminis.app.data.FastModePrefs.recordCatalogUltrafast(context, ids)
+        AppLogger.info(
+            TAG,
+            "Codex discovery: catalogue declares ultrafast for ${ids.size} model(s)" +
+                if (ids.isEmpty()) "" else ": " + ids.joinToString(","),
+        )
+    }
+
+    /**
+     * [T-codex-discovery-client-version] The discovery request, built exactly
+     * as CLIProxyAPI's fetch_codex_models does (dev branch, verified with gh):
+     * `client_version` query, `Accept`, `Authorization`, `Originator:
+     * codex_cli_rs`, `User-Agent` and, when known, `Chatgpt-Account-Id`.
+     *
+     * It no longer sends `Version` or `Openai-Beta: responses=experimental`.
+     * Those belong to the Responses inference request; CLIProxyAPI's
+     * discovery, which does list gpt-6.1-sol, sends neither. Dropping them
+     * removes two differences from a known-working request. Whether either
+     * header affected the catalog was not verified. The client version
+     * itself stays shared with inference (same constant), so the two can
+     * still never gate differently.
+     */
+    internal fun discoveryRequest(accessToken: String, accountId: String?, clientVersion: String): Request.Builder {
+        val builder = Request.Builder()
+            .url("$MODELS_URL?client_version=$clientVersion")
+            .get()
+            .header("Accept", "application/json")
+            .header("Authorization", "Bearer $accessToken")
+            .header("Originator", "codex_cli_rs")
+            .header("User-Agent", "codex_cli_rs/$clientVersion (Android; arm64)")
+        accountId?.takeIf { it.isNotBlank() }?.let { builder.header("Chatgpt-Account-Id", it) }
+        return builder
     }
 
     /** Drop this account's cached catalog (e.g. on sign-out). */
@@ -270,8 +313,12 @@ object CodexModelsApi {
         // GH#319: "隐藏/不可见的模型条目保持隐藏". The backend marks internal /
         // withdrawn SKUs here; surfacing one puts a model in the picker that
         // errors on first send.
+        //
+        // [T-codex-discovery-client-version] The live values are `list` and
+        // `hide`. The set is shared with iOS parseCodexModels so both
+        // platforms hide the same entries (gpt-reserve, codex-auto-review…).
         val visibility = obj.optString("visibility").trim().lowercase()
-        if (visibility == "hide" || visibility == "hidden") return null
+        if (visibility in HIDDEN_VISIBILITIES) return null
 
         val contextWindow = obj.optInt("context_window", 0).takeIf { it > 0 }
         val maxOutput = obj.optInt("max_output_tokens", 0).takeIf { it > 0 }
@@ -292,7 +339,35 @@ object CodexModelsApi {
             // all — it is appended by OpenAIModelsApi with its own modalities.
             outputModalities = null,
             reasoningEffortValues = parseEffortTiers(obj),
+            serviceTiers = parseServiceTiers(obj),
         )
+    }
+
+    /**
+     * [T-ultrafast-catalog-tiers] The service tiers this model declares: ids
+     * from `service_tiers` ([{id, name, description}], the official field)
+     * plus the deprecated `additional_speed_tiers` (plain strings). null when
+     * the entry has neither field; an empty list when it has one but it is
+     * empty. Lowercased, blanks dropped, first-seen order.
+     */
+    internal fun parseServiceTiers(obj: JSONObject): List<String>? {
+        if (!obj.has("service_tiers") && !obj.has("additional_speed_tiers")) return null
+        val out = LinkedHashSet<String>()
+        obj.optJSONArray("service_tiers")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val id = when (val raw = arr.opt(i)) {
+                    is JSONObject -> raw.optString("id")
+                    is String -> raw
+                    else -> ""
+                }.trim().lowercase()
+                if (id.isNotEmpty()) out.add(id)
+            }
+        }
+        obj.optJSONArray("additional_speed_tiers")?.toStringList()?.forEach { t ->
+            val id = t.trim().lowercase()
+            if (id.isNotEmpty()) out.add(id)
+        }
+        return out.toList()
     }
 
     /**
@@ -392,6 +467,8 @@ object CodexModelsApi {
                 inputModalities = authoritative.inputModalities ?: filled.inputModalities,
                 reasoningEffortValues = authoritative.reasoningEffortValues
                     ?: filled.reasoningEffortValues,
+                // [T-ultrafast-catalog-tiers] Only the Codex catalog knows this.
+                serviceTiers = authoritative.serviceTiers ?: filled.serviceTiers,
                 // displayName: see [preferredName]. Compared against our
                 // hand-written label for this id, NOT against `filled` —
                 // models.dev enrichment never touches displayName, so

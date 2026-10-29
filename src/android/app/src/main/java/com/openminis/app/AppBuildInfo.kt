@@ -29,6 +29,17 @@ object AppBuildInfo {
     }
 
     /**
+     * [T-android-jankdiag] The commit the APK was built from ("-dirty" when the
+     * Android sources had uncommitted changes), from the `build_info/commit.txt`
+     * asset; "unknown" when absent. Reads an asset: call off the main thread.
+     */
+    fun commit(context: Context): String = try {
+        context.assets.open("build_info/commit.txt").bufferedReader().use { it.readText() }.trim().ifEmpty { "unknown" }
+    } catch (_: Exception) {
+        "unknown"
+    }
+
+    /**
      * Local time with seconds, "unknown" when absent: this gets compared by
      * eye against the timestamp of a build that just finished.
      */

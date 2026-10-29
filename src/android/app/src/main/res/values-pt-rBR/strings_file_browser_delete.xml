@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">“%1$s” é uma pasta que o Minis monta aqui, por isso não pode ser apagada no navegador de arquivos. Nada foi apagado. Para remover uma pasta externa, use Configurações › Montar pastas externas.</string>
+</resources>

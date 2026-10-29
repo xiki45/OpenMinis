@@ -203,7 +203,9 @@ object MarkdownClipboard {
 
     /** Strip inline markdown markers, return readable text. */
     private fun stripInline(s: String): String {
-        var t = s
+        // [T-md-inline-html] <br> -> newline, paired style tags dropped (their
+        // text kept), before the code unwrap below so `<br>` in code survives.
+        var t = com.openminis.app.ui.markdown.InlineHtmlTags.toPlain(s)
         // Images: ![alt](url) → alt
         t = Regex("!\\[([^\\]]*)\\]\\([^)]*\\)").replace(t, "$1")
         // Links: [text](url) → text
@@ -230,6 +232,10 @@ object MarkdownClipboard {
             codes.add(m.groupValues[1])
             "$codePlaceholder${codes.size - 1}$codePlaceholder"
         }
+        // [T-md-inline-html] <br> and paired whitelisted tags become real HTML;
+        // every other `<` is escaped below and shows as text.
+        val htmlTags = mutableListOf<String>()
+        work = com.openminis.app.ui.markdown.InlineHtmlTags.protectForHtml(work, htmlTags, HTML_TAG_MARK)
         work = escapeHtml(work)
         // Images: ![alt](url)
         work = Regex("!\\[([^\\]]*)\\]\\(([^)]+)\\)").replace(work) { m ->
@@ -254,8 +260,14 @@ object MarkdownClipboard {
         work = Regex("$codePlaceholder(\\d+)$codePlaceholder").replace(work) { m ->
             "<code>${escapeHtml(codes[m.groupValues[1].toInt()])}</code>"
         }
+        if (htmlTags.isNotEmpty()) {
+            work = Regex("$HTML_TAG_MARK(\\d+)$HTML_TAG_MARK").replace(work) { m -> htmlTags[m.groupValues[1].toInt()] }
+        }
         return work
     }
+
+    /** Private-use marker around protected HTML tags; never in model text. */
+    private const val HTML_TAG_MARK = '\uE000'
 
     private fun escapeHtml(s: String): String =
         s.replace("&", "&amp;")

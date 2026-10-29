@@ -62,10 +62,13 @@ class ContextMeasureOutboundTest {
                 AgentContentPart.ToolUse("t1", "file_read", input),
             ),
         )
+        // [T-ctx-count-wire-framing] Text and arguments with their JSON
+        // escaping, the call id, and the per-call framing.
         val expected = ContextSizeMeter.PER_MESSAGE_OVERHEAD +
-            ContextSizeMeter.estimateTokens("hello") +
-            ContextSizeMeter.estimateTokens("file_read") + ContextSizeMeter.estimateTokens(input.toString()) +
-            ContextSizeMeter.PER_TOOL_PART_OVERHEAD
+            ContextSizeMeter.estimateWireTokens("hello") +
+            ContextSizeMeter.estimateTokens("file_read") + ContextSizeMeter.estimateTokens("t1") +
+            ContextSizeMeter.estimateWireTokens(input.toString()) +
+            ContextSizeMeter.PER_TOOL_USE_OVERHEAD
         assertEquals(expected, ContextSizeMeter.estimateTokens(parts))
 
         val plain = LLMMessage(LLMMessage.Role.USER, content = "just text")
@@ -93,7 +96,8 @@ class ContextMeasureOutboundTest {
     @Test
     fun `calibration pairs a report with the estimate of the same request`() {
         assertEquals(1.4, ContextSizeMeter.calibrationRatio(140, 100)!!, 1e-9)
-        assertEquals("absurd reports are clamped high", 3.0, ContextSizeMeter.calibrationRatio(1_000_000, 100)!!, 1e-9)
+        // [T-ctx-count-reasoning] Ceiling raised 3.0 -> 8.0 (reasoning is counted now).
+        assertEquals("absurd reports are clamped high", 8.0, ContextSizeMeter.calibrationRatio(1_000_000, 100)!!, 1e-9)
         assertEquals("an under-reporting upstream cannot shrink the estimate by more than 20%",
             0.8, ContextSizeMeter.calibrationRatio(1, 100)!!, 1e-9)
         assertEquals("a genuine over-read (the estimator's worst, 1.18x) is still followed",
@@ -230,8 +234,8 @@ class ContextMeasureOutboundTest {
         fun seed(rows: List<String>) = ContextSizeMeter.replayCalibration(rows.mapNotNull(ContextSizeMeter::calibrationSample))
         val legacy = """{"inputTokens":10,"outputTokens":5,"cacheCreationTokens":0,"cacheReadTokens":0,"latestContextTokens":120000}"""
         assertEquals("rows written before the pair do not seed", 0, seed(listOf(legacy)).samples)
-        val older = """{"latestContextTokens":100000,"estimatedRequestTokens":100000,"estimatedFixedTokens":8000}"""
-        val newer = """{"latestContextTokens":140000,"estimatedRequestTokens":100000,"estimatedFixedTokens":9000,"streamMs":12}"""
+        val older = """{"latestContextTokens":100000,"estimatedRequestTokens":100000,"estimatedFixedTokens":8000,"estimatorVersion":3}"""
+        val newer = """{"latestContextTokens":140000,"estimatedRequestTokens":100000,"estimatedFixedTokens":9000,"streamMs":12,"estimatorVersion":3}"""
         val state = seed(listOf(older, newer, legacy))
         assertEquals(2, state.samples)
         assertEquals("model-less rows set only the newest-learned ratio", 1.4, state.lastLearned!!, 1e-9)
@@ -247,7 +251,8 @@ class ContextMeasureOutboundTest {
         assertEquals("switching back uses that model's own ratio", 1.05, ContextSizeMeter.ratioFor("gpt-5", known, 1.30), 1e-9)
         assertEquals("unseen model: borrowed with the margin", 1.05 * 1.2, ContextSizeMeter.ratioFor("gemini-4", known, 1.05), 1e-9)
         assertEquals("a borrowed ratio below 1 does not shrink", 1.2, ContextSizeMeter.ratioFor("x", emptyMap(), 0.85), 1e-9)
-        assertEquals("ceiling respected", 3.0, ContextSizeMeter.ratioFor("x", emptyMap(), 2.9), 1e-9)
+        assertEquals("borrowed with the margin under the ceiling", 2.9 * 1.2, ContextSizeMeter.ratioFor("x", emptyMap(), 2.9), 1e-9)
+        assertEquals("ceiling respected", ContextSizeMeter.CALIBRATION_MAX, ContextSizeMeter.ratioFor("x", emptyMap(), 7.5), 1e-9)
         assertEquals("no usage yet", 1.0, ContextSizeMeter.ratioFor("x", emptyMap(), null), 1e-9)
     }
 
@@ -312,12 +317,13 @@ class ContextMeasureOutboundTest {
         val meter = ProductionSources.read("data/ContextPolicy.kt")
         assertTrue(meter.contains("val tokens = letters / 4.5 + digits / 2.0 + asciiOther * 0.35 + nonAscii"))
         assertTrue(meter.contains("const val CALIBRATION_MIN = 0.8"))
-        assertTrue(meter.contains("const val CALIBRATION_MAX = 3.0"))
+        assertTrue(meter.contains("const val CALIBRATION_MAX = 8.0"))
 
         // Both guards judge the measurement; the stale flag is gone.
         assertEquals(2, vm.split("val m = contextMeasurement()\n        val tokens = m.measured").size - 1)
         assertFalse(vm.contains("private var lastTurnContextTokensStale"))
-        assertTrue(vm.contains("val history = ContextSizeMeter.estimateTokens(effectiveAgentHistoryUncounted())"))
+        // [T-ctx-count-reasoning] Replayed reasoning is part of the measured history.
+        assertTrue(vm.contains("val history = ContextSizeMeter.estimateTokens(effectiveAgentHistoryUncounted(), reasoningEchoed())"))
         assertTrue(vm.contains("ContextSizeMeter.calibrated(history + contextFixedTokens, ratio)"))
 
         // In-loop: progress-gated retry; everything else goes through the
@@ -327,19 +333,24 @@ class ContextMeasureOutboundTest {
 
         // Dispatch: estimate recorded on the exact pre-budget history, and it sizes max_tokens.
         val loop = vm.substring(vm.indexOf("suspend fun runAgentLoop"))
-        val record = loop.indexOf("val dispatchInputTokens = recordContextDispatch(outboundHistory, currentProvider.model)")
+        // [T-ctx-builder] Recorded in RequestContextBuilder.build's onOutbound hook, which runs on
+        // the outbound (pre-budget) history before the budget stage.
+        val record = loop.indexOf("dispatchInputTokens = recordContextDispatch(outboundHistory, currentProvider.model)")
         val send = loop.indexOf("currentProvider.streamMessage(")
         assertTrue("dispatch recorded before the provider call", record in 1 until send)
         // [T-scheduled-tool-prefill] One level deeper: the provider request now
         // sits in the non-scripted branch of the turn's chunk source.
-        assertTrue(loop.contains("applyRequestImageBudget(\n                                    outboundHistory,"))
+        assertTrue(loop.contains("val requestContext = RequestContextBuilder.build(requestContextInput()) { outboundHistory ->"))
+        val build = vm.substringAfter("    fun build(input: Input, onOutbound").substringBefore("\n    }\n")
+        assertTrue(build.indexOf("onOutbound(outbound)") in 0 until build.indexOf("applyRequestBudget(outbound, input.resolveAttachmentsRoot)"))
         assertTrue(loop.contains("dynamicMaxTokens(currentProvider, dispatchInputTokens)"))
         assertTrue(loop.contains("lastContextTokens = measureOutboundContextTokens(),"))
         assertTrue(loop.contains("contextFixedTokens = ContextSizeMeter.estimateFixedTokens("))
 
         // Calibration on arrival, persisted under the iOS key names, seeded on load.
         assertTrue(vm.contains("calibrateContextSize(lastContextTokens)"))
-        assertTrue(vm.contains("\"\"\",\"estimatedRequestTokens\":\$est,\"estimatedFixedTokens\":\$fixed\$modelField\"\"\""))
+        // [T-ctx-count-reasoning] Rows say which estimator produced the pair.
+        assertTrue(vm.contains("\"\"\",\"estimatedRequestTokens\":\$est,\"estimatedFixedTokens\":\$fixed\$modelField,\"estimatorVersion\":\${ContextSizeMeter.ESTIMATOR_VERSION}\"\"\""))
         assertTrue("model id travels with the pair", vm.contains("\"calibrationModelId\":"))
         assertEquals("both usage-row writers carry the pair",
             2, vm.split("\${calibrationJsonFields()}}\"\"\"").size - 1)
@@ -356,7 +367,7 @@ class ContextMeasureOutboundTest {
             && vm.contains("sentPastExtrapolatedLimitThisLoop = false"))
         assertTrue("seeding replays the rows through the shared replay",
             vm.contains("ContextSizeMeter.replayCalibration(usageJsons.mapNotNull(ContextSizeMeter::calibrationSample))"))
-        assertTrue(meter.contains("val id = message.dbMessageId ?: return estimateTokens(message)"))
+        assertTrue(meter.contains("val id = message.dbMessageId ?: return estimateTokens(message, includeReasoning)"))
 
         // A pinned model's overflow is recovered by compaction, never by
         // answering from another model (parity with iOS).
@@ -367,12 +378,15 @@ class ContextMeasureOutboundTest {
         assertTrue(vm.contains("val learned = if (sid.isNotEmpty() && calibrationSessionId == sid) {"))
         assertTrue(vm.contains("val state = learned?.let { seeded.carryingOver(it) } ?: seeded"))
 
-        // Warm-up trimming.
-        assertTrue(vm.contains("} ?: trimWarmUpToFit(preAnchorPruned, postAnchor, summaryWrappedText).let { trim ->"))
+        // Warm-up trimming. [T-ctx-builder] In RequestContextBuilder.compacted; the per-marker
+        // cache is ChatViewModel's warmUpDropByMarker, reached through the Compaction callbacks.
+        assertTrue(vm.contains("} ?: trimWarmUpToFit(preAnchorPruned, postAnchor, summaryWrappedText, compaction.warmUpBudget).let { trim ->"))
         assertTrue(vm.contains("result.addAll(warmUp)"))
         assertTrue("warm-up trim is decided once per marker (stable prompt-cache prefix)",
-            vm.contains("val warmUp = warmUpDropByMarker[marker.id]?.let { drop ->")
-                && vm.contains("if (trim.decided) warmUpDropByMarker[marker.id] = preAnchorPruned.size - trim.kept.size"))
+            vm.contains("val warmUp = compaction.cachedWarmUpDrop(marker.id)?.let { drop ->")
+                && vm.contains("if (trim.decided) compaction.recordWarmUpDrop(marker.id, preAnchorPruned.size - trim.kept.size)")
+                && vm.contains("cachedWarmUpDrop = { id -> warmUpDropByMarker[id] },")
+                && vm.contains("recordWarmUpDrop = { id, drop -> warmUpDropByMarker[id] = drop },"))
         assertTrue(vm.contains("if (ContextSizeMeter.estimateTokens(warmUp) + restTokens < budget) return WarmUpTrim(warmUp, decided = true)"))
 
         // The glow follows the measurement after a compaction and on (re)load.

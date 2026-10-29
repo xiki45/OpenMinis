@@ -218,9 +218,11 @@ data class ChatMessage(
         get() = role == "assistant" && isInternalBridgeText(content)
 
     companion object {
-        /** Current bridge wording before a user follow-up injected mid-loop.
-         *  ChatViewModel.injectQueuedPromptsAsNewTurn writes this constant, so
-         *  the two cannot drift apart. */
+        /** Bridge wording older builds put before a user follow-up injected
+         *  mid-loop. [T-bridge-to-reminder] No longer written: an assistant
+         *  line in history is something the model learns to say (iOS sid
+         *  AA40533E: the model wrote this sentence itself, it rendered and was
+         *  saved). Kept so a message carrying it is still recognised. */
         internal const val INTERNAL_BRIDGE_TEXT =
             "(Interrupted mid-task by a new user message. Decide based on the new " +
                 "message and overall context whether the prior task should continue — do " +
@@ -241,9 +243,27 @@ data class ChatMessage(
                 "arrived is not finished yet, continue it now from where you left off; if it is already complete, " +
                 "reply briefly and stop.</system-reminder>"
 
+        /** [T-bridge-to-reminder] No longer written either; the inserted
+         *  envelope's own reminder ([ScheduledTaskMarker.insertionReminder])
+         *  says to resume the unfinished task. */
         internal const val SCHEDULED_INSERT_BRIDGE_TEXT =
             "(Pausing briefly between tool calls: a scheduled task has just fired and is delivered next. " +
                 "I will deal with it, then pick up the task I was working on where I left off.)"
+
+        /**
+         * [T-bridge-to-reminder] Appended as the LAST content part of a user
+         * follow-up injected between two tool steps (the history tail is the
+         * tool_result), in place of the old assistant bridge. User-side and a
+         * <system-reminder>, so the model reads it instead of learning to say
+         * it. Verbatim from iOS `RawMessage.queuedInterruptReminderText`.
+         * Model-facing only: it goes into agentHistory, not the persisted row.
+         */
+        internal const val QUEUED_INTERRUPT_REMINDER_TEXT =
+            "<system-reminder>This note is from the system, not something the user wrote. The user sent the " +
+                "message above while you were in the middle of a task. Decide from that message and the " +
+                "conversation so far whether the earlier task should continue; do not forget or abandon it unless " +
+                "the user explicitly asks you to stop or the message makes clear it is no longer needed. Do not " +
+                "repeat or mention this note.</system-reminder>"
 
         /**
          * Every bridge text this app has ever generated. Matching only the
@@ -288,6 +308,10 @@ data class QueuedPrompt(
      *  <scheduled_task> envelope, and only for PROGRAMMATIC prompts — a user
      *  typing the tag by hand does not become a scheduled fire. */
     val scheduledTaskId: String? = null,
+    /** [T-callback-queued-reminder] The running loop has already told the
+     *  model this finished sub agent callback is waiting; see
+     *  [QueuedCallbackReminder]. In memory only. */
+    val reminderSent: Boolean = false,
 ) {
     val isScheduledFire: Boolean get() = scheduledTaskId != null
 }

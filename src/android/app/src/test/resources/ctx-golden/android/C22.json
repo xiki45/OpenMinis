@@ -1,0 +1,508 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/chart.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "call_r2",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          },
+          {
+            "image": {
+              "base64Len": 48304,
+              "bytes": 36228,
+              "decodable": true,
+              "h": 800,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "f32fc0572c9b1e3f",
+              "w": 1200
+            },
+            "inResultOf": "call_r1",
+            "kind": "image"
+          },
+          {
+            "id": "call_r2",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          },
+          {
+            "image": {
+              "base64Len": 48304,
+              "bytes": 36228,
+              "decodable": true,
+              "h": 800,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "f32fc0572c9b1e3f",
+              "w": 1200
+            },
+            "inResultOf": "call_r2",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/chart.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          },
+          {
+            "image": {
+              "base64Len": 48304,
+              "bytes": 36228,
+              "decodable": true,
+              "h": 800,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "f32fc0572c9b1e3f",
+              "w": 1200
+            },
+            "inResultOf": "fn:read_image",
+            "kind": "image"
+          },
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          },
+          {
+            "image": {
+              "base64Len": 48304,
+              "bytes": 36228,
+              "decodable": true,
+              "h": 800,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "f32fc0572c9b1e3f",
+              "w": 1200
+            },
+            "inResultOf": "fn:read_image",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/chart.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "call_r2",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r2",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by read_image (tool_call_id: call_r1)]"
+          },
+          {
+            "image": {
+              "base64Len": 48304,
+              "bytes": 36228,
+              "decodable": true,
+              "h": 800,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "f32fc0572c9b1e3f",
+              "w": 1200
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by read_image (tool_call_id: call_r2)]"
+          },
+          {
+            "image": {
+              "base64Len": 48304,
+              "bytes": 36228,
+              "decodable": true,
+              "h": 800,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "f32fc0572c9b1e3f",
+              "w": 1200
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/chart.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r2",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r2",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by read_image]"
+          },
+          {
+            "image": {
+              "base64Len": 48304,
+              "bytes": 36228,
+              "decodable": true,
+              "h": 800,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "f32fc0572c9b1e3f",
+              "w": 1200
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by read_image]"
+          },
+          {
+            "image": {
+              "base64Len": 48304,
+              "bytes": 36228,
+              "decodable": true,
+              "h": 800,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "f32fc0572c9b1e3f",
+              "w": 1200
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/chart.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "call_r2",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          },
+          {
+            "id": "call_r2",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/chart.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "fn:read_image",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          },
+          {
+            "id": "fn:read_image",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/chart.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          },
+          {
+            "id": "call_r2",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r2",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "tool"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look at /var/minis/workspace/chart.png"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r2",
+            "kind": "toolUse",
+            "text": "read_image"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r1",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_r2",
+            "kind": "toolResult",
+            "text": "[/var/minis/workspace/chart.png | 1200x800 | 124202 bytes]"
+          }
+        ],
+        "role": "tool"
+      }
+    ]
+  }
+}

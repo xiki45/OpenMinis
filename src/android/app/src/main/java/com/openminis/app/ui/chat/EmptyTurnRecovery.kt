@@ -80,6 +80,25 @@ internal object EmptyTurnRecovery {
         return stopReason == "tool_calls" || stopReason == "tool_use"
     }
 
+    /**
+     * [T-android-empty-turn-this-turn] Whether THIS turn produced visible text.
+     *
+     * The empty-turn gate used to look at the whole bubble (`accumulatedText` and
+     * every block in it). A bubble spans every turn of a run, so once an earlier
+     * turn had written narration or called a tool, a later turn that stopped
+     * with nothing still counted as "has content": no nudge, no hint, and the
+     * run ended silently. Field case: DeepSeek turn 45 (sid 41295a4c) stopped
+     * after reasoning only, in a bubble that already held 40+ tool calls.
+     *
+     * Only this turn's own output decides — its streamed text, plus text blocks
+     * appended since [turnStartBlockIndex]. Tool calls are not counted: this
+     * gate is only reached when the turn made none. Same rule the sub agent
+     * closing request already uses.
+     */
+    fun turnHasText(turnText: String, blocks: List<AssistantBlock>, turnStartBlockIndex: Int): Boolean =
+        turnText.isNotBlank() ||
+            blocks.drop(turnStartBlockIndex.coerceAtLeast(0)).any { it.kind == "text" && it.content.isNotBlank() }
+
     sealed class Plan {
         /**
          * Append [REMINDER] onto the content-part at [tailIndex]/[partIndex] of

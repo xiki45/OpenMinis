@@ -53,6 +53,11 @@ REQUIRED = {
     "ro": {"one", "few", "other"},
     "tr": {"one", "other"},
     "th": {"other"},
+    "it": {"one", "many", "other"},
+    "nl": {"one", "other"},
+    "hu": {"one", "other"},
+    "cs": {"one", "few", "many", "other"},
+    "fa": {"one", "other"},
 }
 
 # Characters that mark a translation as having drifted into the wrong language
@@ -61,6 +66,13 @@ REQUIRED = {
 WRONG_DIACRITICS = {
     "hr": ("ą", "ę", "ł", "ń", "ś", "ź", "ż", "ů", "ě", "ř", "ţ", "ş"),
     "ro": ("ş", "ţ"),  # cedilla forms; Romanian needs comma-below U+0219/U+021B
+    # Czech: no Slovak ä ĺ ľ ŕ ô, no Polish ł ą ę.
+    "cs": ("ä", "ĺ", "ľ", "ŕ", "ô", "ł", "ą", "ę"),
+    # Hungarian long double-acute ő ű, never the circumflex/tilde look-alikes.
+    "hu": ("õ", "û", "ô"),
+    # Persian: Farsi yeh/keheh (U+06CC/U+06A9), never the Arabic look-alikes
+    # yeh/kaf (U+064A/U+0643) or teh marbuta, which break search and sorting.
+    "fa": ("\u064a", "\u0643", "\u0629"),
 }
 
 

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">«%1$s» پوشه‌ای است که Minis در اینجا متصل می‌کند، بنابراین نمی‌توان آن را از مرورگر فایل حذف کرد. چیزی حذف نشد. برای برداشتن پوشهٔ خارجی به تنظیمات › اتصال پوشه‌های خارجی بروید.</string>
+</resources>

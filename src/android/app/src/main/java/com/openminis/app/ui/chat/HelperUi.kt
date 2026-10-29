@@ -393,25 +393,35 @@ internal fun helperControlPayload(block: AssistantBlock): String? {
  */
 @Composable
 internal fun helperControlSummary(block: AssistantBlock): String? {
-    val call = remember(block.toolArgs, block.content) {
-        HelperRunner.classifyCall(block.toolArgs.ifEmpty { null }, block.content.ifEmpty { null })
+    val res = androidx.compose.ui.platform.LocalContext.current.resources
+    return remember(block.toolArgs, block.content, res) {
+        helperControlSummaryText(block) { id, count ->
+            if (count == null) res.getString(id) else res.getString(id, count)
+        }
     }
+}
+
+/**
+ * [T-in-chat-search] The body of [helperControlSummary] without Compose, so
+ * "Search in Chat" searches the capsule line the pill draws, word for word.
+ * [string] resolves a resource id, with the count when the string takes one.
+ */
+internal fun helperControlSummaryText(block: AssistantBlock, string: (id: Int, count: Int?) -> String): String? {
+    val call = HelperRunner.classifyCall(block.toolArgs.ifEmpty { null }, block.content.ifEmpty { null })
     if (call == HelperRunner.SubAgentCall.DELEGATE) return null
-    val count = remember(call, block.content) {
-        HelperRunner.controlCount(call, block.content.ifEmpty { null })
-    }
+    val count = HelperRunner.controlCount(call, block.content.ifEmpty { null })
     return when (call) {
         // The count is what makes the line worth reading — "checked 3" says
         // something "checked sub agents" does not.
         HelperRunner.SubAgentCall.STATUS ->
-            if (count != null) stringResource(R.string.agent_control_checked_n, count)
-            else stringResource(R.string.agent_control_checked)
+            if (count != null) string(R.string.agent_control_checked_n, count)
+            else string(R.string.agent_control_checked, null)
         HelperRunner.SubAgentCall.RESUME ->
-            if (count != null) stringResource(R.string.agent_control_resumed_n, count)
-            else stringResource(R.string.agent_control_resumed)
-        HelperRunner.SubAgentCall.STEER -> stringResource(R.string.agent_control_steered)
-        HelperRunner.SubAgentCall.CANCEL -> stringResource(R.string.agent_control_stopped)
-        else -> stringResource(R.string.agent_control_generic)
+            if (count != null) string(R.string.agent_control_resumed_n, count)
+            else string(R.string.agent_control_resumed, null)
+        HelperRunner.SubAgentCall.STEER -> string(R.string.agent_control_steered, null)
+        HelperRunner.SubAgentCall.CANCEL -> string(R.string.agent_control_stopped, null)
+        else -> string(R.string.agent_control_generic, null)
     }
 }
 
@@ -535,19 +545,72 @@ internal fun HelperToolBlock(
     // stays interrupted until a slot frees, so the tap must not be repeatable.
     var resuming by remember(block.id) { mutableStateOf(false) }
     val accent = helperAccent()
-    val shape = RoundedCornerShape(12.dp)
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .clip(shape)
-            .background(accent.copy(alpha = 0.07f))
-            .border(0.8.dp, accent.copy(alpha = 0.35f), shape)
-            .clickable(onClickLabel = stringResource(R.string.agent_open_detail)) { onOpenDetail(block.id) }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(modifier = Modifier.size(34.dp).clip(CircleShape).background(accent.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
+    // [T-sched-card-metrics] The shared task-card skeleton (TaskCardFrame), so
+    // this card and the scheduled-task card keep identical metrics.
+    val action: (@Composable () -> Unit)? = when {
+        info.phase is HelperPhase.NeverStarted && onStart != null -> {
+            {
+                // A play triangle, not a stop square: this card's work never ran,
+                // and the only useful action is to run it.
+                val startLabel = stringResource(R.string.helper_start)
+                Box(
+                    modifier = Modifier.size(24.dp).clip(CircleShape).background(helperAccent())
+                        .clickable(onClickLabel = startLabel) { onStart() }
+                        .semantics { contentDescription = startLabel },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+        }
+        info.finished?.status == "interrupted" && onResume != null -> {
+            {
+                // [T-android-subagent-card-resume] Same slot as Stop, and its
+                // counterpart: an accent disc with a restart arrow (iOS
+                // arrow.clockwise). Once the run is going again the card turns
+                // Running and Stop takes this slot back by itself.
+                val resumeLabel = stringResource(R.string.helper_resume)
+                Box(
+                    modifier = Modifier.size(24.dp).clip(CircleShape)
+                        .background(helperAccent().copy(alpha = if (resuming) 0.25f else 1f))
+                        .clickable(enabled = !resuming, onClickLabel = resumeLabel) { resuming = onResume() }
+                        .semantics { contentDescription = resumeLabel },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+        }
+        info.isRunning && onStop != null -> {
+            {
+                // Classic stop-recording look: red disc, white rounded square.
+                val stopLabel = stringResource(R.string.helper_stop)
+                Box(
+                    modifier = Modifier.size(24.dp).clip(CircleShape).background(HelperStatusRed)
+                        .clickable(onClickLabel = stopLabel) { onStop() }
+                        .semantics { contentDescription = stopLabel },
+                    contentAlignment = Alignment.Center,
+                ) { Box(Modifier.size(9.dp).clip(RoundedCornerShape(2.dp)).background(Color.White)) }
+            }
+        }
+        else -> null
+    }
+    TaskCardFrame(
+        accent = accent,
+        onClick = { onOpenDetail(block.id) },
+        onClickLabel = stringResource(R.string.agent_open_detail),
+        modifier = modifier,
+        icon = {
             val f = info.finished
             when {
                 // [T-android-subagent-card-metrics] 13, not 15. iOS draws these
@@ -572,85 +635,24 @@ internal fun HelperToolBlock(
                 )
                 else -> Icon(Icons.Default.Groups, contentDescription = null, tint = accent, modifier = Modifier.size(13.dp))
             }
+        },
+        action = action,
+    ) {
+        TaskCardTitleRow {
+            // [T-android-subagent-badge] Name the sub agent once the payload
+            // carries one; the generic label until then. Several agents in
+            // one fan-out all reading "Agent" left the user unable to tell
+            // which card was which.
+            AgentChip(info.agent ?: stringResource(R.string.helper_label))
+            TaskCardTitle(info.title)
         }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                // [T-android-subagent-badge] Name the sub agent once the payload
-                // carries one; the generic label until then. Several agents in
-                // one fan-out all reading "Agent" left the user unable to tell
-                // which card was which.
-                AgentChip(info.agent ?: stringResource(R.string.helper_label))
-                Text(
-                    info.title, fontSize = 13.sp, lineHeight = 14.sp,
-                    fontWeight = FontWeight.Medium, color = ChatColors.primaryText,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-            }
-            HelperSecondLine(info)
-        }
-        Spacer(Modifier.width(4.dp))
-        if (info.phase is HelperPhase.NeverStarted && onStart != null) {
-            // A play triangle, not a stop square: this card's work never ran,
-            // and the only useful action is to run it.
-            val startLabel = stringResource(R.string.helper_start)
-            Box(
-                modifier = Modifier.size(24.dp).clip(CircleShape).background(helperAccent())
-                    .clickable(onClickLabel = startLabel) { onStart() }
-                    .semantics { contentDescription = startLabel },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-        } else if (info.finished?.status == "interrupted" && onResume != null) {
-            // [T-android-subagent-card-resume] Same slot as Stop, and its
-            // counterpart: an accent disc with a restart arrow (iOS
-            // arrow.clockwise). Once the run is going again the card turns
-            // Running and Stop takes this slot back by itself.
-            val resumeLabel = stringResource(R.string.helper_resume)
-            Box(
-                modifier = Modifier.size(24.dp).clip(CircleShape)
-                    .background(helperAccent().copy(alpha = if (resuming) 0.25f else 1f))
-                    .clickable(enabled = !resuming, onClickLabel = resumeLabel) { resuming = onResume() }
-                    .semantics { contentDescription = resumeLabel },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-        } else if (info.isRunning && onStop != null) {
-            // Classic stop-recording look: red disc, white rounded square.
-            val stopLabel = stringResource(R.string.helper_stop)
-            Box(
-                modifier = Modifier.size(24.dp).clip(CircleShape).background(HelperStatusRed)
-                    .clickable(onClickLabel = stopLabel) { onStop() }
-                    .semantics { contentDescription = stopLabel },
-                contentAlignment = Alignment.Center,
-            ) { Box(Modifier.size(9.dp).clip(RoundedCornerShape(2.dp)).background(Color.White)) }
-            Spacer(Modifier.width(8.dp))
-        }
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = ChatColors.tertiaryText, modifier = Modifier.size(16.dp))
+        TaskCardStatusRow { HelperSecondLine(info) }
     }
 }
 
 @Composable
 private fun AgentChip(text: String) {
-    val accent = helperAccent()
-    Text(
-        text, fontSize = 10.sp, lineHeight = 11.sp, fontWeight = FontWeight.SemiBold, color = accent,
-        modifier = Modifier.clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.15f)).padding(horizontal = 5.dp, vertical = 1.dp),
-    )
+    TaskCardChip(text, helperAccent())
 }
 
 @Composable
@@ -942,23 +944,69 @@ internal fun HelperDetailContent(block: AssistantBlock) {
     val info = remember(block.content, block.toolStatus, block.toolTitle) { parseHelperBlock(block) }
     val accent = helperAccent()
     var latestImagePath by remember(info.childSessionId) { mutableStateOf<String?>(null) }
+    // [T-subagent-detail-rich] What the child's session shows of the run (null
+    // until read, and when there is no child), the run's clock, and "now" for
+    // the time-left chip. Port of iOS HelperDetailCard.loadChildFacts.
+    var digest by remember(info.childSessionId) { mutableStateOf<SubAgentRunDigest?>(null) }
+    var clock by remember(info.childSessionId) { mutableStateOf(SubAgentRunClock()) }
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    // Keyed on isRunning too: the run ending restarts this once, so the final
+    // figures (chips, timeline) are read after the last tool call settled.
     LaunchedEffect(info.childSessionId, info.isRunning) {
-        val cid = info.childSessionId ?: return@LaunchedEffect
         while (true) {
+            nowMs = System.currentTimeMillis()
+            clock = SubAgentRunClock.read(info.childSessionId, block)
+            val cid = info.childSessionId ?: break
             // [T-android-vm-store-child-tag-survives-evict] A delegate's child is a
             // sub agent: re-acquire it in the CHILD pool so an evicted child does
             // not come back as NORMAL and push a user chat out of the cache.
             val vm = runCatching {
                 HeadlessChatRunner.viewModelFor(context, cid, ChatViewModelStore.PoolKind.CHILD)
             }.getOrNull()
-            latestImagePath = vm?.messages?.value?.asReversed()?.asSequence()
-                ?.filter { it.role == "assistant" }
-                ?.flatMap { it.toolBlocks.asReversed().asSequence() }
-                ?.mapNotNull { it.imageFilePath?.takeIf { p -> p.isNotEmpty() && java.io.File(p).exists() } }
-                ?.firstOrNull()
+            // While the child's turn streams, its in-flight tool blocks and text
+            // live ONLY in the streaming side-channel; `messages` is rewritten at
+            // turn end. Reading it alone left the running card with no tool
+            // calls and no latest output (device, 2026-10-06). Same merged view
+            // the runner's childLiveMessages uses.
+            // On a cold process the child's session loads asynchronously: read it
+            // only once it is in, or a finished run (read once, then the loop
+            // stops) would keep the empty list for good.
+            vm?.awaitSessionLoaded()
+            val msgs = vm?.let { v ->
+                val canonical = v.messages.value
+                val stream = v.streamingById.value
+                if (stream.isEmpty()) canonical else mergeStreamingOverlay(canonical, stream)
+            }.orEmpty()
+            latestImagePath = msgs.asReversed().asSequence()
+                .filter { it.role == "assistant" }
+                .flatMap { it.toolBlocks.asReversed().asSequence() }
+                .mapNotNull { it.imageFilePath?.takeIf { p -> p.isNotEmpty() && java.io.File(p).exists() } }
+                .firstOrNull()
+            if (vm != null) {
+                val stats = runCatching { vm.loadSessionTokenStats() }.getOrNull()
+                val read = SubAgentRunDigest.from(
+                    msgs,
+                    turns = stats?.loopCount ?: 0,
+                    tokensIn = stats?.input ?: 0L,
+                    tokensOut = stats?.output ?: 0L,
+                )
+                if (read != digest) digest = read
+            }
             if (!info.isRunning) break
-            delay(5_000L)
+            delay(3_000L)
         }
+    }
+    // [T-subagent-detail-rich] The delegation's own arguments (null for a
+    // payload without a task) and the minutes it was granted.
+    val taskArgs = remember(block.toolArgs) { SubAgentTaskArgs.parse(block.toolArgs.ifEmpty { null }) }
+    val budgetMinutes = remember(block.content, taskArgs) {
+        val recorded = runCatching { JSONObject(block.content) }.getOrNull()
+            ?.takeIf { it.has("budget_minutes") }?.optInt("budget_minutes")
+        SubAgentTimeBudget.minutes(
+            recorded = recorded, requested = taskArgs?.maxMinutes, hasArgs = taskArgs != null,
+            defaultMinutes = com.openminis.app.agent.jobs.HelperRunner.DEFAULT_MINUTES,
+            maxMinutes = com.openminis.app.agent.jobs.HelperRunner.MAX_MINUTES,
+        )
     }
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp).padding(top = 12.dp, bottom = 16.dp),
@@ -1003,6 +1051,36 @@ internal fun HelperDetailContent(block: AssistantBlock) {
                 if (f.escalation) add(Triple(stringResource(R.string.agent_detail_escalation), stringResource(R.string.agent_detail_escalation_value), false))
                 if (f.background) add(Triple(stringResource(R.string.agent_detail_delivery), stringResource(R.string.agent_detail_delivery_value), false))
             }
+            // [T-subagent-detail-rich] When it ran, as far as the process
+            // remembers (the registry is in memory; after a restart only the
+            // elapsed time in the title bar is left), and the budget it had.
+            clock.startedAtMs?.let {
+                add(Triple(stringResource(R.string.subagent_detail_started), subAgentClockLabel(it), true))
+            }
+            if (!info.isRunning) clock.finishedAtMs?.let {
+                add(Triple(stringResource(R.string.subagent_detail_finished), subAgentClockLabel(it), true))
+            }
+            budgetMinutes?.let {
+                add(Triple(stringResource(R.string.subagent_detail_time_budget), stringResource(R.string.subagent_detail_minutes, it), false))
+            }
+            // How the result comes back and whether it reports on the way, as
+            // the delegation asked. Background is the runner's default.
+            if (taskArgs != null) {
+                if (f?.background != true) {
+                    add(Triple(
+                        stringResource(R.string.agent_detail_delivery),
+                        stringResource(if (taskArgs.wait == true) R.string.subagent_detail_delivery_wait else R.string.subagent_detail_delivery_background),
+                        false,
+                    ))
+                }
+                taskArgs.progressReport?.takeIf { it != "none" }?.let { level ->
+                    add(Triple(
+                        stringResource(R.string.agent_detail_interaction_progress),
+                        stringResource(if (level == "frequent") R.string.subagent_detail_progress_frequent else R.string.subagent_detail_progress_moderate),
+                        false,
+                    ))
+                }
+            }
             // [T-android-agent-detail-rows] Two facts iOS shows and Android did
             // not. Read straight off the block's payload rather than widened
             // into HelperBlockInfo: they are detail-sheet-only, and the parse
@@ -1023,12 +1101,16 @@ internal fun HelperDetailContent(block: AssistantBlock) {
                 // line, so its shape matters more than its tail.
                 add(Triple(stringResource(R.string.agent_detail_job), job.take(8), true))
             }
+            // [T-subagent-detail-rich] The chips and the timeline already show
+            // tools / turns / tokens from the child's session; the payload's
+            // own line is the fallback for a run whose session could not be read.
+            val chipsCoverIt = digest?.isEmpty == false
             info.runSummary?.split(" · ")?.forEach { part ->
                 val t = part.trim()
                 when {
-                    t.startsWith("tools ") -> add(Triple(stringResource(R.string.agent_detail_tools), t.removePrefix("tools "), true))
-                    t.startsWith("turns ") -> add(Triple(stringResource(R.string.agent_detail_turns), t.removePrefix("turns "), true))
-                    t.startsWith("tokens ") -> add(Triple(stringResource(R.string.agent_detail_tokens), t.removePrefix("tokens "), true))
+                    t.startsWith("tools ") -> if (!chipsCoverIt) add(Triple(stringResource(R.string.agent_detail_tools), t.removePrefix("tools "), true))
+                    t.startsWith("turns ") -> if (!chipsCoverIt) add(Triple(stringResource(R.string.agent_detail_turns), t.removePrefix("turns "), true))
+                    t.startsWith("tokens ") -> if (!chipsCoverIt) add(Triple(stringResource(R.string.agent_detail_tokens), t.removePrefix("tokens "), true))
                     t.isNotEmpty() -> add(Triple(stringResource(R.string.agent_detail_summary), t, false))
                 }
             }
@@ -1083,6 +1165,16 @@ internal fun HelperDetailContent(block: AssistantBlock) {
                 }
             }),
         )
+        // [T-subagent-detail-rich] How much it has done, at a glance.
+        val remainingMs = clock.startedAtMs?.takeIf { info.isRunning }?.let { started ->
+            budgetMinutes?.let { SubAgentTimeBudget.remainingMs(it, started, nowMs) }
+        }
+        digest?.let { d ->
+            if (!d.isEmpty || remainingMs != null) {
+                SubAgentStatChips(d, remainingMs, budgetMinutes = if (info.isRunning) budgetMinutes else null)
+            }
+        }
+        taskArgs?.let { SubAgentTaskCard(it) }
         // 2. current tool (running only)
         (info.phase as? HelperPhase.Running)?.let { p ->
             if (p.tool != null || p.activity.isNotEmpty()) {
@@ -1097,6 +1189,8 @@ internal fun HelperDetailContent(block: AssistantBlock) {
                 }
             }
         }
+        // [T-subagent-detail-rich] Its recent tool calls, newest first.
+        digest?.takeIf { it.total > 0 }?.let { SubAgentToolTimelineCard(it) }
         // 3. latest screenshot
         latestImagePath?.let { path ->
             val bmp = remember(path) { DisplayBitmapLimits.decodeFileBounded(path) }
@@ -1126,6 +1220,11 @@ internal fun HelperDetailContent(block: AssistantBlock) {
         }
         // 4. result / last message — always shown once finished
         val isFinished = f != null
+        // [T-subagent-detail-rich] While it runs the block carries a progress
+        // line, not a message; what the sub agent last wrote is in its session.
+        if (!isFinished && info.result.isNullOrEmpty()) {
+            digest?.latestText?.let { SubAgentLatestOutputCard(it) }
+        }
         if (isFinished || !info.result.isNullOrEmpty()) {
             AgentDetailCard(
                 title = stringResource(if (isFinished) R.string.agent_detail_result else R.string.agent_detail_last_message),
@@ -1135,6 +1234,11 @@ internal fun HelperDetailContent(block: AssistantBlock) {
                 if (!r.isNullOrEmpty()) StreamingMarkdownText(content = r, isStreaming = false)
                 else Text(stringResource(R.string.agent_detail_no_deliverable), fontSize = 13.sp, color = ChatColors.secondaryText)
             }
+        }
+        // [T-subagent-detail-rich] Steer or stop, only while there is a run to act on.
+        val cid = info.childSessionId
+        if (info.isRunning && cid != null) {
+            SubAgentActionsCard(childSessionId = cid, canSteer = clock.jobIsLive)
         }
     }
 }
@@ -1247,7 +1351,13 @@ internal fun AgentCallbackCard(callback: AgentCallback, onTap: () -> Unit, modif
             Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(14.dp))
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(headline, fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, color = ChatColors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // [T-in-chat-search] Only the title part is a unit (iOS callbackHeadline).
+            Text(
+                com.openminis.app.ui.chat.search.rememberChatSearchHighlighted(
+                    headline, com.openminis.app.ui.chat.search.ChatSearchUnits.TITLE, offset = headline.length - callback.title.length,
+                ),
+                fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, color = ChatColors.primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
             Text(subline, fontSize = 12.sp, lineHeight = 15.sp, color = ChatColors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = ChatColors.tertiaryText, modifier = Modifier.size(16.dp))
@@ -1273,6 +1383,12 @@ fun AgentTranscriptScreen(sessionId: String, onBack: () -> Unit) {
     val vm = remember(sessionId) {
         HeadlessChatRunner.viewModelFor(context, sessionId, ChatViewModelStore.PoolKind.CHILD)
     }
+    // [T-new-limits] Not evicted while on screen: this screen never claims
+    // setActiveSession, and other children starting trim the CHILD pool.
+    androidx.compose.runtime.DisposableEffect(sessionId) {
+        val release = ChatViewModelStore.holdWhileViewed(sessionId)
+        onDispose { release() }
+    }
     val isStreaming by vm.isStreaming.collectAsState()
     val jobs by AgentJobRegistry.jobs.collectAsState()
     val job = jobs.values.firstOrNull { it.runSessionId == sessionId }
@@ -1295,6 +1411,8 @@ fun AgentTranscriptScreen(sessionId: String, onBack: () -> Unit) {
         LocalMarkdownBlankTapHandler provides remember(vm) {
             { msgId: String -> vm.toggleUsageCapsule(msgId.substringBefore('#')) }
         },
+        // [T-414-usage-tap-band] Same band rule as the main chat (#414).
+        LocalUsageTapBandRegistry provides remember(vm) { UsageTapBandRegistry() },
     ) {
     Scaffold(
         containerColor = ChatColors.background,
@@ -1424,9 +1542,12 @@ internal fun HelperTranscript(
     // hidden — the same easter egg behaving differently depending on which
     // screen you were on.
     val revealedUsage by vm.revealedUsageIds.collectAsState()
+    // [T-android-row-keys-stable] Same as the main list: rows of a message
+    // seen live here stay split, so the reversed list keeps its anchor.
+    val liveMessageTracker = remember(vm) { LiveMessageTracker() }
     val items = remember(messages, streaming) {
         val merged = if (streaming.isEmpty()) messages else mergeStreamingOverlay(messages, streaming)
-        buildFlatChatItems(merged)
+        buildFlatChatItems(merged, liveMessageIds = liveMessageTracker.update(merged, streaming.keys))
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1442,7 +1563,17 @@ internal fun HelperTranscript(
                 is FlatChatItem.ScheduledTaskCardItem -> ScheduledTaskCard(marker = item.marker)
                 is FlatChatItem.AssistantHeader -> AssistantHeader()
                 is FlatChatItem.AssistantText -> StreamingMarkdownText(content = item.block.content, isStreaming = item.isStreaming)
-                is FlatChatItem.AssistantMarkdownBlock -> StreamingMarkdownText(content = item.rawText, isStreaming = item.isStreaming)
+                // [T-414-usage-tap-band] The band row scope is also what gives
+                // the text its message id here: this transcript passes no shard
+                // id, so before #414 a blank tap never revealed the capsule on
+                // this screen at all.
+                is FlatChatItem.AssistantMarkdownBlock -> UsageTapBandRowScope(
+                    messageId = item.messageId,
+                    inFinalTextBlock = item.inFinalTextBlock,
+                    isLastRow = item.isLastBlockOfMessage,
+                ) {
+                    StreamingMarkdownText(content = item.rawText, isStreaming = item.isStreaming)
+                }
                 // [T-android-thinking-auto-collapse] Same stream signal as the
                 // main chat (ChatScreen.kt) and the legacy renderer: a thinking
                 // block counts as streaming only while it is the trailing block
@@ -1457,6 +1588,9 @@ internal fun HelperTranscript(
                 is FlatChatItem.AssistantToolUse ->
                     if (HelperRunner.isSubAgentToolName(item.block.toolName)) HelperToolBlock(item.block, onOpenDetail = { onOpenDetail(item.block.id) })
                     else ToolCallPill(item.block, allToolBlocks = item.allToolBlocks, onOpenDetail = onOpenDetail)
+                // [T-port-fold-tools] This read-only transcript is never
+                // folded (no ToolFoldController), so no group row reaches it.
+                is FlatChatItem.AssistantToolGroup -> Unit
                 is FlatChatItem.AssistantInfo -> FallbackInfoBlock(item.block)
                 is FlatChatItem.AssistantTyping -> TypingIndicator()
                 is FlatChatItem.AssistantError -> InlineErrorBanner(item.error)
@@ -1466,18 +1600,18 @@ internal fun HelperTranscript(
                     // by MESSAGE, so the suffix would make a re-rendered row
                     // toggle a different id than the one the tap set.
                     val msgId = item.messageId.substringBefore('#')
-                    Box(
+                    // [T-android-usage-capsule-blank-tap-margin] Dismiss-only, exact
+                    // bounds (UsageCapsuleRow); revealing is the text's job.
+                    val shown = msgId in revealedUsage
+                    UsageCapsuleRow(
+                        shown = shown,
+                        onToggle = { vm.toggleUsageCapsule(msgId) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            // Secondary target, matching the main chat: blank
-                            // space in the text above is the primary one.
-                            .heightIn(min = 12.dp)
-                            .pointerInput(msgId) {
-                                detectTapGestures { vm.toggleUsageCapsule(msgId) }
-                            },
+                            .heightIn(min = 12.dp),
                     ) {
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = msgId in revealedUsage,
+                            visible = shown,
                             enter = androidx.compose.animation.fadeIn(),
                             exit = androidx.compose.animation.fadeOut(),
                         ) {
@@ -1485,7 +1619,9 @@ internal fun HelperTranscript(
                         }
                     }
                 }
-                is FlatChatItem.AssistantLegacyContent -> StreamingMarkdownText(content = item.content, isStreaming = item.isStreaming)
+                is FlatChatItem.AssistantLegacyContent -> UsageTapBandRowScope(messageId = item.messageId, inFinalTextBlock = true, isLastRow = true) {
+                    StreamingMarkdownText(content = item.content, isStreaming = item.isStreaming)
+                }
             }
         }
     }

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="usage_range_today">今日</string>
+    <string name="usage_range_7d">7 天</string>
+    <string name="usage_range_30d">30 天</string>
+    <string name="usage_range_all">全部</string>
+    <string name="usage_range_caption_fmt">%1$s · 本地时间</string>
+    <string name="usage_total_tokens">总 token（含缓存）</string>
+    <string name="usage_non_cached_fmt">不含缓存读取 %1$s</string>
+    <string name="usage_daily_avg_fmt">日均 %1$s</string>
+    <string name="usage_active_days_fmt">活跃 %1$d/%2$d 天</string>
+    <string name="usage_seg_input">输入</string>
+    <string name="usage_seg_cache_write">缓存写入</string>
+    <string name="usage_seg_cache_read">缓存读取</string>
+    <string name="usage_seg_output">输出</string>
+    <string name="usage_cache_hit">缓存命中率</string>
+    <string name="usage_cache_basis_fmt">基于 %1$s 的输入</string>
+    <string name="usage_trend">趋势</string>
+    <string name="usage_trend_peak_fmt">最高 %1$s</string>
+    <string name="usage_today_short">今</string>
+    <string name="usage_a11y_chart_fmt">用量图表。总计 %1$s token，最高 %2$s，在 %3$s</string>
+    <string name="usage_dim_provider">服务商</string>
+    <string name="usage_dim_model">模型</string>
+    <string name="usage_merge_models">合并同名</string>
+    <plurals name="usage_n_models">
+        <item quantity="other">%1$d 个模型</item>
+    </plurals>
+    <plurals name="usage_n_providers">
+        <item quantity="other">%1$d 个服务商</item>
+    </plurals>
+    <string name="usage_other_fmt">其他 %1$d 项</string>
+    <string name="usage_removed_instances">已移除的实例</string>
+    <string name="usage_instance_unknown">未记录实例</string>
+    <string name="usage_unknown_provider">未知</string>
+    <string name="usage_unknown_model">模型未知</string>
+    <string name="usage_raw_ids_fmt">原始 ID：%1$s</string>
+    <string name="usage_detail_fresh_input">新鲜输入</string>
+    <string name="usage_empty_all">还没有用量数据。聊天后这里会显示 token 用量。</string>
+    <string name="usage_empty_range">这段时间没有用量</string>
+    <string name="usage_show_all">查看全部</string>
+    <string name="usage_error">无法读取用量</string>
+    <string name="usage_retry">重试</string>
+    <string name="usage_note_retained">统计基于当前保留的聊天记录；删除的会话不计。</string>
+    <string name="usage_note_background">不含标题生成、上下文压缩等后台调用。</string>
+</resources>

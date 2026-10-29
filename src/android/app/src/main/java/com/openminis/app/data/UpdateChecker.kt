@@ -13,7 +13,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.net.ConnectException
@@ -22,25 +21,21 @@ import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
 /**
- * Checks GitHub releases for an APK newer than [BuildConfig.VERSION_NAME] and
+ * Checks GitHub releases for a build newer than the running one and
  * coordinates download → install. iOS has no equivalent (sideloading is not
  * permitted) so this is Android-only.
  *
- * Comparison strategy: strip a leading `v` from `tag_name`, then split both
- * the tag and the local versionName on `.` and compare numerically component
- * by component. A tag like `v1.0.1` beats local `1.0.0`; `v1.0.0-rc1` beats
- * `1.0.0` because the suffix sorts higher under string fallback.
+ * [T-update-channels] One repo, [BuildConfig.RELEASE_REPO]; two channels:
+ *  - stable: non-prerelease releases only (tags `X.Y`);
+ *  - beta: everything, including the prereleases tagged `0-beta-build<N>`.
+ * versionCode (the shared build counter, from the APK name's `-build<N>-` -
+ * the file name is the protocol, there is no latest.json) decides what is
+ * newer; see [UpdatePolicy] for every rule and
+ * [UpdateStateStore] for the cache, throttle and badge this writes.
  */
 object UpdateChecker {
 
     private const val TAG = "UpdateChecker"
-    private const val OWNER = "OpenMinis"
-    // T133: the public repo is OpenMinis/OpenMinis (org + repo share a name).
-    // Previously pointed at OpenMinis/MinisApp, which is the private dev
-    // mirror — every API call 404'd, which we mistranslated as "no release
-    // published". The 0.1-preview release is published as a prerelease on
-    // OpenMinis/OpenMinis with a MinisApp-*.apk asset attached.
-    private const val REPO = "OpenMinis"
     private const val DOWNLOAD_FILENAME = "minis-update.apk"
     /**
      * Sub-directory of `filesDir` where we stage downloaded update APKs. We
@@ -53,19 +48,26 @@ object UpdateChecker {
      */
     private const val UPDATES_DIR = "updates"
 
+    /** Releases per page; pages are fetched until one comes back short. */
+    private const val PER_PAGE = 100
+    private const val MAX_PAGES = 5
+
     sealed class CheckResult {
         data class UpdateAvailable(
             val tagName: String,
             val versionName: String,
+            val versionCode: Int?,
             val releaseName: String,
             val changelog: String,
             val apkUrl: String,
             val apkSizeBytes: Long,
+            val sha256: String?,
+            val releaseUrl: String,
         ) : CheckResult()
         data object UpToDate : CheckResult()
-        // The repo has zero non-draft releases (or 404'd entirely).
+        // The repo has zero usable releases (or 404'd entirely).
         data object NoReleaseAvailable : CheckResult()
-        // A newer release exists but no .apk asset was attached. Distinct
+        // A newer release exists but carries no APK for this device. Distinct
         // from NoReleaseAvailable so the UI can say "newer release exists,
         // but it didn't ship an APK" instead of misleading "no release yet".
         data class NoApkAsset(val tagName: String) : CheckResult()
@@ -83,159 +85,82 @@ object UpdateChecker {
         data class Error(val message: String) : DownloadResult()
     }
 
-    private val client = OkHttpClient.Builder()
+    private val baseClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    // [FEAT-261021-16] Follows the default route in Settings > Network; the
+    // same client object when nothing is configured.
+    private val client: OkHttpClient get() = com.openminis.app.network.NetworkHttp.client(com.openminis.app.network.NetworkHttp.DEFAULT_TAG, baseClient)
+
+    /** One check at a time; an automatic check never starts while any is running. */
+    private val inFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    val isChecking: Boolean get() = inFlight.get()
+
+    private fun UpdateStateStore.Available.toResult() = CheckResult.UpdateAvailable(
+        tagName = tag, versionName = versionName, versionCode = versionCode, releaseName = releaseName,
+        changelog = changelog, apkUrl = apkUrl, apkSizeBytes = apkSize, sha256 = sha256, releaseUrl = releaseUrl,
+    )
+
+    private class HttpFailure(val result: CheckResult) : Exception()
+
     /**
-     * Hit `repos/{owner}/{repo}/releases` (the list endpoint, NOT
-     * `/releases/latest`), pick the highest-version non-draft release that
-     * carries an APK asset, and decide whether the user should upgrade.
-     *
-     * T133: switched from `/releases/latest` to `/releases` because
-     * `/releases/latest` excludes prereleases by GitHub design — our
-     * `0.1 preview` release is flagged as a prerelease, so the old endpoint
-     * 404'd and the UI falsely showed "No release published yet". The list
-     * endpoint includes prereleases; we filter drafts client-side.
+     * Check the current channel now, whatever the throttle says (a manual
+     * check, or an automatic one [UpdateAutoChecker] decided to run), and
+     * write the outcome into [UpdateStateStore]: a 200 or a 304 is a success,
+     * anything else only stamps the attempt.
      *
      * All network work happens on [Dispatchers.IO]; safe to call from any
      * coroutine scope.
      */
-    suspend fun check(): CheckResult = withContext(Dispatchers.IO) {
-        val url = "https://api.github.com/repos/$OWNER/$REPO/releases?per_page=30"
-        AppLogger.info(TAG, "GET $url (local=${BuildConfig.VERSION_NAME})")
+    suspend fun check(context: Context, reason: String = "manual"): CheckResult = withContext(Dispatchers.IO) {
+        UpdateStateStore.init(context)
+        if (!inFlight.compareAndSet(false, true)) {
+            AppLogger.info(TAG, "[UpdateCheck] $reason: a check is already running")
+            // Wait for it rather than firing a second request.
+            while (inFlight.get()) kotlinx.coroutines.delay(100)
+            return@withContext UpdateStateStore.available(context)?.toResult() ?: CheckResult.UpToDate
+        }
         try {
-            val req = Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .build()
-            client.newCall(req).execute().use { resp ->
-                AppLogger.info(TAG, "HTTP ${resp.code}")
-                if (resp.code == 404) {
-                    return@withContext CheckResult.NoReleaseAvailable
-                }
-                // 403 = rate-limit or geo-blocked. 451 = legal block. Both
-                // map to the same "open Releases in browser" hint — there's
-                // nothing the app can do client-side.
-                if (resp.code == 403 || resp.code == 451) {
-                    AppLogger.warning(TAG, "GitHub API ${resp.code} — geo-block or rate-limit")
-                    return@withContext CheckResult.Forbidden
-                }
-                if (!resp.isSuccessful) {
-                    val msg = "GitHub API ${resp.code}"
-                    AppLogger.warning(TAG, msg)
-                    return@withContext CheckResult.Error(msg)
-                }
-                val body = resp.body?.string() ?: return@withContext CheckResult.Error("empty body")
-                val arr = runCatching { JSONArray(body) }.getOrNull()
-                if (arr == null || arr.length() == 0) {
-                    AppLogger.info(TAG, "releases list empty")
-                    return@withContext CheckResult.NoReleaseAvailable
-                }
+            runCheck(context, reason)
+        } finally {
+            inFlight.set(false)
+        }
+    }
 
-                // Build a list of non-draft releases. GitHub already returns
-                // them sorted by created_at desc, but we re-sort by parsed
-                // version number to be robust against odd ordering.
-                data class ReleaseInfo(
-                    val tagName: String,
-                    val versionName: String,
-                    val releaseName: String,
-                    val changelog: String,
-                    val isPrerelease: Boolean,
-                    val apkUrl: String?,
-                    val apkSize: Long,
-                )
-
-                val candidates = mutableListOf<ReleaseInfo>()
-                for (i in 0 until arr.length()) {
-                    val r = arr.optJSONObject(i) ?: continue
-                    if (r.optBoolean("draft", false)) continue
-                    val tag = r.optString("tag_name")
-                    if (tag.isEmpty()) continue
-                    val (apkUrl, apkSize) = findApkAsset(r.optJSONArray("assets"))
-                    candidates += ReleaseInfo(
-                        tagName = tag,
-                        versionName = normalizeTag(tag),
-                        releaseName = r.optString("name").ifEmpty { tag },
-                        changelog = r.optString("body", ""),
-                        isPrerelease = r.optBoolean("prerelease", false),
-                        apkUrl = apkUrl,
-                        apkSize = apkSize,
-                    )
-                }
-                AppLogger.info(
-                    TAG,
-                    "non-draft releases=${candidates.size} (apk-bearing=${candidates.count { it.apkUrl != null }})",
-                )
-                if (candidates.isEmpty()) {
-                    return@withContext CheckResult.NoReleaseAvailable
-                }
-
-                // [T-android-updatechecker-localver-normalize] Normalize the
-                // LOCAL version the same way remote tags are (normalizeTag),
-                // otherwise the comparison is asymmetric: remote "v0.11-preview"
-                // becomes "0.11" but local "0.11-preview" stays raw, and
-                // compareVersions("0.11","0.11-preview") puts "" before
-                // "preview" in the 3rd component → remote judged OLDER → the
-                // user is told they're up to date when they're actually on the
-                // matching version (and a real newer "0.12-preview" → "0.12"
-                // still compares greater, so updates still surface).
-                val localVer = normalizeTag(BuildConfig.VERSION_NAME)
-                // Highest version we've seen at all (used for the "release
-                // exists but is older or equal" → UpToDate decision and for
-                // logging).
-                val highest = candidates.maxWithOrNull(
-                    compareBy { compareVersions(it.versionName, "0") },
-                ) ?: candidates.first()
-                AppLogger.info(
-                    TAG,
-                    "highest-published tag=${highest.tagName} parsed=${highest.versionName} prerelease=${highest.isPrerelease} apk=${highest.apkUrl != null}",
-                )
-
-                // First APK-bearing release with version > local. We pick the
-                // highest such release so a stale older APK never shadows a
-                // newer non-APK preview.
-                val upgradeCandidate = candidates
-                    .filter { it.apkUrl != null }
-                    .filter { compareVersions(it.versionName, localVer) > 0 }
-                    .maxWithOrNull(compareBy { compareVersions(it.versionName, "0") })
-
-                if (upgradeCandidate != null) {
-                    AppLogger.info(
-                        TAG,
-                        "Update available: $localVer → ${upgradeCandidate.versionName} (${upgradeCandidate.tagName})",
-                    )
-                    return@withContext CheckResult.UpdateAvailable(
-                        tagName = upgradeCandidate.tagName,
-                        versionName = upgradeCandidate.versionName,
-                        releaseName = upgradeCandidate.releaseName,
-                        changelog = upgradeCandidate.changelog,
-                        apkUrl = upgradeCandidate.apkUrl!!,
-                        apkSizeBytes = upgradeCandidate.apkSize,
-                    )
-                }
-
-                // No newer-with-APK candidate exists. Decide between three
-                // remaining states:
-                //   1. Highest release ≤ local version → UpToDate.
-                //   2. Highest release > local but no APK in the listing →
-                //      NoApkAsset (mention the tag so the user can grab the
-                //      release manually if they really want).
-                //   3. Otherwise (all releases ≤ local) → UpToDate as well.
-                val highestVsLocal = compareVersions(highest.versionName, localVer)
-                if (highestVsLocal > 0 && highest.apkUrl == null) {
-                    AppLogger.info(
-                        TAG,
-                        "Release ${highest.tagName} > local but no APK asset",
-                    )
-                    return@withContext CheckResult.NoApkAsset(highest.tagName)
-                }
-
-                AppLogger.info(TAG, "Up to date: local=$localVer highest=${highest.versionName}")
-                CheckResult.UpToDate
+    private fun runCheck(context: Context, reason: String): CheckResult {
+        val channel = UpdateStateStore.channel.value
+        val localCode = BuildConfig.VERSION_CODE
+        val localName = BuildConfig.VERSION_NAME
+        val now = System.currentTimeMillis()
+        UpdateStateStore.beginAttempt(context, now, channel, localCode)
+        val etag = UpdateStateStore.etag(context)
+        AppLogger.info(
+            TAG,
+            "[UpdateCheck] request reason=$reason channel=${channel.id} local=$localName ($localCode) repo=${BuildConfig.RELEASE_REPO} etag=${etag != null}",
+        )
+        return try {
+            val page1 = fetchPage(1, etag)
+            if (page1 == null) {
+                // 304: nothing changed since the cached result.
+                AppLogger.info(TAG, "[UpdateCheck] 304 not modified")
+                UpdateStateStore.markSuccess(context, now, etag, null, notModified = true)
+                return UpdateStateStore.available(context)?.toResult() ?: CheckResult.UpToDate
             }
+            val releases = page1.second.toMutableList()
+            var page = 1
+            var lastSize = page1.second.size
+            while (lastSize >= PER_PAGE && page < MAX_PAGES) {
+                page++
+                val more = fetchPage(page, null)?.second ?: break
+                releases += more
+                lastSize = more.size
+            }
+            decide(context, now, page1.first, releases, channel, localName, localCode)
+        } catch (f: HttpFailure) {
+            f.result
         } catch (e: UnknownHostException) {
             AppLogger.error(TAG, "check failed: UnknownHostException: ${e.message}")
             CheckResult.NetworkUnreachable
@@ -257,36 +182,113 @@ object UpdateChecker {
         }
     }
 
+    /**
+     * One page of the release list, newest first: (ETag, releases), or null
+     * for a 304. A 404 is an empty list.
+     */
+    private fun fetchPage(page: Int, etag: String?): Pair<String?, List<UpdatePolicy.Release>>? {
+        val url = "https://api.github.com/repos/${BuildConfig.RELEASE_REPO}/releases?per_page=$PER_PAGE&page=$page"
+        val b = Request.Builder()
+            .url(url)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+        if (etag != null) b.header("If-None-Match", etag)
+        client.newCall(b.build()).execute().use { resp ->
+            AppLogger.info(TAG, "GET releases page=$page HTTP ${resp.code}")
+            if (resp.code == 304) return null
+            if (resp.code == 404) return null to emptyList()
+            // 403 = rate-limit or geo-blocked. 451 = legal block. Both map to
+            // the same "open Releases in browser" hint.
+            if (resp.code == 403 || resp.code == 451) {
+                AppLogger.warning(TAG, "GitHub API ${resp.code} — geo-block or rate-limit")
+                throw HttpFailure(CheckResult.Forbidden)
+            }
+            if (!resp.isSuccessful) {
+                AppLogger.warning(TAG, "GitHub API ${resp.code}")
+                throw HttpFailure(CheckResult.Error("GitHub API ${resp.code}"))
+            }
+            val body = resp.body?.string() ?: throw HttpFailure(CheckResult.Error("empty body"))
+            val arr = runCatching { JSONArray(body) }.getOrNull() ?: throw HttpFailure(CheckResult.Error("bad JSON"))
+            return resp.header("ETag") to parseReleases(arr)
+        }
+    }
+
+    internal fun parseReleases(arr: JSONArray): List<UpdatePolicy.Release> {
+        val out = mutableListOf<UpdatePolicy.Release>()
+        for (i in 0 until arr.length()) {
+            val r = arr.optJSONObject(i) ?: continue
+            val tag = r.optString("tag_name")
+            if (tag.isEmpty()) continue
+            val assets = mutableListOf<UpdatePolicy.Asset>()
+            val ja = r.optJSONArray("assets")
+            for (j in 0 until (ja?.length() ?: 0)) {
+                val a = ja!!.optJSONObject(j) ?: continue
+                val url = a.optString("browser_download_url").ifEmpty { null } ?: continue
+                // GitHub reports "digest": "sha256:<hex>" for every asset; absent -> no check.
+                val sha = UpdatePolicy.parseDigest(a.optString("digest", "").ifEmpty { null })
+                assets += UpdatePolicy.Asset(a.optString("name"), url, a.optLong("size", 0), sha)
+            }
+            out += UpdatePolicy.Release(
+                tag = tag,
+                name = r.optString("name").ifEmpty { tag },
+                prerelease = r.optBoolean("prerelease", false),
+                draft = r.optBoolean("draft", false),
+                body = r.optString("body", ""),
+                assets = assets,
+                htmlUrl = r.optString("html_url", ""),
+            )
+        }
+        return out
+    }
+
+    private fun decide(
+        context: Context,
+        now: Long,
+        etag: String?,
+        releases: List<UpdatePolicy.Release>,
+        channel: UpdatePolicy.Channel,
+        localName: String,
+        localCode: Int,
+    ): CheckResult {
+        val abis = Build.SUPPORTED_ABIS.toList()
+        val eligible = releases.filter { UpdatePolicy.eligible(it, channel) }
+        AppLogger.info(TAG, "[UpdateCheck] releases=${releases.size} eligible=${eligible.size} channel=${channel.id}")
+        if (eligible.isEmpty()) {
+            UpdateStateStore.markSuccess(context, now, etag, null, notModified = false)
+            return CheckResult.NoReleaseAvailable
+        }
+        val candidates = eligible.mapNotNull { UpdatePolicy.toCandidate(it, abis) }
+        val chosen = UpdatePolicy.pickUpdate(candidates, channel, localName, localCode)
+        if (chosen != null) {
+            val available = UpdateStateStore.Available(
+                tag = chosen.tag, versionName = chosen.versionName, versionCode = chosen.versionCode,
+                apkUrl = chosen.apk.url, apkSize = chosen.apk.size, sha256 = chosen.apk.sha256,
+                changelog = chosen.changelog, releaseName = chosen.releaseName, releaseUrl = chosen.htmlUrl,
+            )
+            UpdateStateStore.markSuccess(context, now, etag, available, notModified = false)
+            AppLogger.info(
+                TAG,
+                "[UpdateCheck] update available: ${UpdatePolicy.displayVersion(localName, localCode)} -> " +
+                    "${UpdatePolicy.displayVersion(chosen.versionName, chosen.versionCode)} tag=${chosen.tag} apk=${chosen.apk.name}",
+            )
+            return available.toResult()
+        }
+        UpdateStateStore.markSuccess(context, now, etag, null, notModified = false)
+        // A newer stable by name that ships no APK for this device.
+        val noApk = eligible.firstOrNull { r ->
+            !r.prerelease && UpdatePolicy.compareVersionNames(r.tag, localName) > 0 &&
+                UpdatePolicy.chooseApk(r.assets, abis) == null
+        }
+        if (noApk != null && channel == UpdatePolicy.Channel.STABLE) {
+            AppLogger.info(TAG, "[UpdateCheck] ${noApk.tag} is newer but has no APK for $abis")
+            return CheckResult.NoApkAsset(noApk.tag)
+        }
+        AppLogger.info(TAG, "[UpdateCheck] up to date: ${UpdatePolicy.displayVersion(localName, localCode)} channel=${channel.id}")
+        return CheckResult.UpToDate
+    }
+
     /** Public so UI can deep-link users to manual download when GitHub is blocked. */
     const val RELEASES_URL: String = "https://github.com/OpenMinis/OpenMinis/releases"
-
-    /** Returns (downloadUrl, sizeBytes) for the first .apk asset, or (null, 0). */
-    private fun findApkAsset(assets: JSONArray?): Pair<String?, Long> {
-        if (assets == null) return null to 0L
-        for (i in 0 until assets.length()) {
-            val a = assets.optJSONObject(i) ?: continue
-            val name = a.optString("name").lowercase()
-            if (name.endsWith(".apk")) {
-                val u = a.optString("browser_download_url").ifEmpty { null }
-                if (u != null) return u to a.optLong("size", 0)
-            }
-        }
-        return null to 0L
-    }
-
-    /**
-     * Strip the leading `v` and any `-preview` / `-rc1` / etc. trailing
-     * label so the numeric comparator keeps `0.1` and `0.1-preview`
-     * treated as equivalent. Without this, "0.1 (local) vs 0.1-preview
-     * (remote)" reported the remote as newer because the trailing token
-     * fell into string comparison.
-     */
-    private fun normalizeTag(tag: String): String {
-        val trimmed = tag.trim().removePrefix("v").removePrefix("V")
-        // "0.1-preview" → "0.1"; "0.1.0" → "0.1.0"; "1.2.3-rc1" → "1.2.3"
-        val dashIdx = trimmed.indexOf('-')
-        return if (dashIdx > 0) trimmed.substring(0, dashIdx) else trimmed
-    }
 
     /**
      * Stream the APK from [url] into `${cacheDir}/shared/minis-update.apk`,
@@ -300,6 +302,9 @@ object UpdateChecker {
         context: Context,
         url: String,
         versionName: String? = null,
+        versionCode: Int? = null,
+        // [T-update-channels] GitHub's asset digest; checked when present, skipped when not.
+        expectedSha256: String? = null,
         onProgress: (Float) -> Unit = {},
     ): DownloadResult = withContext(Dispatchers.IO) {
         try {
@@ -355,11 +360,17 @@ object UpdateChecker {
             val sha = runCatching { PendingUpdateStore.sha256(outFile) }
                 .onFailure { AppLogger.warning(TAG, "sha256 compute failed: ${it.message}") }
                 .getOrNull()
+            if (expectedSha256 != null && !expectedSha256.equals(sha, ignoreCase = true)) {
+                AppLogger.error(TAG, "[UpdateCheck] sha256 mismatch - discarding the download")
+                outFile.delete()
+                return@withContext DownloadResult.Error(context.getString(com.openminis.app.R.string.check_update_verify_failed))
+            }
             if (versionName != null) {
                 PendingUpdateStore.setPending(
                     context,
                     PendingUpdateStore.PendingUpdate(
                         targetVersionName = versionName,
+                        targetVersionCode = versionCode,
                         apkPath = outFile.absolutePath,
                         apkSize = outFile.length(),
                         sha256 = sha,
@@ -421,10 +432,11 @@ object UpdateChecker {
         // Only resume if the persisted target is still newer than the running
         // build — protects against the case where the user updated by some
         // other means since the download.
-        // [T-android-updatechecker-localver-normalize] targetVersionName is a
-        // normalized version (set from upgradeCandidate.versionName), so the
-        // local side must be normalized too — same asymmetry fix as check().
-        if (compareVersions(pending.targetVersionName, normalizeTag(BuildConfig.VERSION_NAME)) <= 0) {
+        // [T-update-channels] The build number decides when the download
+        // recorded one; older records fall back to the version names.
+        val stale = pending.targetVersionCode?.let { it <= BuildConfig.VERSION_CODE }
+            ?: (UpdatePolicy.compareVersionNames(pending.targetVersionName, BuildConfig.VERSION_NAME) <= 0)
+        if (stale) {
             AppLogger.info(TAG, "pending target ${pending.targetVersionName} <= local; clearing")
             PendingUpdateStore.clearPending(context)
             return null
@@ -438,7 +450,35 @@ object UpdateChecker {
         return file
     }
 
+    /**
+     * [T-update-channels] Why [apk] must not be installed, read from the
+     * archive itself: another package, or not newer than what is installed.
+     * Null when it may go to the installer. The name, the release and the
+     * digest all said it was right; this is the check that cannot be fooled
+     * by a mislabelled asset.
+     */
+    fun archiveRefusal(context: Context, apk: File): String? {
+        val info = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.packageManager.getPackageArchiveInfo(apk.absolutePath, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
+            }
+        }.getOrNull()
+        val code = info?.let { if (Build.VERSION.SDK_INT >= 28) it.longVersionCode else @Suppress("DEPRECATION") it.versionCode.toLong() }
+        val refusal = UpdatePolicy.archiveRefusal(info?.packageName, code, context.packageName, BuildConfig.VERSION_CODE.toLong())
+        AppLogger.info(TAG, "[UpdateCheck] archive package=${info?.packageName} versionCode=$code refusal=$refusal")
+        return refusal
+    }
+
     fun installApk(context: Context, apk: File): Boolean {
+        if (archiveRefusal(context, apk) != null) {
+            // Never install it; drop it so a resume does not try again.
+            PendingUpdateStore.clearPending(context)
+            apk.delete()
+            return false
+        }
         return try {
             val authority = "${context.packageName}.fileprovider"
             val uri = FileProvider.getUriForFile(context, authority, apk)
@@ -459,25 +499,5 @@ object UpdateChecker {
             AppLogger.error(TAG, "installApk failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
-    }
-
-    /**
-     * Numeric-aware version comparator. `1.0.10` beats `1.0.9`. Non-numeric
-     * components fall back to lexicographic compare so a `1.0.0-rc1` build is
-     * treated as "newer than 1.0.0" — acceptable noise for our use case.
-     */
-    private fun compareVersions(a: String, b: String): Int {
-        val ap = a.split('.', '-')
-        val bp = b.split('.', '-')
-        val n = maxOf(ap.size, bp.size)
-        for (i in 0 until n) {
-            val x = ap.getOrNull(i) ?: ""
-            val y = bp.getOrNull(i) ?: ""
-            val xi = x.toIntOrNull()
-            val yi = y.toIntOrNull()
-            val c = if (xi != null && yi != null) xi.compareTo(yi) else x.compareTo(y)
-            if (c != 0) return c
-        }
-        return 0
     }
 }

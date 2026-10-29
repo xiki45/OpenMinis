@@ -56,6 +56,13 @@ class BrowserUseManager(
         private const val DEFAULT_DOM_STABLE_TIMEOUT_MS = 5_000
 
         /**
+         * [T-android-js-error-detail] Completes execute_js's deferred when the
+         * wrapped script never ran (it does not parse). The NUL keeps it apart
+         * from anything a page script can resolve with.
+         */
+        private const val EXECUTE_JS_DID_NOT_PARSE = "\u0000minis:execute_js-did-not-parse"
+
+        /**
          * Cap full_page screenshot stretched viewport at 32768 px. Above this,
          * Bitmap.createBitmap risks OOM (e.g. 32768 × ~1130 px × 4 B/ARGB ≈ 144 MB
          * at desktop 1280 CSS × 2.75 density). Pages taller than the cap are
@@ -165,7 +172,20 @@ class BrowserUseManager(
     private val _canGoForward = MutableStateFlow(false)
     val canGoForward: StateFlow<Boolean> = _canGoForward.asStateFlow()
 
-    private var currentProfile: UserAgentProfile = profile
+    // [ISS-033] This tab's own profile. Exposed so the browser panel shows the
+    // selected tab's mode, which set_user_agent can make differ from the default.
+    private val _profile = MutableStateFlow(profile)
+    val profileFlow: StateFlow<UserAgentProfile> = _profile.asStateFlow()
+    private var currentProfile: UserAgentProfile
+        get() = _profile.value
+        set(value) { _profile.value = value }
+
+    /**
+     * [ISS-033] Session / global custom viewport, or null for the profile's
+     * own size. Set by [BrowserTabPool] so set_user_agent keeps the usual
+     * precedence (session > global custom > profile default).
+     */
+    var viewportOverride: () -> Pair<Int, Int>? = { null }
 
     /** Callback for window.open / target="_blank" — TabPool hooks this. */
     var onNewWindow: ((Message) -> Unit)? = null
@@ -402,6 +422,13 @@ class BrowserUseManager(
 
     private fun setupWebViewClient() {
         webView.webViewClient = object : WebViewClient() {
+            // [T-net-android-phase3] Settings > Network: answer the local entry's
+            // proxy challenge (WebViewNetworkProxy); any other auth request as before.
+            override fun onReceivedHttpAuthRequest(view: android.webkit.WebView?, handler: android.webkit.HttpAuthHandler?, host: String?, realm: String?) {
+                if (handler != null && com.openminis.app.network.WebViewNetworkProxy.answerAuth(handler, host, realm, view?.url)) return
+                super.onReceivedHttpAuthRequest(view, handler, host, realm)
+            }
+
             // [T-android-webview-render-process-gone] (GH#341) Nothing here
             // owns a teardown routine the way the Katex pool and WebViewHolder
             // do, so we only mark the tab unusable and let the pool replace it.
@@ -750,7 +777,7 @@ class BrowserUseManager(
             BrowserAction.FIND_ELEMENTS -> return findElements(input.selector)
             BrowserAction.HOVER -> hover(input.selector)
             BrowserAction.GET_READABLE -> return getReadable()
-            BrowserAction.SET_USER_AGENT -> return setUserAgent(input.userAgent)
+            BrowserAction.SET_USER_AGENT -> return setUserAgent(input.userAgent, input.userAgentRaw)
             BrowserAction.SET_VIEWPORT ->
                 return BrowserActionResult.error("set_viewport must be routed through BrowserTabPool")
             BrowserAction.GET_BACKBONE -> return getBackbone(input.maxDepth)
@@ -1244,12 +1271,18 @@ class BrowserUseManager(
                             __minis__.resolve(String(__v__));
                         }
                     } catch(e) {
-                        __minis__.reject(e.message || String(e));
+                        __minis__.reject(${BrowserUseJS.SCRIPT_THREW_JS});
                     }
                 })();
             """.trimIndent()
             withContext(Dispatchers.Main) {
-                webView.evaluateJavascript(wrapped, null)
+                // [T-android-js-error-detail] The wrapper evaluates to a
+                // Promise (the callback gets "{}"). A null means it never
+                // ran: the user script does not parse, the bridge will never
+                // be called, and the caller used to wait out the full 30s.
+                webView.evaluateJavascript(wrapped) { value ->
+                    if (BrowserJSResult.decode(value) == null) deferred.complete(EXECUTE_JS_DID_NOT_PARSE)
+                }
             }
             val raw = withTimeoutOrNull(30_000L) { deferred.await() }
                 ?: run {
@@ -1257,6 +1290,14 @@ class BrowserUseManager(
                     return BrowserActionResult.error("JavaScript execution timed out (30s)")
                 }
             asyncJsDeferred = null
+            if (raw == EXECUTE_JS_DID_NOT_PARSE) {
+                val detail = try {
+                    evaluateJavascriptValue(BrowserUseJS.syntaxCheck(script))
+                } catch (_: Exception) {
+                    null
+                }
+                return BrowserActionResult.error(BrowserJSResult.syntaxErrorMessage(detail))
+            }
             val json = try { JSONObject(raw) } catch (_: Exception) { null }
             if (json != null) {
                 if (json.has("error")) {
@@ -1291,18 +1332,7 @@ class BrowserUseManager(
 
     private suspend fun getBackbone(maxDepth: Int?): BrowserActionResult {
         val depth = maxDepth ?: 5
-        val js = BrowserUseJS.getBackbone(depth)
-        val raw = evaluateJavascript(js)
-        return try {
-            val json = JSONObject(raw)
-            if (json.has("error")) {
-                BrowserActionResult.error(json.getString("error"))
-            } else {
-                BrowserActionResult(text = formatBackboneResult(json))
-            }
-        } catch (e: Exception) {
-            BrowserActionResult.error("JavaScript error: ${e.message}")
-        }
+        return evaluateActionScript(BrowserUseJS.getBackbone(depth)) { BrowserActionResult(text = formatBackboneResult(it)) }
     }
 
     // -- Fetch --
@@ -1457,8 +1487,20 @@ class BrowserUseManager(
         applyShrinkToFit(cssWidth)
     }
 
-    private suspend fun setUserAgent(profile: UserAgentProfile?): BrowserActionResult {
-        val newProfile = profile ?: UserAgentProfile.MOBILE_CHROME
+    /**
+     * [ISS-033] set_user_agent switches THIS tab only: nothing is persisted,
+     * the default in Browser Settings and the other tabs are untouched, and a
+     * rebuilt tab starts from the default again. A missing or unknown value is
+     * an error (it used to fall back to mobile silently).
+     */
+    private suspend fun setUserAgent(profile: UserAgentProfile?, raw: String?): BrowserActionResult {
+        if (profile == null || profile == UserAgentProfile.CUSTOM) {
+            return BrowserActionResult.error(
+                "set_user_agent needs user_agent desktop_chrome or mobile_chrome (aliases: desktop, mobile); " +
+                    "got ${raw?.let { "'$it'" } ?: "nothing"}",
+            )
+        }
+        val newProfile = profile
         currentProfile = newProfile
         val ua = newProfile.userAgentString
         // Every WebView method must be called on the main thread, but the
@@ -1470,14 +1512,18 @@ class BrowserUseManager(
             if (ua != null) {
                 webView.settings.userAgentString = ua
             }
-            applyViewport()
+            val (vw, vh) = viewportOverride() ?: newProfile.viewportSize
+            applyViewport(vw, vh)
             val oldUrl = _currentURL.value
             if (oldUrl.isNotEmpty()) {
                 webView.reload()
             }
         }
-        val vp = newProfile.viewportSize
-        return BrowserActionResult(text = "Switched to ${newProfile.value} (${vp.first}x${vp.second})")
+        val vp = viewportOverride() ?: newProfile.viewportSize
+        return BrowserActionResult(
+            text = "Switched this tab to ${newProfile.value} (${vp.first}x${vp.second}). Other tabs and the default " +
+                "in Browser Settings are unchanged; a tab opened or rebuilt later uses the default.",
+        )
     }
 
     // -- User Navigation --
@@ -1580,65 +1626,64 @@ class BrowserUseManager(
     private suspend fun evaluateJavascript(
         js: String,
         timeoutMs: Long = BrowserActionGuard.JS_EVAL_TIMEOUT_MS,
-    ): String {
+    ): String = evaluateJavascriptValue(js, timeoutMs) ?: "null"
+
+    /**
+     * [T-android-js-error-detail] [evaluateJavascript] without folding JS
+     * null into the string "null": returns `null` when the script evaluated
+     * to null/undefined or threw (Android reports both the same way), so the
+     * action scripts can tell "failed" from a result. See [BrowserJSResult].
+     */
+    private suspend fun evaluateJavascriptValue(
+        js: String,
+        timeoutMs: Long = BrowserActionGuard.JS_EVAL_TIMEOUT_MS,
+    ): String? {
         if (isRendererDead) throw WebViewWedgedException("browser tab renderer process died")
         val deferred = CompletableDeferred<String>()
         withContext(Dispatchers.Main) {
-            webView.evaluateJavascript(js) { result ->
-                // Android WebView returns JSON-encoded strings, so unquote
-                val unquoted = if (result != null && result.startsWith("\"") && result.endsWith("\"")) {
-                    try {
-                        JSONObject("{\"v\":$result}").getString("v")
-                    } catch (_: Exception) {
-                        result
-                    }
-                } else {
-                    result ?: "null"
-                }
-                deferred.complete(unquoted)
-            }
+            webView.evaluateJavascript(js) { result -> deferred.complete(result ?: "null") }
         }
-        return withTimeoutOrNull(timeoutMs) { deferred.await() } ?: run {
+        val raw = withTimeoutOrNull(timeoutMs) { deferred.await() } ?: run {
             markWedged("evaluateJavascript got no callback within ${timeoutMs / 1000}s")
             throw WebViewWedgedException(
                 "browser tab stopped responding (JS evaluation timed out after ${timeoutMs / 1000}s)",
             )
         }
+        // Android WebView returns JSON-encoded strings, so unquote
+        return BrowserJSResult.decode(raw)
     }
 
-    private suspend fun evaluateAndReturn(js: String): BrowserActionResult {
-        return try {
-            val raw = evaluateJavascript(js)
-            val json = try { JSONObject(raw) } catch (_: Exception) { null }
-            if (json != null) {
-                if (json.has("error")) {
-                    BrowserActionResult.error(json.getString("error"))
-                } else {
-                    BrowserActionResult(text = formatJSONResult(json))
-                }
-            } else {
-                BrowserActionResult(text = raw)
-            }
+    private suspend fun evaluateAndReturn(js: String): BrowserActionResult =
+        evaluateActionScript(js) { BrowserActionResult(text = formatJSONResult(it)) }
+
+    private suspend fun evaluateJSAndParse(js: String): BrowserActionResult =
+        evaluateActionScript(js) { BrowserActionResult(text = formatJSONResult(it)) }
+
+    /**
+     * [T-android-js-error-detail] Runs a [BrowserUseJS] action script, which
+     * must return a JSON string: `{error}` → that error, a JSON object →
+     * [onJson], other text → passed through, and nothing at all (it threw,
+     * swallowed by WebView) → [BrowserJSResult.NO_RESULT_ERROR] instead of
+     * the success text "null".
+     */
+    private suspend fun evaluateActionScript(
+        js: String,
+        onJson: (JSONObject) -> BrowserActionResult,
+    ): BrowserActionResult {
+        val decoded = try {
+            evaluateJavascriptValue(js)
         } catch (e: Exception) {
-            BrowserActionResult.error("JavaScript error: ${e.message}")
+            return BrowserActionResult.error("JavaScript error: ${e.message}")
         }
-    }
-
-    private suspend fun evaluateJSAndParse(js: String): BrowserActionResult {
-        return try {
-            val raw = evaluateJavascript(js)
-            val json = try { JSONObject(raw) } catch (_: Exception) { null }
-            if (json != null) {
-                if (json.has("error")) {
-                    BrowserActionResult.error(json.getString("error"))
-                } else {
-                    BrowserActionResult(text = formatJSONResult(json))
-                }
-            } else {
-                BrowserActionResult(text = raw)
+        return when (val outcome = BrowserJSResult.classify(decoded)) {
+            BrowserJSResult.Outcome.NoResult -> BrowserActionResult.error(BrowserJSResult.NO_RESULT_ERROR)
+            is BrowserJSResult.Outcome.ScriptError -> BrowserActionResult.error(outcome.message)
+            is BrowserJSResult.Outcome.Json -> try {
+                onJson(outcome.json)
+            } catch (e: Exception) {
+                BrowserActionResult.error("JavaScript error: ${e.message}")
             }
-        } catch (e: Exception) {
-            BrowserActionResult.error("JavaScript error: ${e.message}")
+            is BrowserJSResult.Outcome.Text -> BrowserActionResult(text = outcome.text)
         }
     }
 

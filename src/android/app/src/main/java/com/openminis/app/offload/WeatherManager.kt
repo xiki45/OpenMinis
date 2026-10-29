@@ -16,13 +16,17 @@ object WeatherManager {
     private const val TAG = "WeatherManager"
     private const val BASE_URL = "https://api.open-meteo.com/v1/forecast"
 
-    private val client = OkHttpClient.Builder()
+    private val baseClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .callTimeout(12, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .connectionPool(okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
         .build()
+
+    // [FEAT-261021-16] Follows the default route in Settings > Network; the
+    // same client object when nothing is configured.
+    private val client: OkHttpClient get() = com.openminis.app.network.NetworkHttp.client(com.openminis.app.network.NetworkHttp.DEFAULT_TAG, baseClient)
 
     /**
      * Fetch weather for the given coordinates.

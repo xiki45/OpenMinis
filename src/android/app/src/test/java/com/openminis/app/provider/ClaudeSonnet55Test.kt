@@ -85,8 +85,12 @@ class ClaudeSonnet55Test {
         for (id in listOf("claude-sonnet-5-5", "claude-sonnet-5")) {
             assertTrue("$id rejects temperature", AnthropicProvider.modelRejectsTemperature(id))
             assertTrue("$id uses adaptive thinking", AnthropicProvider.modelUsesAdaptiveThinking(id))
-            assertFalse("$id 400s on thinking.type=disabled", AnthropicProvider.modelAcceptsExplicitThinkingDisabled(id))
         }
+        // [T-claude5-thinking-off] "Thinking off" is the one place they differ
+        // (Anthropic's per-model table): Sonnet 5.5 400s on `disabled` and takes
+        // `between_tools`; Sonnet 5 accepts `disabled`.
+        assertEquals(AnthropicProvider.OffThinking.BETWEEN_TOOLS, AnthropicProvider.offThinking("claude-sonnet-5-5"))
+        assertEquals(AnthropicProvider.OffThinking.DISABLED, AnthropicProvider.offThinking("claude-sonnet-5"))
     }
 
     private fun anthropicBody(model: LLMModel, level: ThinkingLevel): JSONObject {
@@ -130,8 +134,13 @@ class ClaudeSonnet55Test {
     }
 
     @Test
-    fun `off sends no disabled literal`() {
+    fun `off sends between_tools - never the disabled literal, never an absent field`() {
+        // [T-claude5-thinking-off] An absent field thinks at the default high
+        // effort on Sonnet 5.5 (iOS: voice correction timed out on it), and
+        // `disabled` 400s; `between_tools` is its documented lowest setting.
         val body = anthropicBody(sonnet55, ThinkingLevel.OFF)
+        assertEquals("between_tools", body.optJSONObject("thinking")?.optString("type"))
+        assertFalse("no effort with between_tools", body.has("output_config"))
         assertNotEquals("disabled", body.optJSONObject("thinking")?.optString("type"))
     }
 

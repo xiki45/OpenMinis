@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- [T-search-folder-expand] Folder card count line in a search result set (translations from the iOS catalog). -->
+    <string name="sessionlist_folder_matching_chats">%1$d matching chats</string>
+    <!-- [T-search-folder-collapse] Count line of a result folder folded for this search. -->
+    <string name="sessionlist_folder_matches_hidden">%1$d matches hidden</string>
+</resources>

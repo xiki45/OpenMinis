@@ -38,6 +38,8 @@ object PendingUpdateStore {
 
     data class PendingUpdate(
         val targetVersionName: String,
+        /** [T-update-channels] Build number of the target; null on records from before builds. */
+        val targetVersionCode: Int? = null,
         val apkPath: String,
         val apkSize: Long,
         val sha256: String?,
@@ -61,6 +63,7 @@ object PendingUpdateStore {
     fun setPending(context: Context, pending: PendingUpdate) {
         val json = JSONObject().apply {
             put("targetVersionName", pending.targetVersionName)
+            if (pending.targetVersionCode != null) put("targetVersionCode", pending.targetVersionCode)
             put("apkPath", pending.apkPath)
             put("apkSize", pending.apkSize)
             if (pending.sha256 != null) put("sha256", pending.sha256) else put("sha256", JSONObject.NULL)
@@ -91,6 +94,7 @@ object PendingUpdateStore {
         }
         val pending = PendingUpdate(
             targetVersionName = obj.optString("targetVersionName"),
+            targetVersionCode = if (obj.has("targetVersionCode")) obj.optInt("targetVersionCode") else null,
             apkPath = obj.optString("apkPath"),
             apkSize = obj.optLong("apkSize"),
             sha256 = obj.optString("sha256", "").takeIf { it.isNotEmpty() && it != "null" },

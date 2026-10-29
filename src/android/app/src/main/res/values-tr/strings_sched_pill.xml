@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Çalışıyor</string>
+    <string name="sched_pill_waiting">Bekleniyor</string>
+    <string name="sched_pill_run_now">Şimdi Çalıştır</string>
+    <string name="sched_pill_hide">Bu geri sayımı gizle</string>
+    <string name="sched_pill_cancel_all">Tüm zamanlanmış görevleri iptal et</string>
+    <string name="sched_pill_cancel_all_title">Tüm zamanlanmış görevler iptal edilsin mi?</string>
+    <string name="sched_pill_cancel_all_confirm">Tümünü iptal et</string>
+    <string name="sched_pill_not_now">Şimdi Değil</string>
+    <string name="sched_pill_cancel_all_message">Bu sohbette hâlâ planlanmış tüm görevler iptal edilecek.</string>
+    <string name="sched_pill_a11y_title">Yaklaşan zamanlanmış görev</string>
+    <string name="sched_pill_a11y_running">Çalıştırılıyor</string>
+    <string name="sched_pill_a11y_waiting">Başka bir görevin bitmesi bekleniyor</string>
+    <string name="sched_pill_a11y_upcoming_left">Sonraki çalıştırma · %1$d kaldı</string>
+    <string name="sched_pill_a11y_upcoming">Sonraki çalıştırma</string>
+    <string name="sched_pill_a11y_run_of">%2$d çalıştırmadan %1$d.</string>
+    <string name="sched_pill_a11y_run">%1$d. çalıştırma</string>
+    <string name="sched_pill_a11y_next_in">Sonraki çalıştırma %1$s sonra</string>
+    <string name="sched_pill_a11y_more">+%1$d tane daha</string>
+    <string name="sched_pill_a11y_hint">Görev ayrıntılarını açar</string>
+</resources>

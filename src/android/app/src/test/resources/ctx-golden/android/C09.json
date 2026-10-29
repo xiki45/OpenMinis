@@ -1,0 +1,726 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Logos"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/logo512.png]"
+          },
+          {
+            "image": {
+              "base64Len": 131768,
+              "bytes": 98825,
+              "decodable": true,
+              "h": 512,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "d93a0137913286c2",
+              "w": 512
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/logo3000.png]"
+          },
+          {
+            "image": {
+              "base64Len": 582256,
+              "bytes": 436691,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "9c26ced429f4800e",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/logo3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/logo512.png\" url=\"minis://attachments/uploads/logo512.png\" size=\"98825\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/a\u2026[352 chars sha256:dfd2a1ccc4ec]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Two logos."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A detailed one"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/art3000.png]"
+          },
+          {
+            "image": {
+              "base64Len": 1494088,
+              "bytes": 1120566,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e43b046a8a229f58",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/art3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/art3000.png\" url=\"minis://attachments/uploads/art3000.png\" size=\"31896492\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Logos"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/logo512.png]"
+          },
+          {
+            "image": {
+              "base64Len": 131768,
+              "bytes": 98825,
+              "decodable": true,
+              "h": 512,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "d93a0137913286c2",
+              "w": 512
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/logo3000.png]"
+          },
+          {
+            "image": {
+              "base64Len": 582256,
+              "bytes": 436691,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "9c26ced429f4800e",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/logo3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/logo512.png\" url=\"minis://attachments/uploads/logo512.png\" size=\"98825\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/a\u2026[352 chars sha256:dfd2a1ccc4ec]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Two logos."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A detailed one"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/art3000.png]"
+          },
+          {
+            "image": {
+              "base64Len": 1494088,
+              "bytes": 1120566,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e43b046a8a229f58",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/art3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/art3000.png\" url=\"minis://attachments/uploads/art3000.png\" size=\"31896492\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Logos"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/logo512.png]"
+          },
+          {
+            "image": {
+              "base64Len": 131768,
+              "bytes": 98825,
+              "decodable": true,
+              "h": 512,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "d93a0137913286c2",
+              "w": 512
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/logo3000.png]"
+          },
+          {
+            "image": {
+              "base64Len": 582256,
+              "bytes": 436691,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "9c26ced429f4800e",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/logo3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/logo512.png\" url=\"minis://attachments/uploads/logo512.png\" size=\"98825\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/a\u2026[352 chars sha256:dfd2a1ccc4ec]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Two logos."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A detailed one"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/art3000.png]"
+          },
+          {
+            "image": {
+              "base64Len": 1494088,
+              "bytes": 1120566,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e43b046a8a229f58",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/art3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/art3000.png\" url=\"minis://attachments/uploads/art3000.png\" size=\"31896492\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Logos"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/logo512.png]"
+          },
+          {
+            "image": {
+              "base64Len": 131768,
+              "bytes": 98825,
+              "decodable": true,
+              "h": 512,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "d93a0137913286c2",
+              "w": 512
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/logo3000.png]"
+          },
+          {
+            "image": {
+              "base64Len": 582256,
+              "bytes": 436691,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "9c26ced429f4800e",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/logo3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/logo512.png\" url=\"minis://attachments/uploads/logo512.png\" size=\"98825\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/a\u2026[352 chars sha256:dfd2a1ccc4ec]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Two logos."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A detailed one"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/art3000.png]"
+          },
+          {
+            "image": {
+              "base64Len": 1494088,
+              "bytes": 1120566,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e43b046a8a229f58",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/art3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/art3000.png\" url=\"minis://attachments/uploads/art3000.png\" size=\"31896492\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Logos"
+          },
+          {
+            "image": {
+              "base64Len": 131768,
+              "bytes": 98825,
+              "decodable": true,
+              "h": 512,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "d93a0137913286c2",
+              "w": 512
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 582256,
+              "bytes": 436691,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "9c26ced429f4800e",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/logo3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/logo512.png\" url=\"minis://attachments/uploads/logo512.png\" size=\"98825\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/a\u2026[352 chars sha256:dfd2a1ccc4ec]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Two logos."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A detailed one"
+          },
+          {
+            "image": {
+              "base64Len": 1494088,
+              "bytes": 1120566,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e43b046a8a229f58",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/art3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/art3000.png\" url=\"minis://attachments/uploads/art3000.png\" size=\"31896492\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Logos"
+          },
+          {
+            "image": {
+              "base64Len": 131768,
+              "bytes": 98825,
+              "decodable": true,
+              "h": 512,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "d93a0137913286c2",
+              "w": 512
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 582256,
+              "bytes": 436691,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "9c26ced429f4800e",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/logo3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/logo512.png\" url=\"minis://attachments/uploads/logo512.png\" size=\"98825\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/a\u2026[352 chars sha256:dfd2a1ccc4ec]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Two logos."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A detailed one"
+          },
+          {
+            "image": {
+              "base64Len": 1494088,
+              "bytes": 1120566,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e43b046a8a229f58",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/art3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/art3000.png\" url=\"minis://attachments/uploads/art3000.png\" size=\"31896492\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Logos"
+          },
+          {
+            "image": {
+              "base64Len": 131768,
+              "bytes": 98825,
+              "decodable": true,
+              "h": 512,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "d93a0137913286c2",
+              "w": 512
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 582256,
+              "bytes": 436691,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "9c26ced429f4800e",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/logo3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/logo512.png\" url=\"minis://attachments/uploads/logo512.png\" size=\"98825\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/a\u2026[352 chars sha256:dfd2a1ccc4ec]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Two logos."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A detailed one"
+          },
+          {
+            "image": {
+              "base64Len": 1494088,
+              "bytes": 1120566,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e43b046a8a229f58",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/art3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/art3000.png\" url=\"minis://attachments/uploads/art3000.png\" size=\"31896492\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Logos"
+          },
+          {
+            "image": {
+              "base64Len": 131768,
+              "bytes": 98825,
+              "decodable": true,
+              "h": 512,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "d93a0137913286c2",
+              "w": 512
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 582256,
+              "bytes": 436691,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "9c26ced429f4800e",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/logo3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/logo512.png\" url=\"minis://attachments/uploads/logo512.png\" size=\"98825\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/a\u2026[352 chars sha256:dfd2a1ccc4ec]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Two logos."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "A detailed one"
+          },
+          {
+            "image": {
+              "base64Len": 1494088,
+              "bytes": 1120566,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e43b046a8a229f58",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 3000×3000 px, shown here at 2000×2000 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/art3000.png.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/art3000.png\" url=\"minis://attachments/uploads/art3000.png\" size=\"31896492\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

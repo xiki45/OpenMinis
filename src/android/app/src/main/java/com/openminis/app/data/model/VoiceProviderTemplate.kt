@@ -172,7 +172,7 @@ data class VoiceProviderTemplate(
                 capability = Capability.BOTH,
                 baseURLMarkers = listOf("dashscope"),
                 mockModels = listOf(
-                    asr("paraformer-realtime-v2", "Paraformer Realtime v2", "alibaba"),
+                    asr("qwen3-asr-flash", "Qwen3 ASR Flash", "alibaba"),
                     tts("cosyvoice-v2", "CosyVoice v2", "alibaba"),
                 ),
             ),

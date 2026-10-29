@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">API Key</string>
+    <string name="cfgr_all_models">すべてのモデル</string>
+    <string name="cfgr_allow_minis_config">minis-config を許可</string>
+    <string name="cfgr_applies_to">適用対象</string>
+    <string name="cfgr_audio_input">音声入力</string>
+    <string name="cfgr_audio_output">音声出力</string>
+    <string name="cfgr_automatic">自動</string>
+    <string name="cfgr_chinese">中国語</string>
+    <string name="cfgr_custom">カスタム</string>
+    <string name="cfgr_custom_user_agent">カスタム User-Agent</string>
+    <string name="cfgr_dark">ダーク</string>
+    <string name="cfgr_default">デフォルト</string>
+    <string name="cfgr_disabled">無効</string>
+    <string name="cfgr_display_name">表示名</string>
+    <string name="cfgr_enabled">有効</string>
+    <string name="cfgr_english">英語</string>
+    <string name="cfgr_hidden">非表示</string>
+    <string name="cfgr_high">高</string>
+    <string name="cfgr_image_input">画像入力</string>
+    <string name="cfgr_image_output">画像出力</string>
+    <string name="cfgr_label">ラベル</string>
+    <string name="cfgr_light">ライト</string>
+    <string name="cfgr_low">低</string>
+    <string name="cfgr_max">最大</string>
+    <string name="cfgr_med">中</string>
+    <string name="cfgr_medium">中</string>
+    <string name="cfgr_models">モデル</string>
+    <string name="cfgr_name">名前</string>
+    <string name="cfgr_not_set">未設定</string>
+    <string name="cfgr_note">メモ</string>
+    <string name="cfgr_off">オフ</string>
+    <string name="cfgr_on">オン</string>
+    <string name="cfgr_pdf_input">PDF入力</string>
+    <string name="cfgr_privacy_mode">プライバシーモード</string>
+    <string name="cfgr_send">送信</string>
+    <string name="cfgr_status">ステータス</string>
+    <string name="cfgr_system">システム</string>
+    <string name="cfgr_theme">テーマ</string>
+    <string name="cfgr_ultra">ウルトラ</string>
+    <string name="cfgr_video_input">動画入力</string>
+    <string name="cfgr_video_output">動画出力</string>
+    <string name="cfgr_xhigh">極高</string>
+    <string name="cfgr_fold_consecutive_tool_calls">連続したツール呼び出しをまとめる</string>
+</resources>

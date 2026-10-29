@@ -1,0 +1,230 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Describe it in one word"
+          },
+          {
+            "image": {
+              "base64Len": 47916,
+              "bytes": 35936,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e8584cb9f5b431ba",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/photo_1.jpg\" url=\"minis://attachments/uploads/photo_1.jpg\" size=\"35936\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Describe it in one word"
+          },
+          {
+            "image": {
+              "base64Len": 47916,
+              "bytes": 35936,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e8584cb9f5b431ba",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/photo_1.jpg\" url=\"minis://attachments/uploads/photo_1.jpg\" size=\"35936\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Describe it in one word"
+          },
+          {
+            "image": {
+              "base64Len": 47916,
+              "bytes": 35936,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e8584cb9f5b431ba",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/photo_1.jpg\" url=\"minis://attachments/uploads/photo_1.jpg\" size=\"35936\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Describe it in one word"
+          },
+          {
+            "image": {
+              "base64Len": 47916,
+              "bytes": 35936,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e8584cb9f5b431ba",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/photo_1.jpg\" url=\"minis://attachments/uploads/photo_1.jpg\" size=\"35936\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Describe it in one word"
+          },
+          {
+            "image": {
+              "base64Len": 47916,
+              "bytes": 35936,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e8584cb9f5b431ba",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/photo_1.jpg\" url=\"minis://attachments/uploads/photo_1.jpg\" size=\"35936\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Describe it in one word"
+          },
+          {
+            "image": {
+              "base64Len": 47916,
+              "bytes": 35936,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e8584cb9f5b431ba",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/photo_1.jpg\" url=\"minis://attachments/uploads/photo_1.jpg\" size=\"35936\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Describe it in one word"
+          },
+          {
+            "image": {
+              "base64Len": 47916,
+              "bytes": 35936,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e8584cb9f5b431ba",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/photo_1.jpg\" url=\"minis://attachments/uploads/photo_1.jpg\" size=\"35936\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Describe it in one word"
+          },
+          {
+            "image": {
+              "base64Len": 47916,
+              "bytes": 35936,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "e8584cb9f5b431ba",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/photo_1.jpg\" url=\"minis://attachments/uploads/photo_1.jpg\" size=\"35936\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

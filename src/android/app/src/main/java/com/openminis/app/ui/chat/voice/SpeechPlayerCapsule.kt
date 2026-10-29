@@ -1,6 +1,9 @@
 package com.openminis.app.ui.chat.voice
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -20,6 +23,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,6 +36,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeMute
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
@@ -40,6 +46,8 @@ import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,7 +65,11 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,6 +80,7 @@ import com.openminis.app.MinisApp
 import com.openminis.app.R
 import com.openminis.app.speech.VoiceOutputState
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import com.openminis.app.ui.components.rememberDecorativeTick
 import com.openminis.app.ui.components.decorativePhase
 import androidx.compose.ui.graphics.graphicsLayer
@@ -80,9 +93,16 @@ import androidx.compose.ui.graphics.graphicsLayer
  *  • compact — a small circular speaker button. Single tap → expand;
  *    double tap → temporary mute. Speed badge when >1×; rotating arc while
  *    cloud TTS is synthesizing.
- *  • expand  — a capsule: speaker (mute toggle) · model chip (tap to switch
- *    the TTS model) · speed chip (tap to cycle 1×→1.25×→1.5×→2×) · close (×,
- *    turns read-replies fully off).
+ *  • expand  — a capsule: speaker (tap to show / hide the volume bar) ·
+ *    model chip (tap to switch the TTS model) · speed chip (tap to cycle
+ *    1×→1.25×→1.5×→2×) · close (×, turns read-replies fully off).
+ *
+ * [T-readaloud-volume-bar] The read-aloud volume (0–200 %) is a second bar
+ * that opens ABOVE the capsule from its speaker, at the capsule's own width,
+ * and closes again on the next tap. It replaces the full-width volume row
+ * that used to sit above the voice panel whenever read-replies was on. Mute
+ * moved to that bar's leading icon (and stays on the compact button's
+ * double tap).
  *
  * Lifecycle mirrors iOS: enabling read-replies opens it EXPANDED; the first
  * utterance actually speaking collapses it to compact; 10 s idle while
@@ -172,13 +192,19 @@ fun SpeechPlayerCapsule(
     var expanded by remember { mutableStateOf(false) }
     var idleToken by remember { mutableIntStateOf(0) }
     var showModelPicker by remember { mutableStateOf(false) }
+    var showVolume by remember { mutableStateOf(false) }
+    val volume by VoiceOutputState.volume.collectAsState()
 
     // First real utterance → collapse to compact (iOS onChange(isReadingAloud)).
     LaunchedEffect(speaking) { if (speaking && expanded) expanded = false }
 
     // 10 s idle in expand mode → collapse. Any interaction bumps the token.
     LaunchedEffect(expanded, idleToken) {
-        if (!expanded) return@LaunchedEffect
+        if (!expanded) {
+            // The volume bar belongs to the expanded capsule; reopening starts closed.
+            showVolume = false
+            return@LaunchedEffect
+        }
         delay(10_000)
         expanded = false
     }
@@ -348,18 +374,41 @@ fun SpeechPlayerCapsule(
                 label = "capsule",
             ) { isExpanded ->
                 if (isExpanded) {
-                    ExpandedCapsule(
-                        muted = muted,
-                        synthesizing = synthesizing,
-                        speed = speed,
-                        modelLabel = modelLabel
-                            ?: systemVoiceLabel
-                            ?: stringResource(R.string.tts_capsule_system_engine),
-                        onMuteToggle = { VoiceOutputState.setMuted(!muted); bumpIdle() },
-                        onModelTap = { showModelPicker = true; bumpIdle() },
-                        onSpeedTap = { VoiceOutputState.nextSpeed(); bumpIdle() },
-                        onClose = { VoiceOutputState.setEnabled(false) },
-                    )
+                    // [T-readaloud-volume-bar] The bar is sized to the capsule
+                    // measured below it, so both edges line up; it is not shown
+                    // before that first measure.
+                    var capsuleWidthPx by remember { mutableIntStateOf(0) }
+                    Column(horizontalAlignment = Alignment.End) {
+                        AnimatedVisibility(
+                            visible = showVolume && capsuleWidthPx > 0,
+                            enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+                            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
+                        ) {
+                            VolumeBar(
+                                volume = volume,
+                                muted = muted,
+                                width = with(density) { capsuleWidthPx.toDp() },
+                                onMuteToggle = { VoiceOutputState.setMuted(!muted); bumpIdle() },
+                                onVolumeChange = { VoiceOutputState.setVolume(it, persist = false); bumpIdle() },
+                                onVolumeChangeFinished = { VoiceOutputState.persistVolume() },
+                                modifier = Modifier.padding(bottom = 8.dp),
+                            )
+                        }
+                        ExpandedCapsule(
+                            muted = muted,
+                            synthesizing = synthesizing,
+                            speed = speed,
+                            volumeOpen = showVolume,
+                            modelLabel = modelLabel
+                                ?: systemVoiceLabel
+                                ?: stringResource(R.string.tts_capsule_system_engine),
+                            onSpeakerTap = { showVolume = !showVolume; bumpIdle() },
+                            onModelTap = { showModelPicker = true; bumpIdle() },
+                            onSpeedTap = { VoiceOutputState.nextSpeed(); bumpIdle() },
+                            onClose = { VoiceOutputState.setEnabled(false) },
+                            modifier = Modifier.onSizeChanged { capsuleWidthPx = it.width },
+                        )
+                    }
                 } else {
                     CompactSpeaker(
                         muted = muted,
@@ -454,11 +503,13 @@ private fun ExpandedCapsule(
     muted: Boolean,
     synthesizing: Boolean,
     speed: Float,
+    volumeOpen: Boolean,
     modelLabel: String,
-    onMuteToggle: () -> Unit,
+    onSpeakerTap: () -> Unit,
     onModelTap: () -> Unit,
     onSpeedTap: () -> Unit,
     onClose: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     // [T-android-tts-capsule-height] Height is PINNED to the compact button's
     // 40dp so expand↔collapse is a pure width morph with no vertical jump.
@@ -467,17 +518,26 @@ private fun ExpandedCapsule(
     // top of the padding — the same inflation the read-replies pill had to
     // correct. A fixed frame with centered content sidesteps per-text
     // lineHeight surgery entirely.
+    val volumeLabel = stringResource(R.string.read_aloud_volume)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
+        modifier = modifier
             .height(40.dp)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), RoundedCornerShape(50))
             .border(0.5.dp, Color.Gray.copy(alpha = 0.25f), RoundedCornerShape(50))
             .padding(horizontal = 14.dp),
     ) {
-        // Speaker = mute toggle (temporary silence; capsule stays visible).
+        // [T-readaloud-volume-bar] Speaker = show / hide the volume bar above;
+        // a tinted disc marks it open.
         Box(
-            Modifier.size(28.dp).clickable(onClick = onMuteToggle),
+            Modifier
+                .size(28.dp)
+                .background(
+                    if (volumeOpen) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent,
+                    CircleShape,
+                )
+                .clickable(onClick = onSpeakerTap)
+                .semantics { contentDescription = volumeLabel },
             contentAlignment = Alignment.Center,
         ) {
             SpeakerGlyph(muted = muted, synthesizing = synthesizing, ring = 28.dp)
@@ -536,7 +596,7 @@ private fun ExpandedCapsule(
                 maxLines = 1,
                 color = if (speed > 1.0f) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                textAlign = TextAlign.Center,
                 style = androidx.compose.ui.text.TextStyle(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -554,6 +614,80 @@ private fun ExpandedCapsule(
             contentDescription = stringResource(R.string.standard_sheet_close),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp).clickable(onClick = onClose),
+        )
+    }
+}
+
+/**
+ * [T-readaloud-volume-bar] Read-aloud volume bar, opened above the expanded
+ * capsule from its speaker: mute toggle icon · slider 0–200 % · percentage.
+ * Same height, shape and [width] as the capsule below it.
+ *
+ * Dragging updates [VoiceOutputState.volume] live (the provider path follows
+ * it mid-sentence, the boost above 100 % on both paths) and persists only
+ * when the drag ends.
+ */
+@Composable
+private fun VolumeBar(
+    volume: Float,
+    muted: Boolean,
+    width: androidx.compose.ui.unit.Dp,
+    onMuteToggle: () -> Unit,
+    onVolumeChange: (Float) -> Unit,
+    onVolumeChangeFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val percent = (volume * 100).roundToInt()
+    val tint = MaterialTheme.colorScheme.primary
+    val label = stringResource(R.string.read_aloud_volume)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .width(width)
+            .height(40.dp)
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), RoundedCornerShape(50))
+            .border(0.5.dp, Color.Gray.copy(alpha = 0.25f), RoundedCornerShape(50))
+            .padding(horizontal = 14.dp),
+    ) {
+        Box(
+            Modifier.size(28.dp).clickable(onClick = onMuteToggle),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                when {
+                    muted -> Icons.AutoMirrored.Filled.VolumeOff
+                    percent == 0 -> Icons.AutoMirrored.Filled.VolumeMute
+                    percent < 50 -> Icons.AutoMirrored.Filled.VolumeDown
+                    else -> Icons.AutoMirrored.Filled.VolumeUp
+                },
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Slider(
+            value = volume,
+            onValueChange = onVolumeChange,
+            onValueChangeFinished = onVolumeChangeFinished,
+            valueRange = 0f..VoiceOutputState.MAX_VOLUME,
+            colors = SliderDefaults.colors(
+                thumbColor = tint,
+                activeTrackColor = tint,
+                inactiveTrackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .height(32.dp)
+                .padding(horizontal = 6.dp)
+                .semantics { contentDescription = label },
+        )
+        Text(
+            "$percent%",
+            modifier = Modifier.width(40.dp),
+            textAlign = TextAlign.End,
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
         )
     }
 }

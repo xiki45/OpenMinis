@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">Zobrazit celé uvažování</string>
+    <string name="thinking_full_title">Celé uvažování</string>
+    <string name="thinking_full_char_count">Znaků: %1$s</string>
+    <string name="thinking_full_load_more">Načíst další</string>
+    <string name="thinking_full_copy_failed">Příliš dlouhé ke zkopírování</string>
+</resources>

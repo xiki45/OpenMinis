@@ -41,6 +41,12 @@ class ScheduledTaskAlarmReceiver : BroadcastReceiver() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val startedAt = SystemClock.elapsedRealtime()
         scope.launch {
+            // [T-scheduled-active-session-android] Held from before the alarm
+            // advances the task until the handoff returns; run() holds its own
+            // count until the fire's loop ends. Without this, the LAST fire's
+            // "disabled" write could reach ScheduledSessionHold before run()
+            // marks the task as running, and the chat would flash idle.
+            ScheduledSessionHold.beginRun(taskId)
             try {
                 // [GH#197] Hard ceiling on how long this broadcast can stay
                 // alive. Everything inside is meant to take milliseconds; the
@@ -61,7 +67,8 @@ class ScheduledTaskAlarmReceiver : BroadcastReceiver() {
                     // prompt doesn't block tomorrow's fire even if we crash.
                     // [T-android-scheduled-fire-claim] False for a stale second
                     // delivery of a relative trigger's fire: nothing to run.
-                    if (!manager.rescheduleNext(taskId)) return@withTimeout
+                    val slot = intent.getLongExtra(ScheduledTaskManager.EXTRA_TRIGGER_AT, -1L).takeIf { it > 0 }
+                    if (!manager.rescheduleNext(taskId, slot)) return@withTimeout
                     // [T-android-scheduled-triggers] Run the row as it is NOW:
                     // rescheduleNext just advanced an interval's anchor and
                     // count, and the fire's envelope shows the NEXT fire time.
@@ -93,6 +100,7 @@ class ScheduledTaskAlarmReceiver : BroadcastReceiver() {
                 // so a wedged fire self-heals instead of killing the process.
                 AppLogger.error(TAG, "task $taskId fire failed: ${t.message}")
             } finally {
+                ScheduledSessionHold.endRun(taskId)
                 pending.finish()
                 // [GH#197] The number to watch: this is the goAsync hold time,
                 // i.e. how much of the broadcast ANR budget we consumed. It

@@ -23,6 +23,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Accessibility
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Lan
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Router
+import androidx.compose.material.icons.outlined.VpnLock
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.BatteryFull
 import androidx.compose.material.icons.outlined.BugReport
@@ -55,6 +59,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,6 +87,12 @@ fun SettingsScreen(
     onRootfsClick: () -> Unit = {},
     onBackupClick: () -> Unit = {},
     onEnvVarsClick: () -> Unit = {},
+    /** [T-net-android-phase2] Settings › Network › Network Routing. */
+    onNetworkClick: () -> Unit = {},
+    /** [FEAT-261021-04] The other rows of the Network section. */
+    onTailscaleClick: () -> Unit = {},
+    onProxiesClick: () -> Unit = {},
+    onContainerDnsClick: () -> Unit = {},
     onSkillsClick: () -> Unit = {},
     onTerminalClick: () -> Unit = {},
     onMemoryClick: () -> Unit = {},
@@ -298,6 +309,41 @@ fun SettingsScreen(
                 )
             }
 
+            // -- Network -- [FEAT-261021-04, iOS c77be4fb6] its own section below
+            // Storage: Network Routing, Tailscale, Proxies and the Shell
+            // Container DNS (until now only on the Rootfs page).
+            SettingsSection(title = stringResource(R.string.network_title)) {
+                SettingsItem(
+                    icon = Icons.Outlined.Lan,
+                    iconColor = Color(0xFF007AFF),
+                    title = stringResource(R.string.network_routing_title),
+                    subtitle = null,
+                    onClick = onNetworkClick,
+                )
+                SettingsItem(
+                    icon = Icons.Outlined.VpnLock,
+                    iconColor = Color(0xFF5856D6),
+                    title = stringResource(R.string.network_tailscale),
+                    subtitle = null,
+                    onClick = onTailscaleClick,
+                )
+                SettingsItem(
+                    icon = Icons.Outlined.Router,
+                    iconColor = Color(0xFFFF9500),
+                    title = stringResource(R.string.network_proxies),
+                    subtitle = null,
+                    onClick = onProxiesClick,
+                )
+                SettingsItem(
+                    icon = Icons.Outlined.Dns,
+                    iconColor = Color(0xFF8E8E93),
+                    title = stringResource(R.string.network_container_dns),
+                    subtitle = null,
+                    onClick = onContainerDnsClick,
+                    showDivider = false,
+                )
+            }
+
             // -- Permissions --
             SettingsSection(title = stringResource(R.string.settings_section_permissions)) {
                 SettingsItem(
@@ -347,12 +393,15 @@ fun SettingsScreen(
 
             // -- About --
             SettingsSection(title = stringResource(R.string.settings_section_about)) {
+                // [T-update-channels] The update badge's Settings layer.
+                val updateBadge by com.openminis.app.data.UpdateStateStore.hasUpdateBadge.collectAsState()
                 SettingsItem(
                     icon = Icons.Outlined.Info,
                     iconColor = Color(0xFF007AFF),
                     title = stringResource(R.string.settings_about_minis),
                     subtitle = stringResource(R.string.settings_about_subtitle),
                     onClick = onAboutClick,
+                    badge = updateBadge,
                 )
                 SettingsItem(
                     icon = Icons.Outlined.FrontHand,
@@ -594,6 +643,8 @@ private fun SettingsItem(
     subtitle: String?,
     onClick: () -> Unit,
     showDivider: Boolean = true,
+    // [T-update-channels] A small dot before the chevron.
+    badge: Boolean = false,
 ) {
     Column {
         Row(
@@ -640,6 +691,11 @@ private fun SettingsItem(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+
+            if (badge) {
+                UpdateBadgeDot()
+                Spacer(Modifier.width(8.dp))
             }
 
             // Chevron

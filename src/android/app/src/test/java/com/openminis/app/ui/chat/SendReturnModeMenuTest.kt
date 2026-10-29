@@ -104,11 +104,16 @@ class SendReturnModeMenuTest {
     }
 
     @Test
-    fun stopButtonHasNoLongPressChooser() {
-        val stopIdx = chatScreen.indexOf("Icons.Default.Stop,")
-        assertTrue(stopIdx > 0)
-        val stopBlock = chatScreen.substring(chatScreen.lastIndexOf("if (showStop)", stopIdx), stopIdx)
-        assertFalse(stopBlock.contains("combinedClickable"))
+    fun stopButtonLongPressPicksStopMode() {
+        // [T-stop-mode-longpress] The stop button now has its own chooser
+        // (Stop Immediately / Confirm Before Stopping), never the Return-key one.
+        val stopBlock = chatScreen.substringAfter("if (showStop) {").substringBefore("if (confirmStop) {")
+        assertTrue(stopBlock.contains("ComposerStopButton("))
         assertFalse(stopBlock.contains("ComposerSendButton"))
+        val stopBtn = menuSrc.substringAfter("fun ComposerStopButton(")
+        assertTrue(stopBtn.contains("onLongClick = { menuVisible = true }"))
+        assertTrue("closing tap must not stop", stopBtn.contains("SendReturnMode.tapShouldSend(canActivate = true, menuVisible = menuVisible, msSinceMenuDismiss = since)"))
+        assertTrue(stopBtn.contains("setConfirmBeforeStopping(context, confirm)"))
+        assertFalse(stopBtn.contains("setReturnKeySendsMessage"))
     }
 }

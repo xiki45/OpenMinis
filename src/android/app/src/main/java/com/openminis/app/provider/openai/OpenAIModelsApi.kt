@@ -45,6 +45,23 @@ object OpenAIModelsApi {
         LLMModel("gpt-6-sol", "GPT-6 Sol", "OpenAI", supportsReasoning = true),
         LLMModel("gpt-6-luna", "GPT-6 Luna", "OpenAI", supportsReasoning = true),
         LLMModel("gpt-6-astra", "GPT-6 Astra", "OpenAI", supportsReasoning = true),
+        // [T-gpt61-sol] GPT-6.1 Sol (OpenAI DevDay 2026-09-29) — Codex OAuth
+        // only. Listed right after Astra, the same place iOS puts it
+        // (LLMModel.allOpenAICodexOAuth). Data from CLIProxyAPI
+        // PR #6207 (its Codex catalog): 272K context, 128K max output, effort
+        // tiers low/medium/high/xhigh/max (ceiling set by ThinkingLevelCatalog,
+        // not declared here, same pattern as its siblings), Team/Plus/Pro — not
+        // assumed on Free. OpenAIProvider.CODEX_CLIENT_VERSION (0.159.0)
+        // clears its minimal_client_version of 0.155.0.
+        // supportsReasoning is explicit for the same reason as gpt-6-sol: the id
+        // is not in the bundled models.dev snapshot. The window is explicit
+        // because nothing else supplies one when live discovery is unavailable.
+        LLMModel(
+            "gpt-6.1-sol", "GPT-6.1 Sol", "OpenAI",
+            contextWindow = 272_000,
+            maxOutputTokens = 128_000,
+            supportsReasoning = true,
+        ),
         LLMModel("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI", supportsReasoning = true),
         LLMModel("gpt-5.6-terra", "GPT-5.6 Terra", "OpenAI", supportsReasoning = true),
         LLMModel("gpt-5.6-luna", "GPT-5.6 Luna", "OpenAI", supportsReasoning = true),
@@ -127,6 +144,16 @@ object OpenAIModelsApi {
         "-instruct", "-realtime", "-audio", "-transcribe", "-tts", "-embedding"
     )
 
+    /**
+     * [T-android-model-refresh-visible] A model-list fetch and, when the
+     * vendor's own list could not be used, why. [models] is what [fetchModels]
+     * returns (the built-in list on the official endpoint, EMPTY for a custom
+     * base so the caller keeps the user's entries); [error] is set for an HTTP
+     * error, a body that is not a model list, a list with no models, or a
+     * network failure - each of which used to be silent.
+     */
+    data class FetchResult(val models: List<LLMModel>, val error: String?)
+
     suspend fun fetchModels(
         apiKey: String,
         baseURL: String? = null,
@@ -135,15 +162,28 @@ object OpenAIModelsApi {
         // [T-provider-custom-user-agent] Per-provider UA override; null/blank
         // keeps the default UA. Threaded from ProviderRepository.refreshModels.
         customUserAgent: String? = null,
-    ): List<LLMModel> = withContext(Dispatchers.IO) {
+        // [FEAT-261021-16] The instance's Settings > Network tag (prov:<id>);
+        // null follows the default route.
+        netTag: String? = null,
+    ): List<LLMModel> = fetchModelsDetailed(apiKey, baseURL, context, forceRefresh, customUserAgent, netTag).models
+
+    suspend fun fetchModelsDetailed(
+        apiKey: String,
+        baseURL: String? = null,
+        context: Context? = null,
+        forceRefresh: Boolean = false,
+        customUserAgent: String? = null,
+        netTag: String? = null,
+    ): FetchResult = withContext(Dispatchers.IO) {
         val isCustomBase = baseURL != null && !isOfficialOpenAI(baseURL)
         // For third-party endpoints (vLLM, Ollama, etc.), return empty on failure
         // so the caller preserves existing models instead of replacing with built-in GPT list.
         val fallback = if (isCustomBase) emptyList() else LLMModel.allOpenAI
+        fun fail(why: String) = FetchResult(fallback, why)
 
         val cacheKey = (baseURL ?: "") + "|" + apiKey
         if (context != null && !forceRefresh) {
-            cache.load(context, cacheKey)?.let { return@withContext it }
+            cache.load(context, cacheKey)?.let { return@withContext FetchResult(it, null) }
         }
 
         val url = buildURL(baseURL)
@@ -154,23 +194,30 @@ object OpenAIModelsApi {
             .applyUserAgentOverride(customUserAgent)
             .build()
 
-        val response = client.newCall(request).execute()
-        val body = response.body?.string() ?: return@withContext fallback
+        // A network failure still THROWS, as before: the caller's catch reports
+        // it, and on the official endpoint it must not turn into the built-in
+        // list replacing the user's entries.
+        val (code, body) = com.openminis.app.network.NetworkHttp.client(netTag, client).newCall(request).execute().use { it.code to (it.body?.string() ?: "") }
 
-        if (!response.isSuccessful) {
-            if (context != null && (response.code == 401 || response.code == 403)) {
+        if (code !in 200..299) {
+            if (context != null && (code == 401 || code == 403)) {
                 cache.invalidate(context, cacheKey)
             }
-            return@withContext fallback
+            return@withContext fail("HTTP $code: ${errorSnippet(body)}")
         }
 
+        val data = modelArray(body)
+            ?: return@withContext fail("the response is not a model list: ${errorSnippet(body)}")
         val models = try {
-            val json = JSONObject(body)
-            val data = json.optJSONArray("data") ?: return@withContext fallback
             val parsed = mutableListOf<LLMModel>()
             for (i in 0 until data.length()) {
-                val obj = data.getJSONObject(i)
-                val id = obj.getString("id")
+                // An entry may be an object or a bare id string; the id may sit
+                // under `id`, `model`, `model_id` or `name` (gateways differ).
+                val raw = data.opt(i)
+                val obj = raw as? JSONObject ?: JSONObject().put("id", raw?.toString() ?: "")
+                val id = listOf("id", "model", "model_id", "name")
+                    .firstNotNullOfOrNull { k -> obj.optString(k, "").trim().takeIf { it.isNotEmpty() } }
+                    ?: continue
 
                 // Only filter by chat prefixes for official OpenAI endpoints;
                 // custom endpoints (vLLM, Ollama) may serve any model ID.
@@ -180,7 +227,7 @@ object OpenAIModelsApi {
                     if (id.contains(":ft-")) continue
                 }
 
-                val displayName = obj.optString("name", "").ifBlank { LLMModel.modelDisplayName(id) }
+                val displayName = (if (obj.optString("name", "") == id) "" else obj.optString("name", "")).ifBlank { LLMModel.modelDisplayName(id) }
                 // Third-party gateways (vLLM, OpenRouter-compat proxies) often
                 // report per-model modalities under `architecture.{input,output}_modalities`
                 // the same way OpenRouter does — pick them up so vision/audio
@@ -214,25 +261,96 @@ object OpenAIModelsApi {
                     idLower.startsWith("o4") ||
                     idLower.contains("codex")
 
+                // [OpenMinis#438] A gateway that reports its own limits is the
+                // authority on them; enrichModels below (and any later
+                // re-enrichment) only fills what it left out.
+                val (reportedContext, reportedOutput) = reportedLimits(obj)
                 parsed.add(
                     LLMModel(
                         id = id,
                         displayName = displayName,
                         provider = if (isCustomBase) "Custom" else "OpenAI",
+                        contextWindow = reportedContext,
+                        maxOutputTokens = reportedOutput,
+                        limitsReportedByEndpoint = if (reportedContext != null || reportedOutput != null) true else null,
                         inputModalities = inputModalities,
                         outputModalities = outputModalities,
                         supportsReasoning = if (knownReasoning) true else null,
                     )
                 )
             }
-            if (parsed.isEmpty()) return@withContext fallback
+            if (parsed.isEmpty()) return@withContext fail("the provider listed no models")
             ModelsDevApi.enrichModels(parsed)
-        } catch (_: Exception) {
-            return@withContext fallback
+        } catch (e: Exception) {
+            return@withContext fail("could not read the model list: ${e.message ?: e.javaClass.simpleName}")
         }
 
         if (context != null) cache.save(context, cacheKey, models)
-        models
+        FetchResult(models, null)
+    }
+
+    /**
+     * [OpenMinis#438] The context window and output limit a /models entry
+     * reports about itself, each null when absent. Read in order: top-level
+     * `context_length` / `context_window` / `contextWindow` /
+     * `max_context_length`, then `limit.context`, then OpenRouter-style
+     * `top_provider.context_length`; output likewise from `max_output_tokens`
+     * / `maxOutputTokens` / `max_completion_tokens`, `limit.output`,
+     * `top_provider.max_completion_tokens`. Numbers and numeric strings are
+     * accepted; zero, negative, non-numeric or boolean values count as absent.
+     * Same rule as iOS ModelListParsing.reportedLimits.
+     */
+    internal fun reportedLimits(obj: JSONObject): Pair<Int?, Int?> {
+        val limit = obj.optJSONObject("limit")
+        val top = obj.optJSONObject("top_provider")
+        val context = listOf("context_length", "context_window", "contextWindow", "max_context_length")
+            .firstNotNullOfOrNull { positiveInt(obj.opt(it)) }
+            ?: positiveInt(limit?.opt("context"))
+            ?: positiveInt(top?.opt("context_length"))
+        val output = listOf("max_output_tokens", "maxOutputTokens", "max_completion_tokens")
+            .firstNotNullOfOrNull { positiveInt(obj.opt(it)) }
+            ?: positiveInt(limit?.opt("output"))
+            ?: positiveInt(top?.opt("max_completion_tokens"))
+        return context to output
+    }
+
+    private fun positiveInt(raw: Any?): Int? {
+        val value: Long? = when (raw) {
+            is Boolean -> null
+            is Number -> raw.toDouble().takeIf { it.isFinite() && it >= 1 && it < Int.MAX_VALUE.toDouble() }?.toLong()
+            is String -> raw.trim().toLongOrNull()
+            else -> null
+        }
+        return value?.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt()
+    }
+
+    /**
+     * [T-android-model-refresh-visible] The model array of a /models body, in
+     * the shapes OpenAI-compatible gateways actually send: `{"data":[...]}`
+     * (standard), `{"models":[...]}`, `{"items"|"results"|"result":[...]}`,
+     * `{"data":{"models"|"data":[...]}}`, or a bare `[...]`. Null when the body
+     * holds none of them (an error object in a 200, HTML, empty).
+     */
+    internal fun modelArray(body: String): JSONArray? {
+        val text = body.trim()
+        if (text.startsWith("[")) return runCatching { JSONArray(text) }.getOrNull()
+        val json = runCatching { JSONObject(text) }.getOrNull() ?: return null
+        val keys = listOf("data", "models", "items", "results", "result")
+        for (k in keys) json.optJSONArray(k)?.let { return it }
+        for (k in keys) {
+            val inner = json.optJSONObject(k) ?: continue
+            for (k2 in keys) inner.optJSONArray(k2)?.let { return it }
+        }
+        return null
+    }
+
+    /** First 200 characters of an error body, single line, for a visible message. */
+    internal fun errorSnippet(body: String): String {
+        val json = runCatching { JSONObject(body.trim()) }.getOrNull()
+        val message = json?.optJSONObject("error")?.optString("message", "")?.takeIf { it.isNotBlank() }
+            ?: json?.optString("message", "")?.takeIf { it.isNotBlank() }
+            ?: json?.optString("error", "")?.takeIf { it.isNotBlank() && !it.startsWith("{") }
+        return (message ?: body).replace(Regex("\\s+"), " ").trim().take(200).ifEmpty { "(empty body)" }
     }
 
     private fun JSONArray.toStringList(): List<String> {

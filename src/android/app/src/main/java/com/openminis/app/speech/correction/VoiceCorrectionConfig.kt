@@ -39,6 +39,10 @@ object VoiceCorrectionConfig {
      * slow provider on a slow device. Nothing waits on it — the user is
      * reading their transcript — so a generous ceiling costs nothing, whereas
      * a tight one silently disables the feature.
+     *
+     * [T-voice-correction-fallback] Per model CALL, not per correction (owner
+     * decision 2026-10-15, same on iOS): a call still running after 15s is
+     * abandoned and the next candidate model is tried.
      */
     const val CORRECTION_BUDGET_MS = 15_000L
 

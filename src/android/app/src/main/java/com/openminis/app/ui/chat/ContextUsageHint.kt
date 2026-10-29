@@ -90,6 +90,19 @@ internal data class ContextUsageHint(
     val text: String,
     val highlights: List<String>,
     val tier: ContextUsage.Tier,
+    /**
+     * [T-quota-composer-hint] The current model's quota, already worded
+     * ("Balance CN¥36.51", "Quota 5h 14% / 7d 32% used"), appended after the
+     * context figures with " · ". null = the line is the context figures alone.
+     */
+    val quotaText: String? = null,
+    /** The figure inside [quotaText], tinted by [quotaTier]. */
+    val quotaHighlight: String? = null,
+    /**
+     * The quota's own tier, independent of the context tier: a nearly full
+     * context says nothing about the balance.
+     */
+    val quotaTier: ContextUsage.Tier = ContextUsage.Tier.NORMAL,
 )
 
 /**

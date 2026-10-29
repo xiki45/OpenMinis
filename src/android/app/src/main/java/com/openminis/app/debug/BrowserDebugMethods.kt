@@ -6,6 +6,7 @@ import com.openminis.app.browser.BrowserAction
 import com.openminis.app.browser.BrowserActionInput
 import com.openminis.app.browser.BrowserTabPool
 import com.openminis.app.browser.BrowserUseManager
+import com.openminis.app.browser.SiteCookieCleaner
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -174,6 +175,47 @@ internal object BrowserDebugMethods {
             put("size", size)
             put("encoding", "jpeg")
             put("tabId", tab.id)
+        }
+    }
+
+    /**
+     * [ISS-040] DEV_TOOLS-only access to the WebView cookie store, to verify on
+     * a device that the settings sheet's per-site delete really removes
+     * cookies. Reports cookie NAMES only, never values.
+     *  - `get`   {domain}: names the root of the site sends (SiteCookieCleaner).
+     *  - `set`   {url, cookie}: one raw Set-Cookie value, e.g. to seed a test.
+     *  - `clear` {domain}: the exact call the delete icon makes.
+     */
+    suspend fun cookies(params: JSONObject): JSONObject {
+        if (!com.openminis.app.BuildConfig.DEV_TOOLS) throw RPCException(-32601, "cookie debug exists only in debug builds")
+        val cm = android.webkit.CookieManager.getInstance()
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            when (val action = params.optString("action")) {
+                "get" -> {
+                    val domain = params.optString("domain").ifBlank { throw RPCException(-32602, "domain required") }
+                    JSONObject().put("domain", domain)
+                        .put("names", JSONArray(SiteCookieCleaner.cookieNamesFor(domain, cm).sorted()))
+                        .put("hasCookies", cm.hasCookies())
+                }
+                "set" -> {
+                    // `url` is passed through as given, even a bare host and an empty
+                    // cookie: that is how the old delete icon's no-op call is replayed.
+                    if (!params.has("url") || !params.has("cookie")) throw RPCException(-32602, "url and cookie required")
+                    val url = params.optString("url")
+                    val cookie = params.optString("cookie")
+                    cm.setCookie(url, cookie)
+                    cm.flush()
+                    JSONObject().put("ok", true)
+                }
+                "clear" -> {
+                    val domain = params.optString("domain").ifBlank { throw RPCException(-32602, "domain required") }
+                    val r = SiteCookieCleaner.clear(domain, cm)
+                    JSONObject().put("domain", domain).put("cleared", r.cleared)
+                        .put("found", JSONArray(r.found.sorted()))
+                        .put("remaining", JSONArray(r.remaining.sorted()))
+                }
+                else -> throw RPCException(-32602, "action must be get | set | clear, got '$action'")
+            }
         }
     }
 }

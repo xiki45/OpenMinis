@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Wyłączone</string>
+    <string name="env_var_status_duplicate">Zduplikowana nazwa</string>
+    <string name="env_var_enabled_toggle">Włączone</string>
+    <string name="env_var_enabled_footer">Po wyłączeniu zmienna zachowuje wartość i notatkę, ale nie jest przekazywana do powłok, terminali ani serwerów MCP.</string>
+    <string name="env_var_disabled_highlight">Ta zmienna jest wyłączona. Włącz ją, aby znów była dostępna.</string>
+    <string name="env_var_action_disable">Wyłącz</string>
+    <string name="env_var_action_enable">Włącz</string>
+    <string name="mcp_form_env_disabled_warning">%1$s jest wyłączona i zostanie przekazana jako pusta wartość.</string>
+</resources>

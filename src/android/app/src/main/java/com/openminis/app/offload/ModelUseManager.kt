@@ -85,7 +85,9 @@ object ModelUseManager {
             put("instance_label", instance?.label ?: "unknown")
             put("provider_type", instance?.providerType?.displayName ?: "unknown")
             put("modalities", modalities)
-            enrichedModel.contextWindow?.let { put("context_window", it) }
+            // [OpenMinis#438] The entry's own value first (the user's override,
+            // or what the endpoint reported); the catalog only fills a gap.
+            (entry.model.contextWindow ?: enrichedModel.contextWindow)?.let { put("context_window", it) }
         }
     }
 }

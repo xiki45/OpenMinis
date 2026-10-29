@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-backup-restore-semantics / B01] Restore page copy for the restore semantics
+     decided 2026-10-15: the backup wins items present on both sides (API keys
+     included, OAuth sign-ins only when expired); nothing only on this device is
+     deleted. Replaces backup_restore_footer / backup_creds_restored /
+     backup_creds_kept, whose text promised the opposite. -->
+<resources>
+    <string name="backup_restore_merge_footer">Il ripristino unisce il backup a questo dispositivo. Quando un elemento esiste in entrambi — un provider, le impostazioni di un modello o un gruppo di modelli con lo stesso nome — viene usata la versione del backup, anche se quella su questo dispositivo è più recente. Vale anche per le chiavi API; un account con accesso effettuato su questo dispositivo viene mantenuto, a meno che l\'accesso non sia scaduto. Nulla di ciò che esiste solo su questo dispositivo viene eliminato.</string>
+    <string name="backup_restore_creds_restored">Sono state ripristinate dal backup le credenziali di %1$d provider. Le chiavi API del backup sostituiscono quelle di questo dispositivo; un account con accesso effettuato su questo dispositivo viene mantenuto, a meno che l\'accesso non fosse scaduto.</string>
+    <string name="backup_restore_creds_kept">Nessuna credenziale è stata modificata: le chiavi API di questo dispositivo corrispondono già al backup e gli account con accesso effettuato sono stati mantenuti perché il loro accesso non risulta scaduto.</string>
+</resources>

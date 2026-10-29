@@ -18,7 +18,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
-import java.util.concurrent.Executors
+import java.util.concurrent.Executor
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -244,7 +244,12 @@ class LocationOffloadHandler(private val context: Context) : NativeOffloadHandle
                     lm.getCurrentLocation(
                         provider,
                         cancel,
-                        Executors.newSingleThreadExecutor(),
+                        // [GH #453] Run the callback where it is delivered: it
+                        // only stores the fix and counts down. A fresh
+                        // newSingleThreadExecutor() per provider per call was
+                        // never shut down, so its idle thread stayed until a GC
+                        // finalised the executor - up to 3 threads a call.
+                        DIRECT_EXECUTOR,
                     ) { loc ->
                         holder[0] = loc
                         latch.countDown()
@@ -416,6 +421,8 @@ class LocationOffloadHandler(private val context: Context) : NativeOffloadHandle
     }
 
     companion object {
+        private val DIRECT_EXECUTOR = Executor { it.run() }
+
         private const val TAG = "LocationOffload"
 
         // [T-android-location-cjk-geocode] CJK Unified Ideographs (+ Ext A,

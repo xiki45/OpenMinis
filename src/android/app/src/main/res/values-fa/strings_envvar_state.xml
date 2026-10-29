@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- فارسی (fa). Generated from the English base; keep keys in base order. -->
+<resources>
+    <string name="env_var_status_disabled">غیرفعال</string>
+    <string name="env_var_status_duplicate">نام تکراری</string>
+    <string name="env_var_enabled_toggle">فعال</string>
+    <string name="env_var_enabled_footer">وقتی خاموش باشد، متغیر مقدار و یادداشت خود را حفظ می‌کند اما به شل‌ها، ترمینال‌ها یا سرورهای MCP داده نمی‌شود.</string>
+    <string name="env_var_disabled_highlight">این متغیر غیرفعال است. برای در دسترس قرار دادن دوبارهٔ آن، روشنش کنید.</string>
+    <string name="env_var_action_disable">غیرفعال کردن</string>
+    <string name="env_var_action_enable">فعال کردن</string>
+    <string name="mcp_form_env_disabled_warning">\u200F%1$s غیرفعال است و با مقدار خالی ارسال می‌شود.</string>
+</resources>

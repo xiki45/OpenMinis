@@ -2,7 +2,6 @@ package com.openminis.app.auth
 
 import android.content.Context
 import android.net.Uri
-import androidx.browser.customtabs.CustomTabsIntent
 import com.openminis.app.logging.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -16,6 +15,7 @@ import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.UnknownHostException
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Thrown by [OpenAIOAuthManager] when DNS lookup or socket connect to
@@ -28,6 +28,50 @@ class OAuthNetworkUnreachableException(cause: Throwable) : Exception(cause.messa
 class OpenAIOAuthManager(context: Context, instanceId: String) : OAuthManager(context, instanceId) {
     companion object {
         private const val TAG = "CodexOAuth"
+
+        /**
+         * [T-android-codex-account-id-claim] The ChatGPT account id and plan in
+         * an OpenAI id_token. They live in the namespaced claim object
+         * `"https://api.openai.com/auth"` (where the Codex CLI and iOS's token
+         * import read them). This used to look only at the top level of the
+         * payload, found nothing, and the Chatgpt-Account-Id header was never
+         * sent. The top level is still accepted as a fallback.
+         * Null when the token has no payload segment; throws on a payload that
+         * is not base64url JSON.
+         */
+        internal fun claimsFromIdToken(token: String): IdTokenClaims? {
+            val parts = token.split(".")
+            if (parts.size < 2) return null
+            val payload = JSONObject(String(java.util.Base64.getUrlDecoder().decode(parts[1]), Charsets.UTF_8))
+            val auth = payload.optJSONObject("https://api.openai.com/auth")
+            fun claim(name: String): String? =
+                auth?.optString(name)?.takeIf { it.isNotEmpty() } ?: payload.optString(name).takeIf { it.isNotEmpty() }
+            return IdTokenClaims(claim("chatgpt_account_id"), claim("chatgpt_plan_type"))
+        }
+
+        /**
+         * [T-codex-account-id-refresh] The account claims of a token bundle:
+         * from its id_token, else (GH #447) from the access_token when that is
+         * a JWT carrying the same claims. Each claim is taken from the first
+         * token that has it; [IdTokenClaims.source] names where the account id
+         * came from. Null when neither token gives an account id or a plan.
+         */
+        internal fun claimsFromTokens(json: JSONObject): IdTokenClaims? {
+            fun of(field: String): IdTokenClaims? =
+                json.optString(field, "").takeIf { it.isNotEmpty() }
+                    ?.let { runCatching { claimsFromIdToken(it) }.getOrNull() }
+            val id = of("id_token")
+            val access = of("access_token")
+            val accountId = id?.accountId ?: access?.accountId
+            val planType = id?.planType ?: access?.planType
+            if (accountId == null && planType == null) return null
+            val source = when {
+                id?.accountId != null -> "id_token"
+                access?.accountId != null -> "access_token"
+                else -> null
+            }
+            return IdTokenClaims(accountId, planType, source)
+        }
 
         /**
          * Static helper: perform full login flow and save the access token.
@@ -65,7 +109,12 @@ class OpenAIOAuthManager(context: Context, instanceId: String) : OAuthManager(co
         val accessToken = withContext(Dispatchers.IO) {
             // Step 1: Wait for callback code
             val (code, state) = suspendCancellableCoroutine<Pair<String, String?>> { cont ->
-                val server = OAuthCallbackServer(callbackPort) { receivedCode, receivedState ->
+                val server = OAuthCallbackServer(
+                    callbackPort,
+                    // [T-oauth-callback-double-resume] Denied / failed on the
+                    // provider's page: end the sign-in now with its reason.
+                    onError = { err -> if (cont.isActive) cont.resumeWithException(err.toException(context)) },
+                ) { receivedCode, receivedState ->
                     if (cont.isActive) {
                         cont.resume(receivedCode to receivedState)
                     }
@@ -82,10 +131,7 @@ class OpenAIOAuthManager(context: Context, instanceId: String) : OAuthManager(co
                 // Open auth URL in Chrome Custom Tab. Do NOT set FLAG_ACTIVITY_NEW_TASK:
                 // MainActivity is singleTask, and launching Custom Tab in a new task causes
                 // the IME to be dismissed whenever the authorization page focuses an input.
-                val customTabsIntent = CustomTabsIntent.Builder()
-                    .setShowTitle(true)
-                    .build()
-                customTabsIntent.launchUrl(context, Uri.parse(authUrl))
+                OAuthTabLauncher.launch(context, Uri.parse(authUrl))
                 AppLogger.info(TAG, "Custom Tab launched")
             }
 
@@ -142,19 +188,41 @@ class OpenAIOAuthManager(context: Context, instanceId: String) : OAuthManager(co
         ).joinToString("&")
     }
 
+    // [T-android-codex-account-id-claim] Logins made before the claim was read
+    // from the right place stored nothing; for those the value is taken from
+    // the tokens kept with them, so no new sign-in is needed.
+    // [T-codex-account-id-refresh] ...and written back (GH #447), so it no
+    // longer depends on a later refresh keeping the id_token.
     var accountId: String?
-        get() = loadOAuthString("account_id")
+        get() = loadOAuthString("account_id") ?: backfill()?.accountId
         private set(value) { value?.let { saveOAuthString("account_id", it) } }
 
     var planType: String?
-        get() = loadOAuthString("plan_type")
+        get() = loadOAuthString("plan_type") ?: backfill()?.planType
         private set(value) { value?.let { saveOAuthString("plan_type", it) } }
 
-    override suspend fun onTokensReceived(json: JSONObject) {
-        val idToken = json.optString("id_token", "")
-        if (idToken.isNotEmpty()) {
-            parseIdToken(idToken)
-        }
+    private fun backfill(): IdTokenClaims? {
+        val claims = claimsFromTokens(loadStoredTokens() ?: return null) ?: return null
+        var wrote = false
+        if (claims.accountId != null && loadOAuthString("account_id") == null) { accountId = claims.accountId; wrote = true }
+        if (claims.planType != null && loadOAuthString("plan_type") == null) { planType = claims.planType; wrote = true }
+        if (wrote) AppLogger.info(TAG, "account claims backfilled (instance=$instanceId hasAccountId=${claims.accountId != null} source=${claims.source})")
+        return claims
+    }
+
+    override suspend fun onTokensReceived(json: JSONObject) = recordAccountClaims(json)
+
+    override suspend fun onTokensRefreshed(json: JSONObject) = recordAccountClaims(json)
+
+    /**
+     * Store the account id and plan of a token bundle just received (sign-in
+     * or refresh). A bundle without them leaves what was stored.
+     */
+    internal fun recordAccountClaims(json: JSONObject) {
+        val claims = claimsFromTokens(json)
+        claims?.accountId?.let { accountId = it }
+        claims?.planType?.let { planType = it }
+        AppLogger.info(TAG, "account claims (instance=$instanceId hasAccountId=${claims?.accountId != null} source=${claims?.source})")
     }
 
     /**
@@ -196,7 +264,7 @@ class OpenAIOAuthManager(context: Context, instanceId: String) : OAuthManager(co
         var lastError: Exception? = null
         for (attempt in 1..3) {
             try {
-                response = systemAwareHttpClient.newCall(request).execute()
+                response = com.openminis.app.network.NetworkHttp.client(netTag, systemAwareHttpClient).newCall(request).execute()
                 lastError = null
                 break
             } catch (e: Exception) {
@@ -220,7 +288,7 @@ class OpenAIOAuthManager(context: Context, instanceId: String) : OAuthManager(co
         response.close()
         AppLogger.info(
             TAG,
-            "token exchange response: $responseCode bodyLen=${responseBody.length} body[0..500]=${responseBody.take(500)}",
+            "token exchange response: $responseCode bodyLen=${responseBody.length} body[0..500]=${OAuthLogRedaction.jsonBody(responseBody).take(500)}",
         )
 
         if (responseCode !in 200..299) {
@@ -242,11 +310,8 @@ class OpenAIOAuthManager(context: Context, instanceId: String) : OAuthManager(co
         }
         saveOAuthString("tokens", json.toString())
 
-        // Parse id_token for account info
-        val idToken = json.optString("id_token", "")
-        if (idToken.isNotEmpty()) {
-            parseIdToken(idToken)
-        }
+        // Account id and plan, from the id_token or the access_token
+        recordAccountClaims(json)
 
         AppLogger.info(
             TAG,
@@ -317,17 +382,5 @@ class OpenAIOAuthManager(context: Context, instanceId: String) : OAuthManager(co
             .build()
     }
 
-    private fun parseIdToken(token: String) {
-        try {
-            val parts = token.split(".")
-            if (parts.size >= 2) {
-                val payload = String(java.util.Base64.getUrlDecoder().decode(parts[1]))
-                val json = JSONObject(payload)
-                accountId = json.optString("chatgpt_account_id").ifEmpty { null }
-                planType = json.optString("chatgpt_plan_type").ifEmpty { null }
-            }
-        } catch (e: Exception) {
-            AppLogger.warning(TAG, "id_token parse failed: ${e.javaClass.simpleName}: ${e.message}")
-        }
-    }
+    internal data class IdTokenClaims(val accountId: String?, val planType: String?, val source: String? = null)
 }

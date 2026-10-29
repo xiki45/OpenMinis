@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">API Key</string>
+    <string name="cfgr_all_models">모든 모델</string>
+    <string name="cfgr_allow_minis_config">minis-config 허용</string>
+    <string name="cfgr_applies_to">적용 대상</string>
+    <string name="cfgr_audio_input">오디오 입력</string>
+    <string name="cfgr_audio_output">오디오 출력</string>
+    <string name="cfgr_automatic">자동</string>
+    <string name="cfgr_chinese">중국어</string>
+    <string name="cfgr_custom">사용자 정의</string>
+    <string name="cfgr_custom_user_agent">사용자 지정 User-Agent</string>
+    <string name="cfgr_dark">다크</string>
+    <string name="cfgr_default">기본값</string>
+    <string name="cfgr_disabled">비활성화됨</string>
+    <string name="cfgr_display_name">표시 이름</string>
+    <string name="cfgr_enabled">활성화됨</string>
+    <string name="cfgr_english">영어</string>
+    <string name="cfgr_hidden">숨김</string>
+    <string name="cfgr_high">높음</string>
+    <string name="cfgr_image_input">이미지 입력</string>
+    <string name="cfgr_image_output">이미지 출력</string>
+    <string name="cfgr_label">라벨</string>
+    <string name="cfgr_light">라이트</string>
+    <string name="cfgr_low">낮음</string>
+    <string name="cfgr_max">최대</string>
+    <string name="cfgr_med">중</string>
+    <string name="cfgr_medium">보통</string>
+    <string name="cfgr_models">모델</string>
+    <string name="cfgr_name">이름</string>
+    <string name="cfgr_not_set">설정되지 않음</string>
+    <string name="cfgr_note">메모</string>
+    <string name="cfgr_off">끔</string>
+    <string name="cfgr_on">켜짐</string>
+    <string name="cfgr_pdf_input">PDF 입력</string>
+    <string name="cfgr_privacy_mode">프라이버시 모드</string>
+    <string name="cfgr_send">보내기</string>
+    <string name="cfgr_status">상태</string>
+    <string name="cfgr_system">시스템</string>
+    <string name="cfgr_theme">테마</string>
+    <string name="cfgr_ultra">울트라</string>
+    <string name="cfgr_video_input">동영상 입력</string>
+    <string name="cfgr_video_output">비디오 출력</string>
+    <string name="cfgr_xhigh">최고</string>
+    <string name="cfgr_fold_consecutive_tool_calls">연속된 도구 호출 접기</string>
+</resources>

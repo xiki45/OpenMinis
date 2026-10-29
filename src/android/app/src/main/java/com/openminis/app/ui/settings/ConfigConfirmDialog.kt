@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -32,11 +34,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import com.openminis.app.R
 import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.confirm.ConfigConfirmationGate
 import com.openminis.app.config.confirm.PendingConfigChange
@@ -72,6 +78,11 @@ private fun ConfigConfirmDialog(change: PendingConfigChange) {
     }
 
     val approvedCount = workingItems.count { it.isApproved }
+    val localize = rememberReadableLocalizer()
+    // [T-config-readable] Batch summary: the readable sentences of the rows
+    // still switched on, grouped by the record they touch. Updates live as
+    // rows are toggled.
+    val summaryLines = if (workingItems.size > 1) configSummaryLines(workingItems, localize) else emptyList()
 
     AlertDialog(
         onDismissRequest = { /* force explicit Apply / Cancel */ },
@@ -80,8 +91,14 @@ private fun ConfigConfirmDialog(change: PendingConfigChange) {
             dismissOnClickOutside = false,
         ),
         title = {
+            // [T-config-confirm-i18n] iOS ConfigConfirmSheet keys "Confirm %lld
+            // changes" / "Confirm change"; no plural variants there either.
             Text(
-                if (workingItems.size > 1) "Confirm ${workingItems.size} changes" else "Confirm change"
+                if (workingItems.size > 1) {
+                    stringResource(R.string.config_confirm_title_many, workingItems.size)
+                } else {
+                    stringResource(R.string.config_confirm_title_one)
+                },
             )
         },
         text = {
@@ -101,6 +118,7 @@ private fun ConfigConfirmDialog(change: PendingConfigChange) {
                     items(workingItems, key = { it.id }) { item ->
                         ConfirmRow(
                             item = item,
+                            localize = localize,
                             onToggle = { newValue ->
                                 val idx = workingItems.indexOfFirst { it.id == item.id }
                                 if (idx >= 0) {
@@ -109,11 +127,34 @@ private fun ConfigConfirmDialog(change: PendingConfigChange) {
                             },
                         )
                     }
+                    if (summaryLines.isNotEmpty()) {
+                        item(key = "readable-summary") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.config_audit_summary_header),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                summaryLines.forEach { line ->
+                                    Row(verticalAlignment = Alignment.Top) {
+                                        Text("•", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(text = line, style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
-            val applyText = if (approvedCount == 0) "Reject All" else "Apply"
+            val applyText = stringResource(
+                if (approvedCount == 0) R.string.config_confirm_reject_all else R.string.config_confirm_apply,
+            )
             MinisTextButton(
                 onClick = { ConfigConfirmationGate.userApprove(workingItems.toList()) },
                 enabled = workingItems.isNotEmpty(),
@@ -123,14 +164,18 @@ private fun ConfigConfirmDialog(change: PendingConfigChange) {
         },
         dismissButton = {
             MinisTextButton(onClick = { ConfigConfirmationGate.userReject() }) {
-                Text("Cancel")
+                Text(stringResource(R.string.config_confirm_cancel))
             }
         },
     )
 }
 
 @Composable
-private fun ConfirmRow(item: PendingConfigChangeItem, onToggle: (Boolean) -> Unit) {
+private fun ConfirmRow(
+    item: PendingConfigChangeItem,
+    localize: (String) -> String?,
+    onToggle: (Boolean) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -138,7 +183,9 @@ private fun ConfirmRow(item: PendingConfigChangeItem, onToggle: (Boolean) -> Uni
                 MaterialTheme.colorScheme.surfaceVariant,
                 RoundedCornerShape(8.dp),
             )
-            .padding(8.dp),
+            .padding(8.dp)
+            // A switched-off row fades, as on iOS (opacity 0.45).
+            .alpha(if (item.isApproved) 1f else 0.45f),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -185,14 +232,38 @@ private fun ConfirmRow(item: PendingConfigChangeItem, onToggle: (Boolean) -> Uni
                 )
             }
         }
+        // [T-config-readable] What the raw values above mean, in words, set
+        // apart from them by a hairline. Both appear only together, so a row
+        // without readable text never shows a stray line.
+        val readable = item.readable?.displayText(localize).orEmpty()
+        if (readable.isNotEmpty()) {
+            ConfigReadableDivider()
+            Row(verticalAlignment = Alignment.Top, modifier = Modifier.padding(top = 2.dp)) {
+                Icon(
+                    imageVector = Icons.Outlined.ChatBubbleOutline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 3.dp).height(14.dp).width(14.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = readable,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
         when (item.risk) {
             ConfigRisk.DESTRUCTIVE -> RiskHint(
-                text = "This may affect later tool calls.",
+                text = stringResource(R.string.config_confirm_risk_destructive),
                 color = MaterialTheme.colorScheme.error,
+                icon = Icons.Filled.Warning,
             )
+            // iOS: exclamationmark.circle for a sensitive change.
             ConfigRisk.SENSITIVE -> RiskHint(
-                text = "Reversible, but worth a quick look.",
+                text = stringResource(R.string.config_confirm_risk_sensitive),
                 color = Color(0xFFE65100),
+                icon = Icons.Outlined.ErrorOutline,
             )
             else -> Unit
         }
@@ -226,10 +297,10 @@ private fun VerbBadge(verb: String) {
 }
 
 @Composable
-private fun RiskHint(text: String, color: Color) {
+private fun RiskHint(text: String, color: Color, icon: ImageVector) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
-            imageVector = Icons.Filled.Warning,
+            imageVector = icon,
             contentDescription = null,
             tint = color,
             modifier = Modifier.height(14.dp),

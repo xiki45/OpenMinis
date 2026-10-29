@@ -431,13 +431,17 @@ class CompactToolPairingTest {
         val vm = ProductionSources.read("ui/chat/ChatViewModel.kt")
         assertTrue(vm.contains("private fun dropOrphanedToolParts(history: List<LLMMessage>): List<LLMMessage>"))
         assertTrue("in-flight exemption removed?", vm.contains("if (part is AgentContentPart.ToolUse) orphanedUses.remove(com.openminis.app.provider.ToolPairing.key(part.id))"))
-        assertTrue("sweep no longer on the outgoing path?", vm.contains("dropOrphanedToolParts(effectiveAgentHistoryUncounted())"))
+        // [T-ctx-builder] The outgoing path is RequestContextBuilder.outbound (stage 1 + 2).
+        assertTrue("sweep no longer on the outgoing path?",
+            // [T-ctx-trim-ladder] The frozen trim runs between compaction and the sweep.
+            vm.contains("dropOrphanedToolParts(input.trim(compacted(input.history, input.compaction, input.keepRecentUserTurns, compactionTrace)), input.sessionId, orphanTrace)"))
         assertTrue(vm.contains("Tool execution was interrupted by an unexpected error."))
 
         val oai = ProductionSources.read("provider/openai/OpenAIProvider.kt")
         assertTrue(oai.contains("globallyDedupeToolCallIds(messagesArray)"))
-        assertTrue(oai.contains("put(\"id\", capChatToolCallId(tu.id))"))
-        assertTrue(oai.contains("put(\"tool_call_id\", capChatToolCallId(tr.id))"))
+        // [B02] Chat Completions tool ids go out through the per-request wire map.
+        assertTrue(oai.contains("put(\"id\", wireIds.idFor(tu.id))"))
+        assertTrue(oai.contains("put(\"tool_call_id\", wireIds.idFor(tr.id))"))
         assertTrue(oai.contains("put(\"call_id\", capResponsesId(callId))"))
     }
 }

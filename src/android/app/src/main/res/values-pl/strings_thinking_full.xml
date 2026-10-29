@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">Pokaż całe rozumowanie</string>
+    <string name="thinking_full_title">Pełne rozumowanie</string>
+    <string name="thinking_full_char_count">Znaki: %1$s</string>
+    <string name="thinking_full_load_more">Wczytaj więcej</string>
+    <string name="thinking_full_copy_failed">Za długie do skopiowania</string>
+</resources>

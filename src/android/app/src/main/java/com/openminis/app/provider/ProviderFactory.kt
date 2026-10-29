@@ -17,9 +17,9 @@ object ProviderFactory {
      *
      * [sessionId] is the PERSISTED id of the conversation this provider will
      * serve, and exists only for [OpenCodeSessionHeader] — see there for why
-     * a draft placeholder must never be passed. Null (the default) is correct
-     * for every caller with no single conversation behind it: quick tests,
-     * vision sub-model calls, model-use offload, voice correction.
+     * a draft placeholder must never be passed. Null means "no header" - which
+     * OpenCode Go rejects with a 400 - so a caller that is a one-off
+     * conversation of its own passes [oneOffSessionId] instead.
      *
      * Providers are cached per chat ViewModel and reused across turns, so the
      * id is stored on the provider here and re-read when each request is built
@@ -27,12 +27,29 @@ object ProviderFactory {
      * chat, whose real id does not exist yet, start sending the header as soon
      * as `ensureSession()` mints one.
      */
+    /**
+     * [T-android-provider-entry-rules] A fresh conversation id for a one-off
+     * request that belongs to no chat (Quick Test, folder suggestions, voice
+     * correction). OpenCode Go rejects requests without one and asks for "one
+     * stable ID per conversation - a random UUID is fine"; each such call is
+     * its own conversation.
+     */
+    fun oneOffSessionId(): String = java.util.UUID.randomUUID().toString()
+
     fun create(
         instance: ProviderInstance,
         apiKey: String,
         model: LLMModel,
         context: Context? = null,
-        sessionId: String? = null,
+        /**
+         * Required on purpose ([T-android-provider-entry-rules]): every entry
+         * must say which conversation it serves - the chat's persisted id, a
+         * [oneOffSessionId] for a one-off call that is a conversation of its
+         * own, or an explicit null for none. A defaulted null let three entries
+         * (folder suggestions, vision, voice correction) silently send OpenCode
+         * Go requests it answers with 400.
+         */
+        sessionId: String?,
         /**
          * [T-android-model-custom-params] The user's per-model overrides
          * (temperature / top_p / custom headers / extra body params) for the
@@ -62,8 +79,12 @@ object ProviderFactory {
                 val isOAuth = instance.credentialType == ProviderCredential.oauth
                 // [T-provider-custom-user-agent] Only meaningful for custom-base
                 // (relay) instances; on the official direct path it's null.
-                if (basePath != null) AnthropicProvider(apiKey, model, basePath, isOAuth = isOAuth, customUserAgent = instance.customUserAgent)
+                val anthropic = if (basePath != null) AnthropicProvider(apiKey, model, basePath, isOAuth = isOAuth, customUserAgent = instance.customUserAgent)
                 else AnthropicProvider(apiKey, model, isOAuth = isOAuth)
+                // [T-quota-claude-subscription] Tag OAuth instances so their
+                // replies' usage headers reach the quota store.
+                if (isOAuth) anthropic.quotaInstanceId = instance.id
+                anthropic
             }
             ProviderType.gemini -> {
                 if (basePath != null) GeminiProvider(apiKey, model, basePath)
@@ -95,7 +116,11 @@ object ProviderFactory {
                         oauthTokenProvider = { oauthManager.validAccessToken() ?: throw com.openminis.app.data.model.LLMError.InvalidApiKey() },
                         model = model,
                         codexAccountId = oauthManager.accountId,
-                    )
+                    ).also {
+                        // [T-quota-codex-subscription] Replies' x-codex-*
+                        // headers feed this instance's quota.
+                        it.quotaInstanceId = instance.id
+                    }
                 } else {
                     // API key, or manual OAuth bearer (with or without custom
                     // base URL). The user can flip `useResponsesAPI` on a
@@ -267,12 +292,22 @@ object ProviderFactory {
         // custom-rule path (Gemini/Anthropic use their own emitters), so this is the
         // only type that needs it.
         (provider as? OpenAIProvider)?.thinkingRuleInstanceId = instance.id
+        // [T-net-android-phase3] Settings > Network: this instance's route
+        // (providerRoutes, device-local) is looked up by its policy tag on
+        // every request; with no route set the client is untouched.
+        (provider as? com.openminis.app.network.NetworkTagged)?.netTag =
+            com.openminis.app.network.NetworkRuntime.providerTag(instance.id)
+        // [T-sse-idle-timeout] Per-device, per-instance; read when the provider
+        // is built, so a change applies from the next run.
+        if (context != null) {
+            (provider as? OpenAIProvider)?.responseIdleTimeoutSec =
+                ResponseIdleTimeoutSetting.seconds(context, instance.id)
+        }
         // [T-android-opencode-session-header] Hand the conversation id to the
         // provider; it derives OpenCode Go's `x-opencode-session` per request
         // (gated on host + on the id being persisted, so nothing else sees it).
         // Set here rather than per-branch so every OpenAI-compatible path is
-        // covered by one line, and left null for callers that serve no single
-        // conversation (quick test, vision, model-use offload, voice).
+        // covered by one line.
         (provider as? OpenAIProvider)?.sessionId = sessionId
         // [T-android-model-custom-params] Per-model request tuning. Set here,
         // beside the other post-construction wiring, so every OpenAI-compatible

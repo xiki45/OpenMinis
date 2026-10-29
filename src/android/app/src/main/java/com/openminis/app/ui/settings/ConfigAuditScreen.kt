@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
@@ -62,7 +63,11 @@ import kotlinx.coroutines.SupervisorJob
  * log is internally consistent across platforms.
  */
 @Composable
-fun ConfigAuditScreen(modifier: Modifier = Modifier) {
+fun ConfigAuditScreen(
+    modifier: Modifier = Modifier,
+    /** [T-config-readable] Opens a record's detail page. */
+    onOpenEntry: (String) -> Unit = {},
+) {
     val log = remember { ConfigAuditLog.get() }
     val revision by log.revision.collectAsState()
     var entries by remember { mutableStateOf<List<ConfigAuditEntry>>(emptyList()) }
@@ -81,6 +86,7 @@ fun ConfigAuditScreen(modifier: Modifier = Modifier) {
     }
 
     val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+    val localize = rememberReadableLocalizer()
 
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -133,6 +139,8 @@ fun ConfigAuditScreen(modifier: Modifier = Modifier) {
                 items(entries, key = { it.id }) { entry ->
                     AuditRow(
                         entry = entry,
+                        localize = localize,
+                        onOpen = { onOpenEntry(entry.id) },
                         onRevert = { revertCandidate = entry },
                     )
                 }
@@ -145,20 +153,9 @@ fun ConfigAuditScreen(modifier: Modifier = Modifier) {
         AlertDialog(
             onDismissRequest = { revertCandidate = null },
             title = { Text(stringResource(R.string.logs_config_revert_dialog_title)) },
-            text = {
-                Column {
-                    Text(
-                        text = entry.key,
-                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "${displayJSON(entry.newValueJSON)} → ${displayJSON(entry.oldValueJSON)}",
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
+            // [T-config-readable] Says what will be undone, in words when the
+            // row has them; older rows keep the raw key + new → old.
+            text = { Text(text = configRevertMessage(entry, localize)) },
             confirmButton = {
                 val successTitle = stringResource(R.string.logs_config_revert_success_title)
                 val successBody = stringResource(R.string.logs_config_revert_success_body)
@@ -212,16 +209,24 @@ fun ConfigAuditScreen(modifier: Modifier = Modifier) {
 private data class RevertMessage(val title: String, val body: String)
 
 @Composable
-private fun AuditRow(entry: ConfigAuditEntry, onRevert: () -> Unit) {
+private fun AuditRow(
+    entry: ConfigAuditEntry,
+    localize: (String) -> String?,
+    onOpen: () -> Unit,
+    onRevert: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+            // [T-config-readable] Tap a record for its details: the readable
+            // description plus the full raw change.
+            .clickable(onClick = onOpen)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusBadge(entry.status)
+            ConfigAuditStatusBadge(entry.status)
             Spacer(Modifier.width(6.dp))
             Text(
                 text = actorLabel(entry.actor),
@@ -239,12 +244,32 @@ private fun AuditRow(entry: ConfigAuditEntry, onRevert: () -> Unit) {
         Text(
             text = entry.key,
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+            maxLines = 1,
+            overflow = TextOverflow.MiddleEllipsis,
         )
-        Row(verticalAlignment = Alignment.Top) {
+        // [T-config-readable] The readable description when the row has one;
+        // older rows keep the raw one-line diff.
+        val readable = entry.readable?.displayText(localize).orEmpty()
+        if (readable.isNotEmpty()) {
+            ConfigReadableDivider()
+            Text(
+                text = readable,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                color = if (entry.status == ConfigAuditStatus.APPLIED) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        } else Row(verticalAlignment = Alignment.Top) {
             Text(
                 text = displayJSON(entry.oldValueJSON),
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(6.dp))
@@ -263,6 +288,8 @@ private fun AuditRow(entry: ConfigAuditEntry, onRevert: () -> Unit) {
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -307,36 +334,6 @@ private fun actorLabel(actor: ConfigAuditActor): String = when (actor) {
     ConfigAuditActor.USER -> stringResource(R.string.logs_config_source_user)
     ConfigAuditActor.AGENT_REVERT -> stringResource(R.string.logs_config_source_agent_revert)
     ConfigAuditActor.USER_REVERT -> stringResource(R.string.logs_config_source_user_revert)
-}
-
-@Composable
-private fun StatusBadge(status: ConfigAuditStatus) {
-    val color = when (status) {
-        ConfigAuditStatus.APPLIED -> Color(0xFF388E3C)
-        ConfigAuditStatus.REJECTED -> Color(0xFF757575)
-        ConfigAuditStatus.TIMEOUT -> Color(0xFFE65100)
-        ConfigAuditStatus.REVERTED -> Color(0xFF8E5CD9)
-    }
-    val label = when (status) {
-        ConfigAuditStatus.APPLIED -> stringResource(R.string.logs_config_status_applied)
-        ConfigAuditStatus.REJECTED -> stringResource(R.string.logs_config_status_rejected)
-        ConfigAuditStatus.TIMEOUT -> stringResource(R.string.logs_config_status_timeout)
-        ConfigAuditStatus.REVERTED -> stringResource(R.string.logs_config_status_reverted)
-    }
-    Box(
-        modifier = Modifier
-            .background(color, RoundedCornerShape(8.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall.copy(
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-            ),
-            color = Color.White,
-        )
-    }
 }
 
 /**

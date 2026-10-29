@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">「%1$s」是 Minis 掛載到這裡的資料夾，無法在檔案瀏覽器中刪除。沒有刪除任何內容。要移除外部資料夾，請前往「設定 › 掛載外部資料夾」。</string>
+</resources>

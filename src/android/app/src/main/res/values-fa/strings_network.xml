@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">شبکه</string>
+    <string name="network_status">وضعیت</string>
+    <string name="network_status_starting">در حال شروع…</string>
+    <string name="network_status_connecting">در حال اتصال…</string>
+    <string name="network_status_off">خاموش</string>
+    <string name="network_device_name">نام دستگاه</string>
+    <string name="network_device_name_automatic">خودکار</string>
+    <string name="network_exit_node_none">هیچ‌کدام</string>
+    <string name="network_sign_out">خروج از حساب</string>
+    <string name="network_scope_shell">شل</string>
+    <string name="network_scope_browser">مرورگر</string>
+    <string name="network_scope_backup">نسخهٔ پشتیبان</string>
+    <string name="network_proxy_type">نوع</string>
+    <string name="network_proxy_server">سرور</string>
+    <string name="network_proxy_authentication">احراز هویت</string>
+    <string name="network_proxy_password">گذرواژه</string>
+    <string name="network_proxy_bypass">دور زدن</string>
+    <string name="network_proxy_test">آزمایش اتصال</string>
+    <string name="network_cancel">لغو</string>
+    <string name="network_save">ذخیره</string>
+    <string name="network_provider_route">شبکه</string>
+</resources>

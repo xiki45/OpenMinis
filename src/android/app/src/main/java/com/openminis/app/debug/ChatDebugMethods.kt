@@ -51,7 +51,10 @@ internal object ChatDebugMethods {
                 put("modelId", session.modelId)
                 put("modelName", modelDisplay)
                 put("source", session.source ?: JSONObject.NULL)
-                put("isRunning", SessionActivityTracker.isActive(session.id))
+                // [T-scheduled-active-session-android] Processing (own loop, sub
+                // agents or own scheduled task due); isStreaming = the loop alone.
+                put("isRunning", SessionActivityTracker.isProcessing(session.id))
+                put("isStreaming", SessionActivityTracker.isActive(session.id))
                 put("memoryEnabled", session.memoryEnabled == 1)
                 put("category", session.category ?: JSONObject.NULL)
                 put("pinnedAt", session.pinnedAt ?: JSONObject.NULL)
@@ -82,7 +85,8 @@ internal object ChatDebugMethods {
             put("modelId", session.modelId)
             put("modelName", resolveModelDisplay(provRepo, session.modelId))
             put("source", session.source ?: JSONObject.NULL)
-            put("isRunning", SessionActivityTracker.isActive(session.id))
+            put("isRunning", SessionActivityTracker.isProcessing(session.id))
+            put("isStreaming", SessionActivityTracker.isActive(session.id))
             put("memoryEnabled", session.memoryEnabled == 1)
             put("category", session.category ?: JSONObject.NULL)
             put("messageCount", msgs.size)

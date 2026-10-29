@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-folder-pages] Translations from the iOS catalog. -->
+<resources>
+    <string name="sessionlist_folder_show_more">نمایش %1$d مورد دیگر (%2$d باقی‌مانده)</string>
+</resources>

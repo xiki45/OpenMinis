@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,6 +65,7 @@ import com.openminis.app.R
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.MinisOutlinedButton
 import com.openminis.app.ui.components.MinisTextButton
+import com.openminis.app.ui.components.safeLaunchPicker
 import com.openminis.app.agent.SoulBodyLimitCheck
 import com.openminis.app.agent.SoulIcon
 import com.openminis.app.agent.SoulFile
@@ -293,10 +296,12 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
                         onChooseEmoji = { showIconMenu = false; showEmojiSheet = true },
                         onChooseImage = {
                             showIconMenu = false
-                            imagePicker.launch(
+                            imagePicker.safeLaunchPicker(
                                 PickVisualMediaRequest(
                                     ActivityResultContracts.PickVisualMedia.ImageOnly,
                                 ),
+                                context,
+                                "SoulSettings",
                             )
                         },
                         onUseDefault = { showIconMenu = false; icon = "" },
@@ -351,16 +356,21 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
             footer = stringResource(R.string.soul_personality_footer),
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                OutlinedTextField(
+                // [T-android-editor-keyboard-overlap] The page scrolls and
+                // pads for the keyboard (SettingsScaffold); this field asks
+                // it to keep the caret's line in view, not just the field.
+                com.openminis.app.ui.components.DocumentEditorField(
                     value = body,
                     onValueChange = { body = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 240.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         fontFamily = FontFamily.Monospace,
                     ),
-                    placeholder = { Text(stringResource(R.string.soul_body_placeholder)) },
+                    placeholder = stringResource(R.string.soul_body_placeholder),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                    outlined = true,
+                    ownScroll = false,
+                    minHeight = 240.dp,
                 )
                 Spacer(Modifier.height(6.dp))
                 val isOverLimit = bodyLimitCheck.isOverLimit
@@ -709,6 +719,14 @@ private fun soulBodyCountTextAndroid(body: String): String {
     }
 }
 
+/** [T-soul-lang-button-wrap] Side padding of the language buttons. */
+internal val LANG_BUTTON_SIDE_PADDING = 8.dp
+
+@Composable
+private fun LangButtonLabel(label: String) {
+    Text(label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LangPicker(lang: String, onLangChange: (String) -> Unit) {
@@ -730,18 +748,25 @@ private fun LangPicker(lang: String, onLangChange: (String) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
         )
+        // [T-soul-lang-button-wrap] Three equal-width buttons leave little room
+        // once the default 24dp side padding is taken: on narrow phones
+        // "English" broke mid-word ("Englis" / "h"). Keep labels on one line
+        // and use a tighter side padding.
+        val padding = PaddingValues(horizontal = LANG_BUTTON_SIDE_PADDING, vertical = 8.dp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             options.forEach { (key, label) ->
                 if (key == current.first) {
                     MinisButton(
                         onClick = { onLangChange(key) },
                         modifier = Modifier.weight(1f),
-                    ) { Text(label) }
+                        contentPadding = padding,
+                    ) { LangButtonLabel(label) }
                 } else {
                     MinisOutlinedButton(
                         onClick = { onLangChange(key) },
                         modifier = Modifier.weight(1f),
-                    ) { Text(label) }
+                        contentPadding = padding,
+                    ) { LangButtonLabel(label) }
                 }
             }
         }

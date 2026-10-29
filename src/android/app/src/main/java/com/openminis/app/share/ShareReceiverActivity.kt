@@ -221,10 +221,10 @@ class ShareReceiverActivity : ComponentActivity() {
 
     private fun handleSingleSend(intent: Intent, out: MutableList<PendingShare.Item>) {
         val type = intent.type ?: ""
-        when {
-            type == "text/plain" -> {
-                val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
-                    ?: return
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+        when (singleSendSource(type, hasText = text != null)) {
+            SingleSendSource.TEXT -> {
+                text ?: return
                 if (text.length <= INLINE_TEXT_LIMIT) {
                     out += PendingShare.Item(PendingShare.Item.Kind.INLINE_TEXT, text)
                 } else {
@@ -234,7 +234,7 @@ class ShareReceiverActivity : ComponentActivity() {
                     out += PendingShare.Item(PendingShare.Item.Kind.ATTACHMENT, name)
                 }
             }
-            else -> {
+            SingleSendSource.STREAM -> {
                 val uri = getParcelableExtra<Uri>(intent, Intent.EXTRA_STREAM) ?: return
                 copyUriToStaging(uri, type)?.let {
                     out += PendingShare.Item(PendingShare.Item.Kind.ATTACHMENT, it)
@@ -395,3 +395,17 @@ class ShareReceiverActivity : ComponentActivity() {
         intent.getParcelableArrayListExtra(key, T::class.java)
     else intent.getParcelableArrayListExtra(key)
 }
+
+internal enum class SingleSendSource { TEXT, STREAM }
+
+/**
+ * Where an ACTION_SEND's content is. A text/plain share with text in
+ * EXTRA_TEXT is that text; anything else - including a text/plain FILE in
+ * EXTRA_STREAM with no EXTRA_TEXT, which is how Minis's own log share and
+ * file preview share a .log / .txt, and how file managers share one - is the
+ * stream. Reading only EXTRA_TEXT for text/plain dropped those files: the
+ * share extracted nothing and Minis just came back to the front (kilolonion,
+ * 10-19).
+ */
+internal fun singleSendSource(type: String, hasText: Boolean): SingleSendSource =
+    if (type == "text/plain" && hasText) SingleSendSource.TEXT else SingleSendSource.STREAM

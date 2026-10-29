@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-backup-restore-semantics / B01] Restore page copy for the restore semantics
+     decided 2026-10-15: the backup wins items present on both sides (API keys
+     included, OAuth sign-ins only when expired); nothing only on this device is
+     deleted. Replaces backup_restore_footer / backup_creds_restored /
+     backup_creds_kept, whose text promised the opposite. -->
+<resources>
+    <string name="backup_restore_merge_footer">復元すると、バックアップがこの端末にマージされます。同じ項目が両方にある場合（プロバイダー、モデルの設定、同じ名前のモデルグループ）は、この端末のほうが新しくてもバックアップ側が使われます。API キーも同様です。この端末でログイン中のアカウントは、ログインが失効していない限りそのまま残します。この端末にしかない項目は削除されません。</string>
+    <string name="backup_restore_creds_restored">%1$d 件のプロバイダーの認証情報をバックアップから復元しました。バックアップの API キーがこの端末のキーを置き換えます。この端末でログイン中のアカウントは、ログインが失効していない限りそのまま残しています。</string>
+    <string name="backup_restore_creds_kept">認証情報は変更されていません。この端末の API キーはバックアップと一致しており、ログイン中のアカウントは失効の印が付いていないためそのまま残しました。</string>
+</resources>

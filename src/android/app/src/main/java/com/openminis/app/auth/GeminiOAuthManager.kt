@@ -11,8 +11,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 class GeminiOAuthManager(context: Context, instanceId: String) : OAuthManager(context, instanceId) {
     companion object {
@@ -82,13 +80,11 @@ class GeminiOAuthManager(context: Context, instanceId: String) : OAuthManager(co
     private suspend fun fetchUserEmail() {
         val token = validAccessToken() ?: return
         try {
-            val conn = URL("https://www.googleapis.com/oauth2/v1/userinfo").openConnection() as HttpURLConnection
-            conn.setRequestProperty("Authorization", "Bearer $token")
-            if (conn.responseCode == 200) {
-                val body = conn.inputStream.bufferedReader().readText()
-                email = JSONObject(body).optString("email")
+            // [FEAT-261021-16] Routed by the instance's tag; unrouted it is the same HttpURLConnection request.
+            com.openminis.app.network.NetworkUrlRequest.open(netTag, "https://www.googleapis.com/oauth2/v1/userinfo",
+                headers = mapOf("Authorization" to "Bearer $token")).use { r ->
+                if (r.code == 200) email = JSONObject(r.text()).optString("email")
             }
-            conn.disconnect()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to fetch email", e)
         }
@@ -107,17 +103,17 @@ class GeminiOAuthManager(context: Context, instanceId: String) : OAuthManager(co
         false
     }
 
+    /** The headers the Cloud Code calls have always sent, in the same order. */
+    private fun cloudCodeHeaders(token: String, json: Boolean): Map<String, String> = buildMap {
+        put("Authorization", "Bearer $token")
+        put("User-Agent", USER_AGENT)
+        if (json) put("Content-Type", "application/json")
+    }
+
     private fun loadCodeAssist(token: String): String? {
         return try {
-            val conn = URL("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist").openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Authorization", "Bearer $token")
-            conn.setRequestProperty("User-Agent", USER_AGENT)
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.doOutput = true
-            conn.outputStream.write("{}".toByteArray())
-            val response = if (conn.responseCode == 200) conn.inputStream.bufferedReader().readText() else null
-            conn.disconnect()
+            val response = com.openminis.app.network.NetworkUrlRequest.open(netTag, "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", "POST",
+                cloudCodeHeaders(token, json = true), "{}".toByteArray()).use { r -> if (r.code == 200) r.text() else null }
             response?.let { JSONObject(it).optString("gcpProjectId").ifEmpty { null } }
         } catch (e: Exception) {
             Log.d(TAG, "loadCodeAssist failed: ${e.message}")
@@ -127,16 +123,10 @@ class GeminiOAuthManager(context: Context, instanceId: String) : OAuthManager(co
 
     private suspend fun onboardUser(token: String): String? {
         return try {
-            val conn = URL("https://cloudcode-pa.googleapis.com/v1internal:onboardUser").openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Authorization", "Bearer $token")
-            conn.setRequestProperty("User-Agent", USER_AGENT)
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.doOutput = true
-            conn.outputStream.write("""{"setupMetadata":{"ideType":"NEOVIM","platforms":["LINUX"]}}""".toByteArray())
-            val responseCode = conn.responseCode
-            val body = if (responseCode == 200) conn.inputStream.bufferedReader().readText() else null
-            conn.disconnect()
+            val body = com.openminis.app.network.NetworkUrlRequest.open(netTag, "https://cloudcode-pa.googleapis.com/v1internal:onboardUser", "POST",
+                cloudCodeHeaders(token, json = true),
+                """{"setupMetadata":{"ideType":"NEOVIM","platforms":["LINUX"]}}""".toByteArray(),
+            ).use { r -> if (r.code == 200) r.text() else null }
 
             if (body != null) {
                 val json = JSONObject(body)
@@ -157,11 +147,8 @@ class GeminiOAuthManager(context: Context, instanceId: String) : OAuthManager(co
         for (i in 0 until 24) {
             delay(5000)
             try {
-                val conn = URL("https://cloudcode-pa.googleapis.com/v1internal/$operationName").openConnection() as HttpURLConnection
-                conn.setRequestProperty("Authorization", "Bearer $token")
-                conn.setRequestProperty("User-Agent", USER_AGENT)
-                val body = if (conn.responseCode == 200) conn.inputStream.bufferedReader().readText() else null
-                conn.disconnect()
+                val body = com.openminis.app.network.NetworkUrlRequest.open(netTag, "https://cloudcode-pa.googleapis.com/v1internal/$operationName",
+                    headers = cloudCodeHeaders(token, json = false)).use { r -> if (r.code == 200) r.text() else null }
                 if (body != null) {
                     val json = JSONObject(body)
                     if (json.optBoolean("done")) {

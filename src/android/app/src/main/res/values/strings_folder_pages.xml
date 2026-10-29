@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-folder-pages] Sidebar: an open folder lists 20 chats at a time; this row adds the next page. Translations from the iOS catalog ("Show %lld more (%lld left)"). -->
+<resources>
+    <string name="sessionlist_folder_show_more">Show %1$d more (%2$d left)</string>
+</resources>

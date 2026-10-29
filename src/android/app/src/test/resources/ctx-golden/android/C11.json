@@ -1,0 +1,246 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/fake.webp]"
+          },
+          {
+            "image": {
+              "base64Len": 25028,
+              "bytes": 18769,
+              "decodable": true,
+              "h": 600,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "2fffaa4d75a049c1",
+              "w": 800
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/fake.webp\" url=\"minis://attachments/uploads/fake.webp\" size=\"18769\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/fake.webp]"
+          },
+          {
+            "image": {
+              "base64Len": 25028,
+              "bytes": 18769,
+              "decodable": true,
+              "h": 600,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "2fffaa4d75a049c1",
+              "w": 800
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/fake.webp\" url=\"minis://attachments/uploads/fake.webp\" size=\"18769\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/fake.webp]"
+          },
+          {
+            "image": {
+              "base64Len": 25028,
+              "bytes": 18769,
+              "decodable": true,
+              "h": 600,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "2fffaa4d75a049c1",
+              "w": 800
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/fake.webp\" url=\"minis://attachments/uploads/fake.webp\" size=\"18769\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/fake.webp]"
+          },
+          {
+            "image": {
+              "base64Len": 25028,
+              "bytes": 18769,
+              "decodable": true,
+              "h": 600,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "2fffaa4d75a049c1",
+              "w": 800
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/fake.webp\" url=\"minis://attachments/uploads/fake.webp\" size=\"18769\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look"
+          },
+          {
+            "image": {
+              "base64Len": 25028,
+              "bytes": 18769,
+              "decodable": true,
+              "h": 600,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "2fffaa4d75a049c1",
+              "w": 800
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/fake.webp\" url=\"minis://attachments/uploads/fake.webp\" size=\"18769\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look"
+          },
+          {
+            "image": {
+              "base64Len": 25028,
+              "bytes": 18769,
+              "decodable": true,
+              "h": 600,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "2fffaa4d75a049c1",
+              "w": 800
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/fake.webp\" url=\"minis://attachments/uploads/fake.webp\" size=\"18769\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look"
+          },
+          {
+            "image": {
+              "base64Len": 25028,
+              "bytes": 18769,
+              "decodable": true,
+              "h": 600,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "2fffaa4d75a049c1",
+              "w": 800
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/fake.webp\" url=\"minis://attachments/uploads/fake.webp\" size=\"18769\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Look"
+          },
+          {
+            "image": {
+              "base64Len": 25028,
+              "bytes": 18769,
+              "decodable": true,
+              "h": 600,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "2fffaa4d75a049c1",
+              "w": 800
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/fake.webp\" url=\"minis://attachments/uploads/fake.webp\" size=\"18769\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

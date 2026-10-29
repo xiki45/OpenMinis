@@ -234,6 +234,12 @@ object VisionGroupResolver {
         // pixels) steer the description toward a specific question. Blank/null →
         // the generic DESCRIBE_PROMPT.
         customPrompt: String? = null,
+        /**
+         * [T-android-provider-entry-rules] The chat this image belongs to, for
+         * OpenCode Go's `x-opencode-session` (a 400 without it). Required: the
+         * caller says which conversation it serves.
+         */
+        sessionId: String?,
         // [T-vision-group-attribution / GH#182] Fires before each candidate so
         // the caller can show which model is currently reading, and surface a
         // fallback switch as it happens rather than only in the final result.
@@ -263,7 +269,7 @@ object VisionGroupResolver {
             val name = displayName(instance, entry)
             onAttempt?.invoke(VisionAttempt(idx + 1, attempts.size, name))
             try {
-                val text = describeOnce(repo, context, instance, entry, imageData, mimeType, instruction)
+                val text = describeOnce(repo, context, instance, entry, imageData, mimeType, instruction, sessionId)
                 val trimmed = text.trim()
                 if (trimmed.isEmpty()) {
                     failures.add(name to "returned an empty description")
@@ -297,13 +303,14 @@ object VisionGroupResolver {
         imageData: ByteArray,
         mimeType: String,
         instruction: String,
+        sessionId: String?,
     ): String {
         // [T-empty-key-compat-endpoints] usableApiKey returns "" for keyless
         // third-party compatible endpoints, so they stay routable for vision.
-        val apiKey = repo.usableApiKey(instance) ?: throw IllegalStateException("no credential")
+        val apiKey = repo.requestCredential(instance) ?: throw IllegalStateException("no credential")
         // Guard: only route to a model that actually declares image input.
         if (!entry.model.hasImageInput) throw IllegalStateException("model is not vision-capable")
-        val provider = ProviderFactory.create(instance, apiKey, entry.model, context, overrides = entry.overrides)
+        val provider = ProviderFactory.create(instance, apiKey, entry.model, context, sessionId = sessionId, overrides = entry.overrides)
         android.util.Log.i("VisionGroup", "[Vision] describing via ${provider.name} model=${entry.model.id} bytes=${imageData.size}")
 
         return withTimeout(PER_ATTEMPT_TIMEOUT_MS) {

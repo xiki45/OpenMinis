@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Naka-disable</string>
+    <string name="env_var_status_duplicate">Dobleng pangalan</string>
+    <string name="env_var_enabled_toggle">Naka-enable</string>
+    <string name="env_var_enabled_footer">Kapag naka-off, nananatili ang value at note ng variable pero hindi ito ipinapasa sa mga shell, terminal o MCP server.</string>
+    <string name="env_var_disabled_highlight">Naka-disable ang variable na ito. I-on ito para magamit muli.</string>
+    <string name="env_var_action_disable">I-disable</string>
+    <string name="env_var_action_enable">I-enable</string>
+    <string name="mcp_form_env_disabled_warning">Naka-disable ang %1$s at ipapasa bilang walang laman na value.</string>
+</resources>

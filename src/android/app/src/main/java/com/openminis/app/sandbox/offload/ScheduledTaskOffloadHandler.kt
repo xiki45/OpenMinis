@@ -30,7 +30,7 @@ import java.util.Calendar
  *                          | [--trigger on-completion --of <taskId|jobId>]
  *                          [--target new|follow-up|rerun]
  *                          [--session <id>] [--message <id>]
- *                          [--model <modelId>] [--thinking off|low|medium|high|xhigh|max|ultra]
+ *                          [--model entry:<id>|group:<id>|<modelId>] [--thinking off|low|medium|high|xhigh|max|ultra]
  *                          [--command "<cmd>" [--command-timeout 2m]]   (alias --shell)
  *                          [--tool <name> --tool-args '<json>']
  *                          [--start YYYY-MM-DD] [--end YYYY-MM-DD]
@@ -74,7 +74,19 @@ class ScheduledTaskOffloadHandler(private val context: Context) : NativeOffloadH
         return try {
             when (val sub = args.positional.firstOrNull() ?: "list") {
                 "list" -> handleList()
-                "create", "add" -> handleCreate(args, request.sessionId)
+                "create", "add" -> {
+                    // [T-offload-caller-session] The chat a default (follow-up)
+                    // job belongs to and fires into: the session whose files
+                    // this shell sees, i.e. the PARENT chat for a sub agent.
+                    // The raw MINIS_CHAT_SESSION_ID is the helper's own hidden
+                    // session, so a task created from a sub agent fired into a
+                    // chat the user never sees while `create` still reported
+                    // "IN THIS CHAT". iOS resolves the caller the same way
+                    // (7effb6f2f; a helper runs under its parent's fs_context).
+                    val caller = OffloadCallerSession.resolve(request.sessionId)
+                    AppLogger.info(TAG, "create caller=${caller.sid?.take(8) ?: "nil"} via=${caller.source}")
+                    handleCreate(args, caller.sid)
+                }
                 "delete", "remove", "rm" -> handleDelete(args)
                 "enable" -> handleSetEnabled(args, true)
                 "disable" -> handleSetEnabled(args, false)
@@ -128,6 +140,17 @@ class ScheduledTaskOffloadHandler(private val context: Context) : NativeOffloadH
         if (prefill != null && target is ScheduledTargetMode.RerunMessage) {
             throw IllegalArgumentException("--command/--tool cannot be used with the rerun target (it replays an existing message)")
         }
+        // [OpenMinis#445] Resolved and checked now, stored as the binding the
+        // task editor writes; the raw string used to be kept as a model id and
+        // silently fell back to the default model when it matched nothing.
+        val model = args.get("model", "m")?.let { raw ->
+            if (target !is ScheduledTargetMode.NewSession) {
+                throw IllegalArgumentException(
+                    "--model only applies to --target new; a follow-up or rerun runs in an existing chat and keeps that chat's model",
+                )
+            }
+            resolveModel(raw)
+        }
         val task = manager.create(
             ScheduledTask(
                 label = label,
@@ -137,7 +160,8 @@ class ScheduledTaskOffloadHandler(private val context: Context) : NativeOffloadH
                 customDays = trigger.customDays,
                 prompt = prompt,
                 targetMode = target,
-                modelId = args.get("model", "m"),
+                modelId = model?.modelId,
+                modelBinding = model?.bindingJson,
                 thinkingLevel = thinking,
                 prefillToolCall = prefill,
                 enabled = !args.hasFlag("disabled"),
@@ -148,6 +172,9 @@ class ScheduledTaskOffloadHandler(private val context: Context) : NativeOffloadH
                 intervalSec = trigger.intervalSec,
                 maxFires = trigger.maxFires,
                 onCompletionOf = trigger.onCompletionOf,
+                // [T-scheduled-active-session-android] The chat running the CLI,
+                // so a follow-up aimed back at it keeps it processing.
+                creatorSessionId = callerSessionId,
             ),
         )
         val destination = when (target) {
@@ -243,6 +270,17 @@ class ScheduledTaskOffloadHandler(private val context: Context) : NativeOffloadH
         }
     }
 
+    private fun resolveModel(raw: String): com.openminis.app.scheduled.ScheduledModelSource.Resolved {
+        val repo = (context.applicationContext as? com.openminis.app.MinisApp)?.providerRepositoryOrNull
+            ?: throw IllegalStateException("--model: model settings are not loaded yet; try again")
+        val cfg = repo.config.value
+        return com.openminis.app.scheduled.ScheduledModelSource.resolve(
+            raw,
+            com.openminis.app.scheduled.ScheduledModelSource.entryRefs(cfg.modelEntries, repo.allVisibleEntries()),
+            com.openminis.app.scheduled.ScheduledModelSource.groupRefs(cfg.modelGroups),
+        )
+    }
+
     private fun sessionEntity(id: String) =
         (context.applicationContext as? com.openminis.app.MinisApp)?.chatRepositoryOrNull?.let { repo ->
             runBlocking { repo.getSession(id) }
@@ -291,7 +329,7 @@ class ScheduledTaskOffloadHandler(private val context: Context) : NativeOffloadH
         t.onCompletionOf?.let { put("of", it) }
         if (t.usesAnchor) put("firedCount", t.triggeredCount ?: 0)
         t.thinkingLevel?.let { put("thinking", it.name.lowercase()) }
-        if (t.modelId != null) put("model", t.modelId)
+        com.openminis.app.scheduled.ScheduledModelSource.display(t.modelBinding, t.modelId)?.let { put("model", it) }
         t.prefillToolCall?.let { put("prefillTool", it.toJson()) }
         put("enabled", t.enabled)
         t.nextTriggerMs()?.let { put("nextTriggerMs", it) }
@@ -537,7 +575,7 @@ class ScheduledTaskOffloadHandler(private val context: Context) : NativeOffloadH
                                                              {{result}} in --prompt becomes its result
                    [--trigger once|loop|cron|on-completion]  optional; inferred from the flags above
                    [--target follow-up|new|rerun --session <id> --message <id>]
-                   [--model <modelId>] [--thinking off|low|medium|high|xhigh|max|ultra]
+                   [--model entry:<id>|group:<id>|<modelId>] [--thinking off|low|medium|high|xhigh|max|ultra]
                    [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--disabled]
                    [--command "<shell command>" [--command-timeout 2m]]   prefilled first step
                    [--tool shell_execute --tool-args '{"command":"..."}']
@@ -554,6 +592,11 @@ class ScheduledTaskOffloadHandler(private val context: Context) : NativeOffloadH
                          asks for that
               rerun      re-run a chat (--session) from a chosen user message (--message,
                          prompt ignored)
+
+            MODEL (--model, --target new only): entry:<id> or a bare entry id pins that exact
+              entry, group:<id> a model group (the forms `minis-config get session.primaryModel`
+              prints; ids from `minis-config get models`). A bare model id is accepted only
+              when one visible entry serves it; otherwise create fails and lists the entry ids.
 
             OUTPUT: `create` answers with a `delivery` line saying where every fire will
             land (this chat, another chat, a new chat, a rerun). Check it; if it is not

@@ -126,9 +126,32 @@ object DecorativeClock {
  */
 @Composable
 fun rememberDecorativeTick(): State<Long> {
-    DisposableEffect(Unit) {
-        DecorativeClock.acquire()
-        onDispose { DecorativeClock.release() }
+    // [FIX-261025-14] Held only while this reader's lifecycle is STARTED. The
+    // clock runs on AndroidUiDispatcher's frame clock, which - unlike
+    // Compose's own - is not paused when the screen stops, so a reader left
+    // composed in the background (a group tile's comet or a row's ring while
+    // a long turn runs with Minis in the background) woke the main thread
+    // every vsync with nothing drawn. A screen behind another one in the
+    // back stack (CREATED) releases it too. The floating tool capsule is
+    // plain Views and does not use this clock.
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        var held = false
+        fun hold() { if (!held) { held = true; DecorativeClock.acquire() } }
+        fun drop() { if (held) { held = false; DecorativeClock.release() } }
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_START -> hold()
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> drop()
+                else -> {}
+            }
+        }
+        // Replays ON_START when the owner is already started.
+        owner.lifecycle.addObserver(observer)
+        onDispose {
+            owner.lifecycle.removeObserver(observer)
+            drop()
+        }
     }
     return DecorativeClock.nanos
 }

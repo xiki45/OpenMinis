@@ -299,4 +299,55 @@ class ToolLoopDetectorTest {
         ToolLoopConfig(criticalThreshold = 30, globalCircuitBreakerThreshold = 30)
     }
 
+    // [T-tool-title-reminder] Missing-title soft reminder: counted here, next to
+    // the loop warnings, and due on the 1st, 11th, 21st… missing-title call.
+    // Mirrors iOS ToolTitleReminderTests' cadence section.
+
+    @Test
+    fun `tool title reminder fires on 1st 11th 21st missing call only`() {
+        val detector = ToolLoopDetector()
+        val fired = mutableListOf<Int>()
+        var missing = 0
+        for (i in 1..40) {
+            val titled = i % 4 == 0          // has a title → not counted
+            val declared = i % 5 != 0        // MCP-style tool without tool_title → not counted
+            val args = org.json.JSONObject().put("command", "ls")
+            if (titled) args.put("tool_title", "Step $i")
+            if (declared && !titled) missing++
+            if (detector.recordToolTitle(args, declared) != null) fired.add(missing)
+        }
+        assertEquals(listOf(1, 11, 21), fired)
+        assertEquals(24, missing)
+    }
+
+    @Test
+    fun `tool title reminder returns the shared text and restarts after reset`() {
+        val detector = ToolLoopDetector()
+        val first = detector.recordToolTitle(org.json.JSONObject(), true)
+        assertEquals(com.openminis.app.ui.chat.ToolTitleReminder.TEXT, first)
+        assertNull(detector.recordToolTitle(org.json.JSONObject(), true))
+        detector.reset()
+        assertEquals(com.openminis.app.ui.chat.ToolTitleReminder.TEXT,
+            detector.recordToolTitle(org.json.JSONObject(), true))
+    }
+
+    @Test
+    fun `tool title reminder period is configurable`() {
+        val detector = ToolLoopDetector(ToolLoopConfig(toolTitleReminderEvery = 3))
+        val fired = (1..7).filter { detector.recordToolTitle(org.json.JSONObject(), true) != null }
+        assertEquals(listOf(1, 4, 7), fired)
+    }
+
+    @Test
+    fun `tool title counting does not disturb loop warnings`() {
+        val detector = ToolLoopDetector()
+        var warned = false
+        repeat(10) {
+            detector.recordToolTitle(org.json.JSONObject(), true)
+            val r = detector.record("file_read", mapOf("path" to "/foo"), result = "ok", errorMessage = null)
+            if (r.level == Level.WARNING) warned = true
+        }
+        assertTrue(warned)
+    }
+
 }

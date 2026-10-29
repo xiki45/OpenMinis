@@ -24,6 +24,9 @@ class UnavailableFieldTest {
         override val valueSchema = ConfigSchema.Bool
         override val risk = ConfigRisk.NORMAL
         override val revertable = true
+        override val readable = com.openminis.app.config.readable.ConfigReadable(
+            com.openminis.app.config.readable.ConfigValueFormatter.Bool(),
+        )
         var written: ConfigValue? = null
         override fun read(): ConfigValue = ConfigValue.Bool(false)
         override fun write(value: ConfigValue) { written = value }

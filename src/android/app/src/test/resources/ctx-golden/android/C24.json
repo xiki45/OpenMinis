@@ -1,0 +1,1758 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 1"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise1.png]"
+          },
+          {
+            "kind": "text",
+            "text": "[image elided to fit 25MB request budget. Original at /var/minis/attachments/uploads/noise1.png \u2014 re-fetch with `read_image /var/minis/attachments/uploads/noise1.png` if you need to see it.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise1.png\" url=\"minis://attachments/uploads/noise1.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 2"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise2.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise2.png\" url=\"minis://attachments/uploads/noise2.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 2"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 3"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise3.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise3.png\" url=\"minis://attachments/uploads/noise3.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 3"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 4"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise4.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise4.png\" url=\"minis://attachments/uploads/noise4.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 4"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 5"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise5.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise5.png\" url=\"minis://attachments/uploads/noise5.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 5"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 6"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise6.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise6.png\" url=\"minis://attachments/uploads/noise6.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 6"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Compare them all"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 1"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise1.png]"
+          },
+          {
+            "kind": "text",
+            "text": "[image elided to fit 25MB request budget. Original at /var/minis/attachments/uploads/noise1.png \u2014 re-fetch with `read_image /var/minis/attachments/uploads/noise1.png` if you need to see it.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise1.png\" url=\"minis://attachments/uploads/noise1.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 1"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 2"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise2.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise2.png\" url=\"minis://attachments/uploads/noise2.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 2"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 3"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise3.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise3.png\" url=\"minis://attachments/uploads/noise3.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 3"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 4"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise4.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise4.png\" url=\"minis://attachments/uploads/noise4.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 4"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 5"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise5.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise5.png\" url=\"minis://attachments/uploads/noise5.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 5"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 6"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise6.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise6.png\" url=\"minis://attachments/uploads/noise6.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 6"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Compare them all"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 1[attached image: /var/minis/attachments/uploads/noise1.png][image elided to fit 25MB request budget. Original at /var/minis/attachments/uploads/noise1.png \u2014 re-fetch with `read_image /var/minis\u2026[452 chars sha256:1f624b492422]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 2"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise2.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise2.png\" url=\"minis://attachments/uploads/noise2.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 2"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 3"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise3.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise3.png\" url=\"minis://attachments/uploads/noise3.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 3"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 4"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise4.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise4.png\" url=\"minis://attachments/uploads/noise4.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 4"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 5"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise5.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise5.png\" url=\"minis://attachments/uploads/noise5.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 5"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 6"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise6.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise6.png\" url=\"minis://attachments/uploads/noise6.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 6"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Compare them all"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 1[attached image: /var/minis/attachments/uploads/noise1.png][image elided to fit 25MB request budget. Original at /var/minis/attachments/uploads/noise1.png \u2014 re-fetch with `read_image /var/minis\u2026[452 chars sha256:1f624b492422]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 2"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise2.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise2.png\" url=\"minis://attachments/uploads/noise2.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 2"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 3"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise3.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise3.png\" url=\"minis://attachments/uploads/noise3.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 3"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 4"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise4.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise4.png\" url=\"minis://attachments/uploads/noise4.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 4"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 5"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise5.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise5.png\" url=\"minis://attachments/uploads/noise5.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 5"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 6"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/noise6.png]"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise6.png\" url=\"minis://attachments/uploads/noise6.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 6"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Compare them all"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 1"
+          },
+          {
+            "kind": "text",
+            "text": "[image elided to fit 25MB request budget. Original at /var/minis/attachments/uploads/noise1.png \u2014 re-fetch with `read_image /var/minis/attachments/uploads/noise1.png` if you need to see it.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise1.png\" url=\"minis://attachments/uploads/noise1.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 2"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise2.png\" url=\"minis://attachments/uploads/noise2.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 2"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 3"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise3.png\" url=\"minis://attachments/uploads/noise3.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 3"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 4"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise4.png\" url=\"minis://attachments/uploads/noise4.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 4"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 5"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise5.png\" url=\"minis://attachments/uploads/noise5.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 5"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 6"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise6.png\" url=\"minis://attachments/uploads/noise6.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 6"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Compare them all"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 1"
+          },
+          {
+            "kind": "text",
+            "text": "[image elided to fit 25MB request budget. Original at /var/minis/attachments/uploads/noise1.png \u2014 re-fetch with `read_image /var/minis/attachments/uploads/noise1.png` if you need to see it.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise1.png\" url=\"minis://attachments/uploads/noise1.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 1"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 2"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise2.png\" url=\"minis://attachments/uploads/noise2.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 2"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 3"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise3.png\" url=\"minis://attachments/uploads/noise3.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 3"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 4"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise4.png\" url=\"minis://attachments/uploads/noise4.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 4"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 5"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise5.png\" url=\"minis://attachments/uploads/noise5.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 5"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 6"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise6.png\" url=\"minis://attachments/uploads/noise6.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 6"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Compare them all"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 1[image elided to fit 25MB request budget. Original at /var/minis/attachments/uploads/noise1.png \u2014 re-fetch with `read_image /var/minis/attachments/uploads/noise1.png` if you need to see it.]<us\u2026[393 chars sha256:af328939ec5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 2"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise2.png\" url=\"minis://attachments/uploads/noise2.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 2"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 3"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise3.png\" url=\"minis://attachments/uploads/noise3.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 3"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 4"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise4.png\" url=\"minis://attachments/uploads/noise4.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 4"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 5"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise5.png\" url=\"minis://attachments/uploads/noise5.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 5"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 6"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise6.png\" url=\"minis://attachments/uploads/noise6.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 6"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Compare them all"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 1[image elided to fit 25MB request budget. Original at /var/minis/attachments/uploads/noise1.png \u2014 re-fetch with `read_image /var/minis/attachments/uploads/noise1.png` if you need to see it.]<us\u2026[393 chars sha256:af328939ec5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 2"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise2.png\" url=\"minis://attachments/uploads/noise2.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 2"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 3"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise3.png\" url=\"minis://attachments/uploads/noise3.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 3"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 4"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise4.png\" url=\"minis://attachments/uploads/noise4.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 4"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 5"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise5.png\" url=\"minis://attachments/uploads/noise5.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 5"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Image 6"
+          },
+          {
+            "image": {
+              "base64Len": 4844792,
+              "bytes": 3633593,
+              "decodable": true,
+              "h": 1100,
+              "magic": "image/png",
+              "mime": "image/png",
+              "sha256": "53b045cdc02e63a2",
+              "w": 1100
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/noise6.png\" url=\"minis://attachments/uploads/noise6.png\" size=\"3633593\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Seen 6"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Compare them all"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

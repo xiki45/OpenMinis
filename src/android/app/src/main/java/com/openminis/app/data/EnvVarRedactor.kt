@@ -79,7 +79,10 @@ object EnvVarRedactor {
     fun redactIfEnabled(output: String): Pair<String, Int> {
         if (!EnvVarPrivacyStore.isEnabled) return output to 0
         val repo = envVarRepository ?: return output to 0
-        val values = repo.allAsDict().values.filter { it.isNotEmpty() }
+        // [T-envvar-disable] Disabled variables included: a value can still
+        // surface (a terminal started before it was disabled, a file the agent
+        // reads), and disabling a secret must not stop masking it.
+        val values = repo.allValuesForRedaction().filter { it.isNotEmpty() }
         if (values.isEmpty()) return output to 0
         val (masked, hits) = redact(output, values)
         if (hits == 0) return masked to 0

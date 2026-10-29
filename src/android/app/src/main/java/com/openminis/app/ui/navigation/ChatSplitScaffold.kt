@@ -41,6 +41,7 @@ import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationIt
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -69,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass
 import com.openminis.app.R
 import java.util.UUID
+import kotlinx.coroutines.flow.first
 
 /**
  * [T-android-tablet-split-resizable] Default list-pane share of the window,
@@ -299,6 +301,16 @@ fun ChatSplitScaffold(
         /** Whether the list is currently hidden — picks the icon direction. */
         sidebarCollapsed: Boolean,
     ) -> Unit,
+    /**
+     * [T-android-share-routing] Opens a new draft chat for a share when no chat
+     * is visible here. Routed through the NavHost (`chat/<draft>`), not this
+     * scaffold's pane navigator: a pane switch started while the activity was
+     * coming back from the background stayed stuck on the list on a Pixel 4a
+     * (the draft composed - keyboard up, share injected, toast shown - but
+     * never came on screen), whereas a NavHost navigation, the same path a
+     * cold-start share takes, renders every time.
+     */
+    onOpenSharedDraft: (String) -> Unit,
 ) {
     val twoPane = shouldUseTwoPane()
 
@@ -434,10 +446,49 @@ fun ChatSplitScaffold(
         // Hoisted out of the detailPane call below so the keyboard shortcut and
         // the "New Chat" menu item cannot drift into doing different things.
         val openNewDraft: () -> Unit = {
-            val draft = newDraftSessionId()
+            // [OpenMinis#433] Same reuse as the list's New Chat button. The
+            // share router below keeps minting a fresh id on purpose.
+            val draft = com.openminis.app.ui.chat.ChatViewModelStore.newChatDraftId()
             selectedSessionId = draft
             scope.launch {
                 navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, draft)
+            }
+        }
+
+        // [T-android-share-routing] Route an incoming share by what is on
+        // screen in THIS scaffold (mirrors iOS ContentView's
+        // onChange(of: hasPendingShare)): a visible chat gets it; otherwise -
+        // the list in one pane, or the "no conversation selected"
+        // placeholder in two - a new draft is opened and the share addressed
+        // to it.
+        //
+        // This used to be decided in AppNavigation by the NavHost route
+        // (`== sessions`), but list and chat both live under either route
+        // here, and Back from a chat only pops this pane navigator: a user
+        // looking at the list was still on `chat/{id}`, so a share was
+        // never routed and silently waited for whichever chat opened next.
+        //
+        // Waits for RESUMED first. A share arrives while the activity is being
+        // brought back from the background; switching panes before it resumes
+        // could leave the transition half-done. The same wait as the NavHost
+        // fallback; the draft itself opens through the NavHost
+        // ([onOpenSharedDraft]).
+        val shareVersion by com.openminis.app.share.ShareCoordinator.bufferVersion.collectAsState()
+        val shareLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(shareVersion) {
+            if (!com.openminis.app.share.ShareCoordinator.hasUnaddressedShare()) return@LaunchedEffect
+            shareLifecycle.currentStateFlow.first { it.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) }
+            if (!com.openminis.app.share.ShareCoordinator.hasUnaddressedShare()) return@LaunchedEffect
+            val visibleChat = navigator.currentDestination
+                ?.takeIf { it.pane == ListDetailPaneScaffoldRole.Detail }
+                ?.contentKey
+            if (visibleChat != null) {
+                com.openminis.app.share.ShareCoordinator.addressTo(visibleChat)
+            } else {
+                val draft = newDraftSessionId()
+                if (com.openminis.app.share.ShareCoordinator.addressTo(draft)) {
+                    onOpenSharedDraft(draft)
+                }
             }
         }
 
@@ -860,6 +911,11 @@ fun ChatSplitScaffoldRoute(
 ) {
     ChatSplitScaffold(
         initialSessionId = initialSessionId,
+        onOpenSharedDraft = { draft ->
+            navController.navigate(Routes.chat(draft)) {
+                popUpTo(Routes.SESSION_LIST) { inclusive = false }
+            }
+        },
         listPane = { selectedSessionId, draftPlaceholderId, onSessionSelected ->
             com.openminis.app.ui.sessions.SessionListScreen(
                 chatRepository = chatRepository,
@@ -881,6 +937,7 @@ fun ChatSplitScaffoldRoute(
                 onTerminalClick = { navController.safeNavigate(Routes.terminal()) },
                 onRootfsClick = { navController.safeNavigate(Routes.ROOTFS_MANAGEMENT) },
                 onScheduledTasksClick = { navController.safeNavigate(Routes.SCHEDULED_TASKS) },
+                onNetworkPageClick = { route -> navController.safeNavigate(route) },
                 selectedSessionId = selectedSessionId,
                 // [T-android-draft-placeholder-row] Synthetic "New Chat" row,
                 // never persisted — see the listPane param docs.
@@ -944,6 +1001,7 @@ fun ChatSplitScaffoldRoute(
                 onBrowseChatFolder = { path -> navController.safeNavigate(Routes.chatFiles(sessionId, path)) },
                 onPreviewAttachment = { item ->
                     FilePreviewHolder.currentItem = item
+                    FilePreviewHolder.currentSessionId = sessionId
                     navController.safeNavigate(Routes.FILE_PREVIEW)
                 },
                 onModelGroupsClick = { navController.safeNavigate(Routes.MODEL_GROUPS) },

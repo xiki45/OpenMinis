@@ -28,6 +28,18 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
      */
     class TransientError(val detail: String, val httpStatus: Int? = null) :
         LLMError("Transient error: $detail")
+    /**
+     * [T-android-tls-trust-error] The server's certificate was rejected
+     * (com.openminis.app.provider.TlsFailure). Not retryable - the same
+     * handshake fails the same way every time - but fallback may help, since
+     * another group member is usually another host. The message names the host
+     * and what to check, and keeps the raw reason for support.
+     */
+    class CertificateError(
+        val host: String,
+        val kind: com.openminis.app.provider.TlsFailure.Kind,
+        cause: Throwable,
+    ) : LLMError(CertificateErrorText.describe(kind, host) + "\n(${cause.message})", cause)
     class Cancelled : LLMError("Request was cancelled")
     class Unknown(cause: Throwable?) : LLMError("Unknown error: ${cause?.message}", cause)
 
@@ -38,7 +50,8 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
     val isRetryable: Boolean get() = this is NetworkError || this is TransientError
 
     /** Should immediately fall back to the next model in the group — same model won't help. */
-    val isFallbackable: Boolean get() = this is RateLimited || this is InvalidApiKey || this is ProviderError
+    val isFallbackable: Boolean get() =
+        this is RateLimited || this is InvalidApiKey || this is ProviderError || this is CertificateError
 
     /**
      * [T-android-503-fallback] A confirmed HTTP 5xx from the provider, as a
@@ -87,8 +100,39 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
             is ProviderError -> "Provider error"
             is TransientError -> "Transient error"
             is NetworkError -> "Network error"
+            is CertificateError -> "Certificate not trusted ($host)"
             is DecodingError -> "Decoding error"
             is Cancelled -> "Cancelled"
             is Unknown -> "Unknown error"
         }
+}
+
+/**
+ * [T-android-tls-trust-error] User-facing text for [LLMError.CertificateError].
+ *
+ * LLMError lives below any Context, so the localized strings are resolved
+ * through a hook MinisApp installs at startup; without it (unit tests, a
+ * process that never ran onCreate) the English text below is used.
+ */
+object CertificateErrorText {
+    @Volatile var resolver: ((com.openminis.app.provider.TlsFailure.Kind, String) -> String)? = null
+
+    fun describe(kind: com.openminis.app.provider.TlsFailure.Kind, host: String): String =
+        runCatching { resolver?.invoke(kind, host) }.getOrNull() ?: english(kind, host)
+
+    fun english(kind: com.openminis.app.provider.TlsFailure.Kind, host: String): String = when (kind) {
+        com.openminis.app.provider.TlsFailure.Kind.UNTRUSTED ->
+            "Couldn't verify the security certificate of $host (no trusted root). Common causes: a proxy, VPN " +
+                "or packet-capture app re-signing HTTPS (official model services only trust system certificates), " +
+                "a self-hosted or relay endpoint with a self-signed certificate or a missing intermediate " +
+                "certificate, or a network that intercepts HTTPS. Turn off the capture tool or proxy and retry, " +
+                "or check that endpoint's certificate setup."
+        com.openminis.app.provider.TlsFailure.Kind.EXPIRED_OR_CLOCK ->
+            "The certificate of $host is expired or not yet valid. Check that this phone's date and time are " +
+                "correct (turn on automatic time); if they are, the service's certificate has expired."
+        com.openminis.app.provider.TlsFailure.Kind.HOSTNAME_MISMATCH ->
+            "$host answered with a certificate for a different name, so the connection is probably being " +
+                "intercepted (a public Wi-Fi sign-in page, the carrier, or a proxy). Switch networks or turn off " +
+                "the proxy and retry."
+    }
 }

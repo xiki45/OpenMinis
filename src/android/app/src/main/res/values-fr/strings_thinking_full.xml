@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">Afficher toute la réflexion</string>
+    <string name="thinking_full_title">Réflexion complète</string>
+    <string name="thinking_full_char_count">%1$s caractères</string>
+    <string name="thinking_full_load_more">Charger plus</string>
+    <string name="thinking_full_copy_failed">Trop long pour être copié</string>
+</resources>

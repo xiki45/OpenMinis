@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sessionlist_folder_matching_chats">일치하는 채팅 %1$d개</string>
+    <string name="sessionlist_folder_matches_hidden">일치 항목 %1$d개 숨김</string>
+</resources>

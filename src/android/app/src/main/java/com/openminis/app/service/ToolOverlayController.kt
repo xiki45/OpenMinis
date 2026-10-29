@@ -17,6 +17,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
@@ -39,6 +40,7 @@ import com.openminis.app.ui.chat.toolAccentColorInt
 import com.openminis.app.ui.chat.toolIconResFor
 import com.openminis.app.R
 import kotlin.math.abs
+import androidx.compose.ui.graphics.toArgb
 
 /**
  * T-bg-overlay phase 2: floating tool-status overlay.
@@ -71,15 +73,29 @@ class ToolOverlayController(private val context: Context) {
         private const val TAG = "ToolOverlayController"
         private const val DRAG_SLOP_DP = 8f
         private const val LOGO_SIZE_DP = 26
-        // [T-android-overlay-ring-tight] Ring view matches the logo
-        // box exactly (inset = 0) so the rotating stroke hugs the
-        // logo's visible edge. Earlier inset of 2dp produced a visible
-        // gap between the ring and the launcher disc on small overlay
-        // sizes; sitting at the edge eliminates that gap while still
-        // keeping the stroke inside the logo bounding box (stroke is
-        // centered, so half of it sits inside the box edge).
-        private const val RING_INSET_DP = 0
-        private const val RING_STROKE_DP = 1
+        // [T-overlay-ring-outside] The spinner is drawn OUTSIDE the logo
+        // circle, on the capsule's dark fill, touching the logo's edge
+        // (RING_GAP_DP = 0: the stroke's inner edge IS the logo radius).
+        //
+        // It used to sit inside the logo box (RING_INSET_DP = 0, the stroke
+        // inset by half its width), i.e. drawn ON the logo's rim. That made
+        // its legibility depend on whatever the logo is: on the default
+        // launcher mark the rim is the near-white #EFF2F6 in light mode, and
+        // the light-blue arc over it measured 1.4-1.6:1 - the #333 report
+        // ("spinner barely visible in light mode, fine in dark", where the
+        // rim is #2C3034). Outside the circle the arc always sits on the
+        // capsule fill, whatever the logo or theme, so one style serves every
+        // logo and no part of the logo is covered.
+        //
+        // [T-overlay-ring-track] A faint full-circle track runs under a short
+        // bright arc. A bare arc with nothing under it read as a line cutting
+        // through the icon; the track makes it an obvious progress ring.
+        //
+        // The ring view is larger than the logo box and draws into the
+        // capsule's leading padding (clipChildren / clipToPadding off), so
+        // no measured size or position in the capsule changes.
+        private const val RING_GAP_DP = 0f
+        private const val RING_STROKE_DP = RING_STROKE_DP_VALUE
 
         // [T-android-overlay-icon-plate] Inset of a GLYPH inside the identity
         // circle, as a fraction of the circle's box.
@@ -139,6 +155,25 @@ class ToolOverlayController(private val context: Context) {
         // gone. Neither leading glyph is the binding constraint (both measure
         // 36px inside their ~40px row), nor is the 26dp logo.
         private const val CAPSULE_HEIGHT_DP = 46
+        // [T-overlay-ring-even-margins] Leading padding of the capsule, chosen
+        // so the spinner ring sits the same distance from the capsule's left
+        // edge as from its top and bottom edges (#333: at 6dp the ring was
+        // 4.5dp from the left but 8.5dp from the top and bottom, and looked
+        // pushed against the side).
+        //
+        // The ring's outer edge is the logo plus one stroke on every side:
+        // 26 + 2 x 1.5 = 29dp across. Centred in the 46dp capsule that leaves
+        // (46 - 29) / 2 = 8.5dp above and below. The ring overhangs the logo
+        // box by one stroke (1.5dp) into this padding, so the padding that
+        // gives the same 8.5dp on the left is 8.5 + 1.5 = 10dp - see
+        // OverlayMargins.startPaddingDp, which the test ties to this value.
+        // The height and the vertical padding are deliberately left alone:
+        // 46dp is the measured text column plus ~2dp of slack (above).
+        private const val CAPSULE_PADDING_START_DP = 10
+        // Everything in the capsule's row that is not text, besides the
+        // leading padding: logo 26 + its right margin 6 + close glyph 14 +
+        // its left margin 10 + right padding 14.
+        private const val CAPSULE_NON_TEXT_DP = 70
 
         /**
          * [T-android-overlay-multitask-pill] Nominal height of the "n of m"
@@ -188,6 +223,18 @@ class ToolOverlayController(private val context: Context) {
         private const val CAPSULE_WIDTH_CAP_FRACTION = 0.70f
         private const val CAPSULE_WIDTH_CAP_DP = 240
         private val RING_COLOR = Color.argb(230, 120, 200, 255)
+        // [T-overlay-ring-track] The track is the arc's own blue, faint: one
+        // colour family, so the arc reads as the lit part of the ring.
+        private val RING_TRACK_COLOR = Color.argb(RING_TRACK_ALPHA, 120, 200, 255)
+        // [T-overlay-logo-disc] Opaque backing disc for a Soul image or emoji:
+        // the app's dark "one step above #1C1C1E" surface (#2C2C2E), the same
+        // value DarkChatPalette / the dark grouped-card palette use, since the
+        // capsule fill itself is #1C1C1E. It replaces the image's average
+        // colour at alpha 38, which for a multi-coloured avatar came out as a
+        // warm brown translucent disc that read as a sticker on the cool grey
+        // capsule (user report on #333). Opaque, so a transparent PNG is
+        // filled before the circle clip and reads as one full round avatar.
+        private val LOGO_DISC_COLOR = com.openminis.app.ui.theme.DarkChatPalette.sheetHeaderBg.toArgb()
         private val SUCCESS_COLOR = Color.parseColor("#4CAF50")
         private val FAILURE_COLOR = Color.parseColor("#E53935")
     }
@@ -198,12 +245,29 @@ class ToolOverlayController(private val context: Context) {
     private val backgroundRepo =
         (context.applicationContext as MinisApp).backgroundSettingsRepository
 
+    /** [T-overlay-orientation-position] One saved position per orientation. */
+    private val positionStore = object : OverlayPosition.Store {
+        override fun get(orientation: OverlayPosition.Orientation): OverlayPosition.Point? =
+            backgroundRepo.getOverlayPosition(landscape = orientation == OverlayPosition.Orientation.LANDSCAPE)
+                ?.let { OverlayPosition.Point(it.first, it.second) }
+
+        override fun set(orientation: OverlayPosition.Orientation, point: OverlayPosition.Point) =
+            backgroundRepo.setOverlayPosition(point.x, point.y, landscape = orientation == OverlayPosition.Orientation.LANDSCAPE)
+    }
+
     private var view: View? = null
     private var logoView: ImageView? = null
     // [T-android-overlay-icon-plate] Tinted disc behind the identity/tool
     // glyph; see its construction for why it exists.
     private var plateView: View? = null
     private var ringView: RotatingRingView? = null
+    // [T-overlay-logo-night-refresh] What the logo was last painted with, so a
+    // night-mode switch can repaint it: the overlay is NOT rebuilt on a
+    // configuration change, and applyLogoFor otherwise only runs on a state
+    // update - a capsule waiting on a slow reply kept the launcher mark's
+    // old day / night variant indefinitely.
+    private var lastLogoToolName: String? = null
+    private var logoAppliedNight: Boolean = false
     private var ringAnimator: ObjectAnimator? = null
     private var labelView: TextView? = null
     private var statusView: TextView? = null
@@ -260,6 +324,13 @@ class ToolOverlayController(private val context: Context) {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
 
     /**
+     * [T-port-sched-overlay-waiting] What the capsule shows while a chat waits
+     * for its next scheduled run: [statusText] ("Next run · 2/3") and the run's
+     * instant on the elapsedRealtime clock (null for an on-completion wait).
+     */
+    data class Waiting(val statusText: String, val nextRunElapsedMs: Long?)
+
+    /**
      * Show or update the overlay. Safe to call repeatedly — content
      * updates if already shown, no-ops on permission denial.
      *
@@ -301,10 +372,13 @@ class ToolOverlayController(private val context: Context) {
         sessionTitle: String? = null,
         taskIndex: Int = 0,
         taskTotal: Int = 0,
+        // [T-port-sched-overlay-waiting] Set between two fires of a scheduled
+        // task (with isRunning = false): the capsule shows the wait.
+        waiting: Waiting? = null,
     ) {
         Log.d(
             TAG,
-            "show() toolName=$toolName toolTitle=${toolTitle?.take(40)} " +
+            "show() waiting=${waiting != null} toolName=$toolName toolTitle=${toolTitle?.take(40)} " +
                 "status=${statusText.take(40)} " +
                 "running=$isRunning toolRunning=$isToolRunning thinking=$isThinking outcome=$outcome " +
                 "reply=${replyExcerpt?.take(20)} " +
@@ -324,7 +398,7 @@ class ToolOverlayController(private val context: Context) {
                 }
                 updateContent(
                     toolName, statusText, isRunning, outcome, replyExcerpt, toolTitle,
-                    isToolRunning, isThinking, sessionTitle, taskIndex, taskTotal,
+                    isToolRunning, isThinking, sessionTitle, taskIndex, taskTotal, waiting,
                 )
             } catch (e: Throwable) {
                 Log.w(TAG, "show failed: ${e.message}", e)
@@ -388,24 +462,22 @@ class ToolOverlayController(private val context: Context) {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            val savedX = backgroundRepo.getOverlayX()
-            val savedY = backgroundRepo.getOverlayY()
-            if (savedX >= 0 && savedY >= 0) {
-                x = savedX
-                y = savedY
-            } else {
-                // [T-bg-overlay-polish] First-paint default: bottom-left,
-                // 10 dp from the left edge and 10 dp above the nav-bar
-                // region. We don't have an accurate nav-bar height before
-                // attach, so use displayMetrics.heightPixels and trust
-                // FLAG_LAYOUT_NO_LIMITS to keep us on-screen.
-                val metrics = context.resources.displayMetrics
-                val padding = dpToPx(EDGE_PADDING_DP)
-                val approxOverlayHeight = dpToPx(LOGO_SIZE_DP + 16)
-                val approxNavBar = dpToPx(48)
-                x = padding
-                y = metrics.heightPixels - approxOverlayHeight - approxNavBar - padding
-            }
+            // [T-overlay-position-restore] The remembered position may be
+            // partly off-screen, with a negative x or y; only "never
+            // dragged" gets the default.
+            // [T-overlay-orientation-position] Remembered per orientation.
+            val metrics = context.resources.displayMetrics
+            val at = OverlayPosition.displayed(
+                positionStore,
+                defaultPosition(),
+                metrics.widthPixels,
+                metrics.heightPixels,
+                width,
+                height,
+                systemBarAvoidance(metrics.widthPixels, metrics.heightPixels),
+            )
+            x = at.x
+            y = at.y
         }
         layoutParams = params
         attachTouchListener(container, params)
@@ -418,12 +490,19 @@ class ToolOverlayController(private val context: Context) {
         val density = context.resources.displayMetrics.density
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
+            // [T-fa-locale] This window lives outside any Activity, so
+            // LocaleWrap.forceLtr does not reach it; keep it unmirrored in
+            // right-to-left languages (Persian) like the rest of the app.
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             // Right padding is larger than the symmetric 6dp baseline so
             // the trailing X close button clears the pill's rounded corner.
             // With CAPSULE_HEIGHT_DP=46 the corner radius is 23dp; a 6dp
             // right inset put the X glyph's top/bottom corners behind the
             // curve. ~14dp gives the 14dp glyph full clearance.
-            setPadding(dpToPx(6), dpToPx(6), dpToPx(14), dpToPx(6))
+            // [T-overlay-ring-even-margins] Left padding is larger too, so the
+            // spinner ring is as far from the left edge as from the top and
+            // bottom; top and bottom stay 6dp.
+            setPadding(dpToPx(CAPSULE_PADDING_START_DP), dpToPx(6), dpToPx(14), dpToPx(6))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 // [T-android-overlay-pill-shape] Corner radius tracks
@@ -450,17 +529,25 @@ class ToolOverlayController(private val context: Context) {
         // ViewOutlineProvider; the ring is a custom View drawing a thin
         // arc that we rotate with an ObjectAnimator.
         val logoSize = dpToPx(LOGO_SIZE_DP)
-        val ringInset = dpToPx(RING_INSET_DP)
-        // Ring view matches the logo box; with a centered stroke this
-        // puts the ring perimeter right at the logo's visible edge so
-        // the spinner appears to hug the icon rather than float inside.
-        val ringTotal = (logoSize - ringInset * 2).coerceAtLeast(dpToPx(8))
+        // [T-overlay-ring-outside] Ring view is larger than the logo box so
+        // the ring runs outside the logo circle. The box is rounded up to
+        // whole pixels; the radius the ring is drawn at is exact.
+        val ringStrokePx = RING_STROKE_DP * density
+        val ringGapPx = RING_GAP_DP * density
+        val ringTotal = OverlayRingGeometry.ringBoxPx(logoSize, ringGapPx, ringStrokePx)
         val logoStack = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(logoSize, logoSize).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 rightMargin = dpToPx(6)
             }
+            // The ring overhangs this box by (ringTotal - logoSize) / 2 on
+            // every side; let it draw there instead of being clipped.
+            clipChildren = false
         }
+        // ...and let that overhang draw into the capsule's own padding (the
+        // container clips children to its padding box by default).
+        container.clipChildren = false
+        container.clipToPadding = false
 
         // [T-android-overlay-icon-plate] Circular backing plate, BENEATH the
         // icon in the same FrameLayout. Two jobs:
@@ -513,8 +600,10 @@ class ToolOverlayController(private val context: Context) {
 
         val ring = RotatingRingView(
             context,
-            strokeWidthPx = dpToPx(RING_STROKE_DP).toFloat(),
+            strokeWidthPx = ringStrokePx,
+            centreRadiusPx = OverlayRingGeometry.arcCentreRadiusPx(logoSize, ringGapPx, ringStrokePx),
             ringColor = RING_COLOR,
+            trackColor = RING_TRACK_COLOR,
         ).apply {
             layoutParams = FrameLayout.LayoutParams(ringTotal, ringTotal).apply {
                 gravity = Gravity.CENTER
@@ -808,7 +897,12 @@ class ToolOverlayController(private val context: Context) {
         sessionTitle: String?,
         taskIndex: Int,
         taskTotal: Int,
+        waiting: Waiting? = null,
     ) {
+        // [T-port-sched-overlay-waiting] Waiting for the next scheduled run:
+        // no outcome word, no reply excerpt, row 2 says "Next run · 2/3" and
+        // the clock counts down to the run.
+        val isWaiting = waiting != null && !isRunning
         // [T-android-overlay-tool-title] The model supplies a per-call
         // tool_title (e.g. "Open Baidu home page", "Take screenshot of current
         // page"); it is what row 2 shows, falling back to a humanized tool name.
@@ -822,7 +916,7 @@ class ToolOverlayController(private val context: Context) {
         val showStatusRow =
             isRunning || (hasToolIdentity && !statusText.equals("Idle", ignoreCase = true))
 
-        val completionWord: String? = if (!isRunning) when (outcome) {
+        val completionWord: String? = if (!isRunning && !isWaiting) when (outcome) {
             ToolOutcome.Success -> context.getString(R.string.overlay_completion_completed)
             ToolOutcome.Error -> context.getString(R.string.overlay_completion_failed)
             ToolOutcome.Timeout -> context.getString(R.string.overlay_completion_timeout)
@@ -939,6 +1033,7 @@ class ToolOverlayController(private val context: Context) {
         applyLogoFor(if (isToolRunning) rowToolName else null)
 
         val rowTitle: String? = when {
+            isWaiting -> waiting!!.statusText
             showReplyVariant -> replyText
             // [T-android-live-update-content] Distinguish reasoning from
             // visible output, as the iOS Dynamic Island does.
@@ -956,7 +1051,7 @@ class ToolOverlayController(private val context: Context) {
         // those outcomes shows as text alone rather than with a misleading
         // tick. Row 1 states the outcome in words either way.
         val replyGlyphState: Pair<StatusGlyphView.State, Int>? =
-            if (!showReplyVariant) null else when (outcome) {
+            if (!showReplyVariant || isWaiting) null else when (outcome) {
                 ToolOutcome.Success -> StatusGlyphView.State.Success to SUCCESS_COLOR
                 ToolOutcome.Error, ToolOutcome.Timeout ->
                     StatusGlyphView.State.Error to FAILURE_COLOR
@@ -986,10 +1081,12 @@ class ToolOverlayController(private val context: Context) {
         // [T-android-overlay-fixed-half-width] maxWidth tracks the same
         // fixed half-screen envelope as the WM container, minus the
         // logo + paddings + trailing close button so text ellipsizes
-        // before it can push the (now-fixed-width) box. Approx subtract:
-        // 6+26+6 (left pad + logo + logo-right-margin) + 14+10 (close +
-        // close-left-margin) + 14 (right pad clearing the pill corner) ≈ 76dp.
-        val maxW = (fixedCapsuleWidthPx() - dpToPx(76)).coerceAtLeast(dpToPx(80))
+        // before it can push the (now-fixed-width) box. Subtract the left
+        // pad, then 26+6 (logo + logo-right-margin) + 14+10 (close +
+        // close-left-margin) + 14 (right pad clearing the pill corner).
+        // [T-overlay-ring-even-margins] Derived from the left padding, so
+        // widening it shrinks the text cap by the same amount (76 -> 80dp).
+        val maxW = (fixedCapsuleWidthPx() - dpToPx(CAPSULE_PADDING_START_DP + CAPSULE_NON_TEXT_DP)).coerceAtLeast(dpToPx(80))
         labelView?.maxWidth = maxW
         statusView?.maxWidth = maxW
 
@@ -1016,7 +1113,30 @@ class ToolOverlayController(private val context: Context) {
         // that take". Falls back to hiding when there is no anchor (presence
         // only, nothing ever ran) rather than showing a bogus 00:00.
         val elapsed = elapsedView
-        if (elapsed != null) {
+        if (elapsed != null && isWaiting) {
+            // [T-port-sched-overlay-waiting] Count DOWN to the next run (the
+            // Chronometer ticks itself; base is on the elapsedRealtime clock),
+            // and stop at zero rather than run into negative time if the fire
+            // is late. No clock for an on-completion wait.
+            val next = waiting!!.nextRunElapsedMs
+            if (next != null && next > SystemClock.elapsedRealtime()) {
+                elapsed.isCountDown = true
+                if (elapsed.base != next) elapsed.base = next
+                elapsed.setOnChronometerTickListener { c ->
+                    if (c.isCountDown && c.base <= SystemClock.elapsedRealtime()) c.stop()
+                }
+                elapsed.visibility = View.VISIBLE
+                elapsed.start()
+            } else {
+                elapsed.stop()
+                elapsed.visibility = View.GONE
+            }
+        } else if (elapsed != null) {
+            // Counting up again (running / completed): undo the waiting mode.
+            if (elapsed.isCountDown) {
+                elapsed.isCountDown = false
+                elapsed.onChronometerTickListener = null
+            }
             val runStart = SessionActivityTracker.currentRunStartedAtMs.value
             if (runStart != null) {
                 if (isRunning) {
@@ -1037,7 +1157,13 @@ class ToolOverlayController(private val context: Context) {
                     // the fact — "that took 00:35" is the one number the user
                     // could not have watched accumulate while backgrounded.
                     elapsed.stop()
-                    elapsed.visibility = View.VISIBLE
+                    // [T-sched-overlay-negative-clock] Back from the waiting
+                    // countdown without a new run (the task was deleted or
+                    // disabled mid-wait), `base` is still the next run's time,
+                    // in the future: counting up from it read "-00:42". That
+                    // run's duration is not known here any more, so no clock.
+                    elapsed.visibility =
+                        if (OverlayClock.completedShowsClock(elapsed.base, SystemClock.elapsedRealtime())) View.VISIBLE else View.GONE
                 }
             } else {
                 elapsed.stop()
@@ -1132,6 +1258,8 @@ class ToolOverlayController(private val context: Context) {
      */
     private fun applyLogoFor(toolName: String?) {
         val iv = logoView ?: return
+        lastLogoToolName = toolName
+        logoAppliedNight = isNightNow()
         if (toolName == null) {
             iv.setPadding(0, 0, 0, 0)
             iv.scaleType = ImageView.ScaleType.CENTER_CROP
@@ -1202,18 +1330,21 @@ class ToolOverlayController(private val context: Context) {
             return
         }
         SoulIcon.decode(icon)?.let { bmp ->
-            // A user image is inset like a glyph rather than filling the circle:
-            // these are square photos/PNGs, and CENTER_CROP to the full circle
-            // would shave their edges. Sitting them on a plate keeps a
-            // transparent PNG from floating on the dark fill.
-            val inset = (dpToPx(LOGO_SIZE_DP) * GLYPH_INSET_FRACTION * 0.5f).toInt()
-            iv.setPadding(inset, inset, inset, inset)
-            iv.scaleType = ImageView.ScaleType.FIT_CENTER
+            // [T-overlay-logo-disc] Fill the whole circle: CENTER_CROP over an
+            // opaque neutral disc, then the circular outline clip. A
+            // transparent PNG's empty area shows the disc, so the avatar reads
+            // as one full round icon. It used to be inset 13% and FIT_CENTER on
+            // a translucent disc of its own average colour, which left a
+            // tinted band around shrunken art with its straight edges showing
+            // (#333). A square photo now loses its corners to the circle - the
+            // usual trade for a round avatar.
+            iv.setPadding(0, 0, 0, 0)
+            iv.scaleType = ImageView.ScaleType.CENTER_CROP
             // Drop any tint left over from a tool glyph — this is the user's
             // own artwork and must not be recoloured.
             iv.clearColorFilter()
             iv.setImageBitmap(bmp)
-            applyPlate(dominantPlateColor(bmp))
+            applyPlate(LOGO_DISC_COLOR)
             return
         }
         // Not a data URI: an emoji literal. An ImageView cannot show text, so
@@ -1224,10 +1355,9 @@ class ToolOverlayController(private val context: Context) {
             iv.scaleType = ImageView.ScaleType.FIT_CENTER
             iv.clearColorFilter()
             iv.setImageBitmap(it)
-            // Emoji carry many colours at once, so there is no single hue to
-            // pull out. A neutral translucent white reads as a surface rather
-            // than competing with the glyph.
-            applyPlate(Color.argb(28, 255, 255, 255))
+            // [T-overlay-logo-disc] Same opaque neutral disc as a Soul image,
+            // so every identity icon sits on one consistent round surface.
+            applyPlate(LOGO_DISC_COLOR)
             return
         }
         applyLauncherMark(iv)
@@ -1242,43 +1372,10 @@ class ToolOverlayController(private val context: Context) {
         applyPlate(null)
     }
 
-    /**
-     * [T-android-overlay-icon-plate] Average colour of a user image, muted down
-     * for use as its backing disc.
-     *
-     * Deliberately a plain average over a coarse grid rather than a real
-     * dominant-colour extraction (k-means / palette quantisation): the result
-     * is only ever shown at PLATE_ALPHA behind the image itself, where the
-     * difference between "average hue" and "modal hue" is not visible. The
-     * cheap version costs a few hundred pixel reads on a bitmap we already
-     * decoded; the thorough one would pull in a palette dependency to produce
-     * the same faint wash.
-     *
-     * Fully transparent pixels are skipped so a transparent-background PNG is
-     * tinted by its art, not dragged toward black by its empty corners.
-     */
-    private fun dominantPlateColor(bmp: Bitmap): Int {
-        val steps = 8
-        var r = 0L
-        var g = 0L
-        var b = 0L
-        var n = 0
-        val w = bmp.width
-        val h = bmp.height
-        if (w <= 0 || h <= 0) return Color.argb(28, 255, 255, 255)
-        for (i in 0 until steps) {
-            for (j in 0 until steps) {
-                val px = bmp.getPixel(i * (w - 1) / (steps - 1), j * (h - 1) / (steps - 1))
-                if (Color.alpha(px) < 128) continue
-                r += Color.red(px)
-                g += Color.green(px)
-                b += Color.blue(px)
-                n++
-            }
-        }
-        if (n == 0) return Color.argb(28, 255, 255, 255)
-        return Color.argb(PLATE_ALPHA, (r / n).toInt(), (g / n).toInt(), (b / n).toInt())
-    }
+    /** Night mode of the resources the logo drawables are loaded from. */
+    private fun isNightNow(): Boolean =
+        (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
 
     /**
      * [T-android-overlay-soul-identity] Draw an emoji into a square bitmap.
@@ -1358,7 +1455,34 @@ class ToolOverlayController(private val context: Context) {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (dragging) {
-                        backgroundRepo.setOverlayPosition(params.x, params.y)
+                        // [T-overlay-orientation-position] Saved as dragged,
+                        // unclamped, for the orientation it was dragged in.
+                        val dm = context.resources.displayMetrics
+                        OverlayPosition.dragEnded(positionStore, dm.widthPixels, dm.heightPixels, OverlayPosition.Point(params.x, params.y))
+                        // [T-overlay-drag-snap] Shown where attach() would show
+                        // it: the clamp (whole capsule below the status bar /
+                        // cutout, off the gesture bar, at most half past a side)
+                        // only ran on attach and on a configuration change, so a
+                        // capsule dropped under the status bar or almost fully
+                        // off screen stayed there, with nothing left to grab.
+                        val at = OverlayPosition.displayed(
+                            positionStore,
+                            defaultPosition(),
+                            dm.widthPixels,
+                            dm.heightPixels,
+                            fixedCapsuleWidthPx(),
+                            dpToPx(CAPSULE_HEIGHT_DP),
+                            systemBarAvoidance(dm.widthPixels, dm.heightPixels),
+                        )
+                        if (at.x != params.x || at.y != params.y) {
+                            params.x = at.x
+                            params.y = at.y
+                            try {
+                                windowManager.updateViewLayout(target, params)
+                            } catch (e: Throwable) {
+                                Log.w(TAG, "drag snap relayout failed: ${e.message}")
+                            }
+                        }
                     } else {
                         onTap()
                     }
@@ -1443,8 +1567,20 @@ class ToolOverlayController(private val context: Context) {
      * overlay is a WindowManager view — it is NOT recreated on rotation —
      * so a position saved while in landscape can land off-screen (or fully
      * out of view) once the device returns to portrait. Recompute the
-     * width for the new metrics, clamp x/y so the capsule stays fully
-     * on-screen, push the new layout, and persist the corrected position.
+     * width for the new metrics, clamp x/y so at least half of the capsule
+     * stays on-screen, and push the new layout.
+     *
+     * [T-overlay-position-restore] Same rule as attach()
+     * ([OverlayPosition.clamp]). It used to clamp to fully on-screen, so any
+     * configuration change - a night-mode switch, not only a rotation -
+     * dragged a capsule parked partly past an edge back inside and saved
+     * that over the user's position.
+     *
+     * [T-overlay-orientation-position] Nothing is saved here any more. The
+     * clamp used to be written back to the one stored position, so a trip
+     * through landscape moved the portrait position for good (Alice Q2: 1796
+     * came back as 946). Now this shows the new orientation's own position,
+     * clamped for display only; only a drag writes.
      *
      * No-op when nothing is attached. Owned by [AgentForegroundService],
      * which forwards its own onConfigurationChanged here.
@@ -1452,42 +1588,130 @@ class ToolOverlayController(private val context: Context) {
     fun onConfigurationChanged() {
         mainHandler.post {
             val v = view ?: return@post
+            // [T-overlay-logo-night-refresh] Night mode flipped: reload the
+            // logo so the launcher mark shows its day / night variant now.
+            if (isNightNow() != logoAppliedNight) applyLogoFor(lastLogoToolName)
             val params = layoutParams ?: return@post
             val dm = context.resources.displayMetrics
             val width = fixedCapsuleWidthPx()
             val height = dpToPx(CAPSULE_HEIGHT_DP)
-            val maxX = (dm.widthPixels - width).coerceAtLeast(0)
-            val maxY = (dm.heightPixels - height).coerceAtLeast(0)
-            val clampedX = params.x.coerceIn(0, maxX)
-            val clampedY = params.y.coerceIn(0, maxY)
-            if (params.width == width && params.x == clampedX && params.y == clampedY) return@post
+            val at = OverlayPosition.displayed(
+                positionStore,
+                defaultPosition(),
+                dm.widthPixels,
+                dm.heightPixels,
+                width,
+                height,
+                systemBarAvoidance(dm.widthPixels, dm.heightPixels),
+            )
+            if (params.width == width && params.x == at.x && params.y == at.y) return@post
             params.width = width
-            params.x = clampedX
-            params.y = clampedY
+            params.x = at.x
+            params.y = at.y
             try {
                 windowManager.updateViewLayout(v, params)
-                backgroundRepo.setOverlayPosition(clampedX, clampedY)
             } catch (e: Throwable) {
                 Log.w(TAG, "onConfigurationChanged relayout failed: ${e.message}")
             }
         }
     }
 
+    /**
+     * [T-bg-overlay-polish] First-paint default: bottom-left, 10 dp from the
+     * left edge and 10 dp above the nav-bar region. We don't have an accurate
+     * nav-bar height before attach, so use displayMetrics.heightPixels and
+     * trust FLAG_LAYOUT_NO_LIMITS to keep us on-screen.
+     */
+    private fun defaultPosition(): OverlayPosition.Point {
+        val metrics = context.resources.displayMetrics
+        val padding = dpToPx(EDGE_PADDING_DP)
+        val approxOverlayHeight = dpToPx(LOGO_SIZE_DP + 16)
+        val approxNavBar = dpToPx(48)
+        return OverlayPosition.Point(
+            padding,
+            metrics.heightPixels - approxOverlayHeight - approxNavBar - padding,
+        )
+    }
+
+    /**
+     * [T-overlay-orientation-position] The navigation bar / home gesture
+     * inset the capsule keeps clear of in landscape ([OverlayPosition.avoidFor]).
+     * Read from the display's current window metrics (API 30+). Older
+     * releases have no reliable inset outside an Activity, so they keep the
+     * plain half-on-screen rule on the left, right and bottom.
+     *
+     * [T-overlay-no-top-hide] The top ([statusBarTop]) applies in both
+     * orientations and on every API level.
+     */
+    private fun systemBarAvoidance(screenW: Int, screenH: Int): OverlayPosition.Avoid {
+        val orientation = OverlayPosition.Orientation.of(screenW, screenH)
+        val top = statusBarTop()
+        if (orientation != OverlayPosition.Orientation.LANDSCAPE) return OverlayPosition.avoidFor(orientation, 0, 0, 0, top)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return OverlayPosition.avoidFor(orientation, 0, 0, 0, top)
+        val insets = runCatching {
+            windowManager.currentWindowMetrics.windowInsets.getInsetsIgnoringVisibility(
+                android.view.WindowInsets.Type.navigationBars() or
+                    android.view.WindowInsets.Type.mandatorySystemGestures(),
+            )
+        }.onFailure { Log.w(TAG, "system bar insets unavailable: ${it.message}") }
+            .getOrNull() ?: return OverlayPosition.avoidFor(orientation, 0, 0, 0, top)
+        return OverlayPosition.avoidFor(orientation, insets.left, insets.right, insets.bottom, top)
+    }
+
+    /**
+     * [T-overlay-no-top-hide] How far below the window origin the capsule's
+     * top must stay: the status bar, or the display cutout when that is
+     * taller. Errs on the safe side - where the window origin already sits
+     * below a visible status bar, this leaves an extra gap of about one status
+     * bar instead of risking the capsule under the bar, the cutout or the
+     * pull-down gesture strip.
+     *
+     * API 30+: the display's window metrics, ignoring visibility, so a status
+     * bar hidden by a fullscreen app still counts (its pull-down strip is
+     * still there). API 26-29 (and if that read fails): the framework's
+     * status_bar_height dimen, as there is no inset outside an Activity. 0
+     * when neither is available, which still keeps the capsule below the top
+     * edge.
+     */
+    private fun statusBarTop(): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                windowManager.currentWindowMetrics.windowInsets.getInsetsIgnoringVisibility(
+                    android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.displayCutout(),
+                ).top
+            }.onFailure { Log.w(TAG, "status bar inset unavailable: ${it.message}") }
+                .getOrNull()?.let { return it.coerceAtLeast(0) }
+        }
+        @Suppress("DiscouragedApi")
+        val id = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (id == 0) return 0
+        return runCatching { context.resources.getDimensionPixelSize(id) }.getOrDefault(0).coerceAtLeast(0)
+    }
+
     private fun dpToPx(dp: Int): Int =
         (dp * context.resources.displayMetrics.density + 0.5f).toInt()
 
     /**
-     * Custom view drawing a single thin arc segment that spans ~180° of
-     * the ring (a half circle). Rotating the view itself (via
-     * ObjectAnimator on View.ROTATION) gives the spinning effect without
-     * per-frame invalidation.
+     * [T-overlay-ring-track] Spinner: a faint full-circle track with a short
+     * bright arc ([RING_SWEEP_DEG]) on it, both centred in the view at
+     * [centreRadiusPx]. Rotating the view itself (via ObjectAnimator on
+     * View.ROTATION) gives the spinning effect without per-frame
+     * invalidation; the track is a full circle, so it looks still.
      */
     private class RotatingRingView(
         context: Context,
         private val strokeWidthPx: Float,
+        private val centreRadiusPx: Float,
         ringColor: Int,
+        trackColor: Int,
     ) : View(context) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.BUTT
+            color = trackColor
+            strokeWidth = strokeWidthPx
+        }
+        private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             color = ringColor
@@ -1496,11 +1720,13 @@ class ToolOverlayController(private val context: Context) {
         private val rect = RectF()
 
         override fun onDraw(canvas: Canvas) {
-            val inset = strokeWidthPx / 2f
-            rect.set(inset, inset, width - inset, height - inset)
-            // Draw a 180° arc (half circle) starting at the top. The
-            // 180° gap is what makes the spinning visually obvious.
-            canvas.drawArc(rect, -90f, 180f, false, paint)
+            val cx = width / 2f
+            val cy = height / 2f
+            rect.set(cx - centreRadiusPx, cy - centreRadiusPx, cx + centreRadiusPx, cy + centreRadiusPx)
+            canvas.drawArc(rect, 0f, 360f, false, trackPaint)
+            // A short arc starting at the top; the long dark remainder is
+            // what makes the spinning visually obvious.
+            canvas.drawArc(rect, -90f, RING_SWEEP_DEG, false, arcPaint)
         }
     }
 
@@ -1578,4 +1804,70 @@ class ToolOverlayController(private val context: Context) {
             canvas.drawPath(path, paint)
         }
     }
+}
+
+/** Stroke of the spinner track and arc, in dp. */
+internal const val RING_STROKE_DP_VALUE = 1.5f
+
+/** Sweep of the bright spinner arc, in degrees. */
+internal const val RING_SWEEP_DEG = 100f
+
+/** Alpha (0-255) of the spinner's full-circle track. */
+internal const val RING_TRACK_ALPHA = 77
+
+/**
+ * [T-overlay-ring-outside] Geometry of the spinner ring drawn OUTSIDE the logo
+ * circle: the stroke's inner edge sits [gapPx] outside the logo's edge (0 = it
+ * touches the logo) and the whole stroke lies on the capsule fill.
+ */
+internal object OverlayRingGeometry {
+    /** Side of the ring view, in px: room for the stroke on every side, rounded up to whole pixels. */
+    fun ringBoxPx(logoPx: Int, gapPx: Float, strokePx: Float): Int =
+        logoPx + 2 * kotlin.math.ceil(gapPx + strokePx).toInt()
+
+    /** Radius of the stroke's centre line. Exact, not derived from the rounded box. */
+    fun arcCentreRadiusPx(logoPx: Int, gapPx: Float, strokePx: Float): Float = logoPx / 2f + gapPx + strokePx / 2f
+
+    /** Inner edge of the stroke: logo radius + gap. */
+    fun arcInnerRadiusPx(logoPx: Int, gapPx: Float, strokePx: Float): Float =
+        arcCentreRadiusPx(logoPx, gapPx, strokePx) - strokePx / 2f
+
+    /** Outer edge of the stroke; always inside the ring box. */
+    fun arcOuterRadiusPx(logoPx: Int, gapPx: Float, strokePx: Float): Float =
+        arcCentreRadiusPx(logoPx, gapPx, strokePx) + strokePx / 2f
+}
+
+/**
+ * [T-overlay-ring-even-margins] Where the spinner ring sits in the capsule.
+ * The ring's outer edge is the logo circle plus one stroke on every side; it
+ * is centred vertically, and horizontally it starts one stroke left of the
+ * logo box, i.e. inside the capsule's leading padding.
+ */
+internal object OverlayMargins {
+    /** Gap between the ring's outer edge and the capsule's top (= bottom) edge. */
+    fun ringToTopDp(capsuleDp: Float, logoDp: Float, strokeDp: Float): Float =
+        (capsuleDp - (logoDp + 2 * strokeDp)) / 2f
+
+    /** Leading padding that puts the ring the same distance from the left edge as from the top. */
+    fun startPaddingDp(capsuleDp: Float, logoDp: Float, strokeDp: Float): Float =
+        ringToTopDp(capsuleDp, logoDp, strokeDp) + strokeDp
+
+    /** Gap between the ring's outer edge and the capsule's left edge, for a given leading padding. */
+    fun ringToStartPx(startPaddingPx: Int, strokePx: Float): Float = startPaddingPx - strokePx
+
+    /**
+     * Gaps above and below the ring in whole-pixel layout: the logo box is
+     * centred in the capsule (the odd pixel goes below), the ring overhangs
+     * it by one stroke.
+     */
+    fun ringToTopBottomPx(capsulePx: Int, logoPx: Int, strokePx: Float): Pair<Float, Float> {
+        val top = (capsulePx - logoPx) / 2
+        return (top - strokePx) to (capsulePx - logoPx - top - strokePx)
+    }
+}
+
+/** [T-sched-overlay-negative-clock] Pure rules for the capsule's clock. */
+internal object OverlayClock {
+    /** A stopped count-up clock is only meaningful from an anchor in the past. */
+    fun completedShowsClock(base: Long, nowElapsedMs: Long): Boolean = base <= nowElapsedMs
 }

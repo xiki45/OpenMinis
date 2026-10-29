@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Rangkaian</string>
+    <string name="network_status">Status</string>
+    <string name="network_status_starting">Memulakan…</string>
+    <string name="network_status_connecting">Menyambung…</string>
+    <string name="network_status_off">Tidak Aktif</string>
+    <string name="network_device_name">Nama Peranti</string>
+    <string name="network_device_name_automatic">Automatik</string>
+    <string name="network_exit_node_none">Tiada</string>
+    <string name="network_sign_out">Log Keluar</string>
+    <string name="network_scope_shell">Shell</string>
+    <string name="network_scope_browser">Browser</string>
+    <string name="network_scope_backup">Sandaran</string>
+    <string name="network_proxy_type">Jenis</string>
+    <string name="network_proxy_server">Server</string>
+    <string name="network_proxy_authentication">Pengesahan</string>
+    <string name="network_proxy_password">Kata Laluan</string>
+    <string name="network_proxy_bypass">Pintas</string>
+    <string name="network_proxy_test">Uji Sambungan</string>
+    <string name="network_cancel">Batal</string>
+    <string name="network_save">Simpan</string>
+    <string name="network_provider_route">Rangkaian</string>
+</resources>

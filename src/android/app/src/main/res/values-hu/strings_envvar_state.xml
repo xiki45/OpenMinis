@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Letiltva</string>
+    <string name="env_var_status_duplicate">Ismétlődő név</string>
+    <string name="env_var_enabled_toggle">Bekapcsolva</string>
+    <string name="env_var_enabled_footer">Kikapcsolva a változó megőrzi értékét és megjegyzését, de nem kapják meg a shellek, a terminálok és az MCP-szerverek.</string>
+    <string name="env_var_disabled_highlight">Ez a változó le van tiltva. Kapcsold be, hogy újra elérhető legyen.</string>
+    <string name="env_var_action_disable">Letiltás</string>
+    <string name="env_var_action_enable">Bekapcsolás</string>
+    <string name="mcp_form_env_disabled_warning">%1$s le van tiltva, ezért üres értékként lesz átadva.</string>
+</resources>

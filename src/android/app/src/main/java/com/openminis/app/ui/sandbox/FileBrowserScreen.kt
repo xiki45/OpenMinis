@@ -25,8 +25,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.AppShortcut
@@ -41,9 +39,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -69,6 +65,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import com.openminis.app.ui.components.MinisTextButton
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -189,7 +206,8 @@ fun FileBrowserScreen(
                                 onDelete = { deleteTarget = item },
                                 onAddToHome = { source -> webAppSheetSource = source },
                             )
-                            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+                            // [T-file-row-polish] The separator starts under the name.
+                            HorizontalDivider(modifier = Modifier.padding(start = ROW_TEXT_START))
                         }
                     }
                 }
@@ -230,7 +248,9 @@ fun FileBrowserScreen(
     }
 
     // Error dialog
-    state.errorMessage?.let { msg ->
+    (state.errorMessage ?: state.refusedMountPointName?.let {
+        stringResource(R.string.filebrowser_delete_mount_point_refused, it)
+    })?.let { msg ->
         AlertDialog(
             onDismissRequest = { viewModel.dismissError() },
             title = { Text(stringResource(R.string.filebrowser_error_title)) },
@@ -244,27 +264,46 @@ fun FileBrowserScreen(
     }
 }
 
+/**
+ * [#451] The path as a row of capsules, each at least 48 × 48 dp to tap (the
+ * bare 12 sp labels were about 16 dp tall). The current folder is the last
+ * capsule, highlighted and not clickable; the row scrolls to it whenever the
+ * path changes, so a deep path shows where you are rather than its root.
+ */
 @Composable
 private fun BreadcrumbBar(
     pathComponents: List<String>,
     onNavigate: (Int) -> Unit,
 ) {
     val scrollState = rememberScrollState()
+    LaunchedEffect(pathComponents) {
+        // maxValue belongs to the new path only once it has been laid out:
+        // wait for that frame, then scroll to the end.
+        withFrameNanos { }
+        scrollState.animateScrollTo(scrollState.maxValue)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(scrollState)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        pathComponents.forEachIndexed { index, component ->
-            Text(
-                text = component,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { onNavigate(index) },
-            )
-            if (index < pathComponents.lastIndex) {
+        val slots = breadcrumbSlots(pathComponents.size)
+        slots.forEachIndexed { slotIndex, slot ->
+            when (slot) {
+                is BreadcrumbSlot.Component -> BreadcrumbCapsule(
+                    label = pathComponents[slot.index],
+                    isCurrent = slot.index == pathComponents.lastIndex,
+                    onClick = { onNavigate(slot.index) },
+                )
+                is BreadcrumbSlot.Collapsed -> CollapsedBreadcrumbCapsule(
+                    hidden = slot.indices.map { it to pathComponents[it] },
+                    onNavigate = onNavigate,
+                )
+            }
+            if (slotIndex < slots.lastIndex) {
                 Icon(
                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
@@ -275,6 +314,128 @@ private fun BreadcrumbBar(
         }
     }
 }
+
+/** What one place in the path bar shows. */
+internal sealed interface BreadcrumbSlot {
+    /** A path component, by its index in the path. */
+    data class Component(val index: Int) : BreadcrumbSlot
+
+    /** The middle components, folded into one `···` capsule. */
+    data class Collapsed(val indices: IntRange) : BreadcrumbSlot
+}
+
+/** Paths up to this deep show every component. */
+internal const val BREADCRUMB_FULL_MAX = 4
+
+/**
+ * [path-ellipsis] A path deeper than [BREADCRUMB_FULL_MAX] keeps its root
+ * (one tap back to the start), its parent and the current folder, and
+ * folds everything between into a `···` capsule whose menu lists those
+ * folders in order. Shallower paths show in full.
+ */
+internal fun breadcrumbSlots(count: Int): List<BreadcrumbSlot> {
+    if (count <= BREADCRUMB_FULL_MAX) return List(count) { BreadcrumbSlot.Component(it) }
+    return listOf(
+        BreadcrumbSlot.Component(0),
+        BreadcrumbSlot.Collapsed(1 until count - 2),
+        BreadcrumbSlot.Component(count - 2),
+        BreadcrumbSlot.Component(count - 1),
+    )
+}
+
+/**
+ * [path-ellipsis] The folded middle of a deep path: a `···` capsule with the
+ * same 48 dp touch target as the others; its menu lists the hidden folders
+ * root-side first, and picking one goes there.
+ */
+@Composable
+private fun CollapsedBreadcrumbCapsule(
+    hidden: List<Pair<Int, String>>,
+    onNavigate: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val more = stringResource(R.string.filebrowser_more_action)
+    Box {
+        BreadcrumbCapsule(
+            label = "···",
+            isCurrent = false,
+            onClick = { expanded = true },
+            contentDescription = more,
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            hidden.forEach { (index, name) ->
+                DropdownMenuItem(
+                    text = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Filled.Folder, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onNavigate(index)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** One path component: a 48 dp touch target around a rounded capsule. */
+@Composable
+private fun BreadcrumbCapsule(
+    label: String,
+    isCurrent: Boolean,
+    onClick: () -> Unit,
+    /** Spoken instead of [label] (the `···` capsule). */
+    contentDescription: String? = null,
+) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .widthIn(min = 48.dp)
+            .clip(shape)
+            .then(
+                if (isCurrent) Modifier.semantics { heading() }
+                else Modifier.clickable(role = Role.Button, onClick = onClick),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (isCurrent) {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
+            modifier = Modifier
+                .then(
+                    if (contentDescription != null) {
+                        Modifier.semantics { this.contentDescription = contentDescription }
+                    } else {
+                        Modifier
+                    },
+                )
+                .widthIn(max = 180.dp)
+                .background(
+                    if (isCurrent) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    shape,
+                )
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        )
+    }
+}
+
+/** [T-file-row-polish] Row geometry: padding + icon tile + gap = where the name starts. */
+private val ROW_PADDING_H = 16.dp
+private val ROW_TILE = 36.dp
+private val ROW_TILE_GAP = 12.dp
+private val ROW_TEXT_START = ROW_PADDING_H + ROW_TILE + ROW_TILE_GAP
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -291,7 +452,10 @@ private fun FileItemRow(
     // map can change while the screen is open (mount add/remove).
     val ext = item.file.extension.lowercase()
     val isHtml = !item.isDirectory && (ext == "html" || ext == "htm")
+    // [T-file-row-polish] One menu state for the long-press and the row's
+    // "More" button (iOS feeds .contextMenu and the More menu from one list).
     var menuExpanded by remember(item.file.absolutePath) { mutableStateOf(false) }
+    val context = LocalContext.current
 
     // [T-android-file-context-copy-abs-path] The file's Linux (PRoot) absolute
     // path = current dir's linux path + name. Falls back to the host absolute
@@ -306,48 +470,25 @@ private fun FileItemRow(
             .combinedClickable(
                 onClick = onClick,
                 // [T-android-file-context-copy-abs-path] Long-press opens the
-                // file context menu (currently "Copy Absolute Path"; the
-                // HTML-only "Add to Home" item below stays gated). Mirrors the
-                // iOS file context menu.
+                // file context menu, the same one as the "More" button.
                 onLongClick = { menuExpanded = true },
             )
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(start = ROW_PADDING_H, end = 8.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Icon
-        Icon(
-            imageVector = fileIcon(item),
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = if (item.isDirectory)
-                MaterialTheme.colorScheme.primary
-            else
-                MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        FileIconTile(kind = FileIconKind.of(ext, item.isDirectory), isSymlink = item.isSymlink)
 
-        Spacer(modifier = Modifier.width(16.dp))
+        Spacer(modifier = Modifier.width(ROW_TILE_GAP))
 
-        // Name and size
+        // Name, then "size · date" (size omitted for folders, date when stat = 0).
         Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = item.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (item.isSymlink) {
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "link",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                }
-            }
-            // mtime + size on a single row, mirroring iOS: "size · mtime"
-            // (size omitted for directories, mtime omitted when stat = 0).
+            Text(
+                text = item.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             val mtime = item.formattedDate
             if (!item.isDirectory || mtime.isNotEmpty()) {
                 val parts = buildList {
@@ -358,75 +499,161 @@ private fun FileItemRow(
                     text = parts.joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                 )
             }
         }
 
-        // Delete button for non-directory items
-        if (!item.isDirectory) {
-            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = stringResource(R.string.delete),
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        // Chevron for directories
         if (item.isDirectory) {
+            // A softer chevron than the name's color (iOS: tertiary, semibold).
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 8.dp).size(22.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            )
+        } else {
+            // [T-file-row-polish] "More" (the long-press actions) and Export:
+            // 32 dp circles in 44 dp touch targets.
+            Box {
+                RowActionButton(
+                    icon = Icons.Filled.MoreVert,
+                    contentDescription = stringResource(R.string.filebrowser_more_action),
+                    onClick = { menuExpanded = true },
+                )
+                FileRowMenu(
+                    expanded = menuExpanded,
+                    onDismiss = { menuExpanded = false },
+                    item = item,
+                    absolutePath = absolutePath,
+                    isHtml = isHtml,
+                    onDelete = onDelete,
+                    onAddToHome = onAddToHome,
+                )
+            }
+            RowActionButton(
+                icon = Icons.Filled.Share,
+                contentDescription = stringResource(R.string.filepreview_share),
+                onClick = { shareFile(context, item) },
             )
         }
     }
-
-    // [T-android-file-context-copy-abs-path] File context menu, anchored to
-    // the row's bounding Box. Always offers "Copy Absolute Path"; the
-    // HTML-only "Add to Home" item below stays gated behind the unvalidated
-    // WebApp entry point (TODO webapp-hidden).
-    run {
-        val context = LocalContext.current
-        com.openminis.app.ui.components.MinisMenu(
+    if (item.isDirectory) {
+        // Folders have no More button; their long-press menu anchors on the row.
+        FileRowMenu(
             expanded = menuExpanded,
-            onDismissRequest = { menuExpanded = false },
+            onDismiss = { menuExpanded = false },
+            item = item,
+            absolutePath = absolutePath,
+            isHtml = false,
+            onDelete = onDelete,
+            onAddToHome = onAddToHome,
+        )
+    }
+    } // anchoring Box
+}
+
+/**
+ * [T-file-row-polish] The type's glyph on a rounded tile of its color at 15 %
+ * (the sidebar's group-icon look, iOS `FileItemRow`). A symlink gets a small
+ * orange badge on the tile's corner.
+ */
+@Composable
+private fun FileIconTile(kind: FileIconKind, isSymlink: Boolean) {
+    val tint = kind.tint()
+    Box(modifier = Modifier.size(ROW_TILE)) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(RoundedCornerShape(8.dp))
+                .background(tint.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center,
         ) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.filebrowser_copy_abs_path)) },
-                leadingIcon = {
-                    Icon(Icons.Filled.ContentCopy, contentDescription = null)
-                },
-                onClick = {
-                    menuExpanded = false
-                    val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                    clip.setPrimaryClip(
-                        android.content.ClipData.newPlainText("path", absolutePath),
-                    )
-                    // Android 13+ shows its own clipboard confirmation chip;
-                    // add a Toast for < 13 and as explicit feedback.
-                    android.widget.Toast.makeText(
-                        context,
-                        context.getString(R.string.filebrowser_copy_abs_path_toast),
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                },
-            )
-            // TODO(webapp-hidden): WebApp / "Add to Home Screen" item temporarily
-            // hidden — feature not yet validated/complete. Re-enable by removing
-            // `false &&` from the guard below.
-            if (false && isHtml) {
+            Icon(kind.icon(), contentDescription = null, modifier = Modifier.size(20.dp), tint = tint)
+        }
+        if (isSymlink) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 3.dp, y = 3.dp)
+                    .size(14.dp)
+                    .clip(CircleShape)
+                    .background(SYMLINK_BADGE)
+                    .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.Link, contentDescription = null, modifier = Modifier.size(9.dp), tint = Color.White)
+            }
+        }
+    }
+}
+
+/** A 32 dp round button on a light fill, in a 44 dp touch target. */
+@Composable
+private fun RowActionButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * The file's actions - the long-press menu and the More button show this one
+ * list (iOS `FileBrowserRow.actions`): Copy Absolute Path, Add to Home Screen
+ * (HTML, still hidden), Delete (files only, in the error color).
+ */
+@Composable
+private fun FileRowMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    item: FileItem,
+    absolutePath: String,
+    isHtml: Boolean,
+    onDelete: () -> Unit,
+    onAddToHome: (com.openminis.app.webapp.WebAppSource.HostFile) -> Unit,
+) {
+    val context = LocalContext.current
+    com.openminis.app.ui.components.MinisMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.filebrowser_copy_abs_path)) },
+            leadingIcon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+            onClick = {
+                onDismiss()
+                val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                    as android.content.ClipboardManager
+                clip.setPrimaryClip(android.content.ClipData.newPlainText("path", absolutePath))
+                // Android 13+ shows its own clipboard confirmation chip;
+                // add a Toast for < 13 and as explicit feedback.
+                android.widget.Toast.makeText(
+                    context,
+                    context.getString(R.string.filebrowser_copy_abs_path_toast),
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            },
+        )
+        // TODO(webapp-hidden): WebApp / "Add to Home Screen" item temporarily
+        // hidden — feature not yet validated/complete. Re-enable by removing
+        // `false &&` from the guard below.
+        if (false && isHtml) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.webapp_add_to_home)) },
-                leadingIcon = {
-                    Icon(Icons.Filled.AppShortcut, contentDescription = null)
-                },
+                leadingIcon = { Icon(Icons.Filled.AppShortcut, contentDescription = null) },
                 onClick = {
-                    menuExpanded = false
+                    onDismiss()
                     val triple = com.openminis.app.webapp.WebAppPathResolver.inferScope(item.file)
                     if (triple != null) {
                         val (scope, ctx, linuxPath) = triple
@@ -440,15 +667,79 @@ private fun FileItemRow(
                             ),
                         )
                     }
-                    // No matching scope → silently no-op (chip is rare and
-                    // only appears for files that do live under a bind mount;
-                    // future T-pwa-4 may surface a toast).
                 },
             )
-            } // end HTML-only Add-to-Home gate
+        }
+        if (!item.isDirectory) {
+            val danger = MaterialTheme.colorScheme.error
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.delete), color = danger) },
+                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null, tint = danger) },
+                onClick = {
+                    onDismiss()
+                    onDelete()
+                },
+            )
         }
     }
-    } // anchoring Box
+}
+
+/** iOS's symlink badge: a small orange circle on the tile. */
+private val SYMLINK_BADGE = Color(0xFFFF9800)
+
+/**
+ * [T-file-row-polish] What a row's icon tile shows, by extension (any case);
+ * folders win. The extension lists are iOS `FileIconKind` (0340fd920), plus
+ * doc / docx with the text documents.
+ */
+internal enum class FileIconKind {
+    FOLDER, CODE, SHELL, IMAGE, AUDIO, VIDEO, TEXT, PDF, ARCHIVE, OTHER;
+
+    companion object {
+        fun of(extension: String, isDirectory: Boolean): FileIconKind {
+            if (isDirectory) return FOLDER
+            return when (extension.lowercase()) {
+                "swift", "py", "js", "mjs", "ts", "tsx", "jsx", "c", "cc", "cpp", "h", "hpp", "m", "mm",
+                "go", "rs", "java", "kt", "rb", "php", "lua", "html", "htm", "css",
+                "json", "xml", "yaml", "yml", "toml" -> CODE
+                "sh", "bash", "zsh", "fish" -> SHELL
+                "png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "heic", "tiff", "ico" -> IMAGE
+                "mp3", "wav", "aac", "flac", "m4a", "ogg", "opus" -> AUDIO
+                "mp4", "mov", "avi", "mkv", "webm", "m4v" -> VIDEO
+                "txt", "md", "markdown", "log", "csv", "rtf", "doc", "docx" -> TEXT
+                "pdf" -> PDF
+                "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "zst" -> ARCHIVE
+                else -> OTHER
+            }
+        }
+    }
+}
+
+private fun FileIconKind.icon(): ImageVector = when (this) {
+    FileIconKind.FOLDER -> Icons.Filled.Folder
+    FileIconKind.CODE -> Icons.Filled.Code
+    FileIconKind.SHELL -> Icons.Filled.Terminal
+    FileIconKind.IMAGE -> Icons.Filled.Image
+    FileIconKind.AUDIO -> Icons.Filled.MusicNote
+    FileIconKind.VIDEO -> Icons.Filled.Movie
+    FileIconKind.TEXT -> Icons.Filled.Description
+    FileIconKind.PDF -> Icons.Filled.PictureAsPdf
+    FileIconKind.ARCHIVE -> Icons.Filled.FolderZip
+    FileIconKind.OTHER -> Icons.AutoMirrored.Filled.InsertDriveFile
+}
+
+/** Folders take the app accent; files a fixed color per type (iOS tints). */
+@Composable
+private fun FileIconKind.tint(): Color = when (this) {
+    FileIconKind.FOLDER -> MaterialTheme.colorScheme.primary
+    FileIconKind.CODE -> Color(0xFF9C27B0)
+    FileIconKind.SHELL -> Color(0xFF4CAF50)
+    FileIconKind.IMAGE -> Color(0xFFFF9800)
+    FileIconKind.AUDIO -> Color(0xFFE91E63)
+    FileIconKind.VIDEO -> Color(0xFFF44336)
+    FileIconKind.TEXT, FileIconKind.PDF -> Color(0xFF2196F3)
+    FileIconKind.ARCHIVE -> Color(0xFF795548)
+    FileIconKind.OTHER -> Color(0xFF757575)
 }
 
 @Composable
@@ -541,18 +832,3 @@ private fun MoreMenu(
     }
 }
 
-private fun fileIcon(item: FileItem): ImageVector {
-    if (item.isDirectory) return Icons.Filled.Folder
-    return when (item.iconRes) {
-        "text" -> Icons.Filled.Description
-        "terminal" -> Icons.Filled.Terminal
-        "code" -> Icons.Filled.Code
-        "image" -> Icons.Filled.Image
-        "audio" -> Icons.Filled.AudioFile
-        "video" -> Icons.Filled.VideoFile
-        "archive" -> Icons.Filled.Archive
-        "pdf" -> Icons.Filled.PictureAsPdf
-        "database" -> Icons.Filled.Storage
-        else -> Icons.AutoMirrored.Filled.InsertDriveFile
-    }
-}

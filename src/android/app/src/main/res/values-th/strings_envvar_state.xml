@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">ปิดใช้งาน</string>
+    <string name="env_var_status_duplicate">ชื่อซ้ำ</string>
+    <string name="env_var_enabled_toggle">เปิดใช้งาน</string>
+    <string name="env_var_enabled_footer">เมื่อปิด ตัวแปรจะยังเก็บค่าและหมายเหตุไว้ แต่จะไม่ถูกส่งให้เชลล์ เทอร์มินัล หรือเซิร์ฟเวอร์ MCP</string>
+    <string name="env_var_disabled_highlight">ตัวแปรนี้ถูกปิดใช้งาน เปิดสวิตช์เพื่อใช้งานอีกครั้ง</string>
+    <string name="env_var_action_disable">ปิดใช้งาน</string>
+    <string name="env_var_action_enable">เปิดใช้งาน</string>
+    <string name="mcp_form_env_disabled_warning">%1$s ถูกปิดใช้งาน และจะถูกส่งเป็นค่าว่าง</string>
+</resources>

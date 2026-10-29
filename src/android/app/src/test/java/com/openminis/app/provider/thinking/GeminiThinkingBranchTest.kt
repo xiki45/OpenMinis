@@ -179,19 +179,25 @@ class GeminiThinkingBranchTest {
 
     /**
      * A 3.x id wins over a 2.5 substring if both somehow appear — the
-     * `isGemini3` check is first among the family branches. Constructed rather
+     * level-family check (by major version since OpenMinis#470, formerly
+     * `isGemini3`) is first among the family branches. Constructed rather
      * than observed: no such id ships, but the ordering is the invariant, and an
      * accidental reorder is invisible on real ids.
      */
     @Test
     fun `the 3x family check precedes the 2_5 checks`() {
         val src = com.openminis.app.ProductionSources.read("provider/thinking/ThinkingRuleResolver.kt")
-        val three = src.indexOf("val isGemini3 = ")
         val pro = src.indexOf("val is25Pro = ")
         val flash = src.indexOf("val is25Flash = ")
         val lite = src.indexOf("val is25FlashLite = ")
-        assertTrue("isGemini3 not found", three > 0)
-        assertTrue("isGemini3 must be evaluated before the 2.5 predicates", three < pro && pro < flash)
+        val familyBranches = src.substring(src.indexOf("null -> when {"))
+        val three = familyBranches.indexOf("isGeminiLevelFamily(modelId) ->")
+        assertTrue("the level-family branch not found", three > 0)
+        assertTrue(
+            "the level-family branch must come before the 2.5 branches",
+            three < familyBranches.indexOf("is25Pro ->") && three < familyBranches.indexOf("is25Flash ->"),
+        )
+        assertTrue("the 2.5 predicates must still be pro then flash", pro in 1 until flash)
         assertTrue("is25FlashLite must exist as its own predicate", lite > flash)
         assertTrue(
             "the flash predicate must still carry its anti-lite guard — this is the collapse",
@@ -372,7 +378,7 @@ class GeminiThinkingBranchTest {
         assertTrue("geminiThinkingConfig not found", fnAt > 0)
         val body = src.substring(fnAt)
         val suffixCheck = body.indexOf("noThinkingSuffixes")
-        val familyCheck = body.indexOf("val isGemini3 = ")
+        val familyCheck = body.indexOf("isGeminiLevelFamily(modelId) ->")
         assertTrue("the suffix list is gone", suffixCheck > 0)
         assertTrue(
             "the specialized-suffix check must precede the family branches — below them it is dead code (GH#226)",
@@ -388,11 +394,11 @@ class GeminiThinkingBranchTest {
         )
         assertTrue(
             "the 3.7 floor must stay a minor-version comparison, not an id list",
-            src.contains("return minor >= 7"),
+            src.contains("v.major == 3 && (v.minor == null || v.minor < 7)"),
         )
         assertTrue(
-            "…driven by the gemini-3.<minor> regex",
-            src.contains("Regex(\"\"\"gemini-3\\.(\\d+)\"\"\")"),
+            "…driven by the gemini-<major>[.-<minor>] regex (OpenMinis#470)",
+            src.contains("Regex(\"\"\"gemini-(\\d+)(?:[.-](\\d+))?\"\"\")"),
         )
     }
 }

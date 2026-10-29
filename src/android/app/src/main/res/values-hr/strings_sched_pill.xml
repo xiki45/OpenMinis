@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Izvodi se</string>
+    <string name="sched_pill_waiting">Čekanje</string>
+    <string name="sched_pill_run_now">Pokreni sada</string>
+    <string name="sched_pill_hide">Sakrij ovo odbrojavanje</string>
+    <string name="sched_pill_cancel_all">Otkaži sve zakazane zadatke</string>
+    <string name="sched_pill_cancel_all_title">Otkazati sve zakazane zadatke?</string>
+    <string name="sched_pill_cancel_all_confirm">Otkaži sve</string>
+    <string name="sched_pill_not_now">Ne sada</string>
+    <string name="sched_pill_cancel_all_message">Svi zadaci koji su još zakazani u ovom razgovoru bit će otkazani.</string>
+    <string name="sched_pill_a11y_title">Nadolazeći zakazani zadatak</string>
+    <string name="sched_pill_a11y_running">Pokretanje u tijeku</string>
+    <string name="sched_pill_a11y_waiting">Čeka završetak drugog zadatka</string>
+    <string name="sched_pill_a11y_upcoming_left">Sljedeće pokretanje · preostalo %1$d</string>
+    <string name="sched_pill_a11y_upcoming">Sljedeće pokretanje</string>
+    <string name="sched_pill_a11y_run_of">Izvođenje %1$d od %2$d</string>
+    <string name="sched_pill_a11y_run">Izvođenje %1$d</string>
+    <string name="sched_pill_a11y_next_in">Sljedeće pokretanje za %1$s</string>
+    <string name="sched_pill_a11y_more">+%1$d još</string>
+    <string name="sched_pill_a11y_hint">Otvara pojedinosti zadatka</string>
+</resources>

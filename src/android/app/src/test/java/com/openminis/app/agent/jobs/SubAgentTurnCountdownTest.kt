@@ -1,5 +1,6 @@
 package com.openminis.app.agent.jobs
 
+import com.openminis.app.agent.AgentLoopLimits
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -73,14 +74,20 @@ class SubAgentTurnCountdownTest {
     @Test
     fun `the cap matches the main chat's own ceiling`() {
         // [T-subagent-turn-parity] Raised 25 -> 200 to match the parent
-        // conversation. The point of pinning it is unchanged: the number is a
-        // deliberate choice, so it should move only when someone means it —
+        // conversation, then 200 -> 500 with it (FEAT-261021-01). The point
+        // of pinning it is unchanged: the number is a deliberate choice, so it should move only when someone means it —
         // never as a side effect of editing the countdown around it.
         //
-        // Asserting the literal rather than reading MAX_AGENT_TURNS keeps this
-        // a real check: ChatViewModel is an Android-runtime class this JVM test
-        // cannot load, and a test that compared the constant to itself would
-        // pass no matter what either value became.
-        assertEquals(200, HelperRunner.MAX_TURNS)
+        // Asserting the literal rather than comparing the constants keeps
+        // this a real check: a test that compared a constant to itself would
+        // pass no matter what the value became.
+        assertEquals(500, AgentLoopLimits.MAX_AGENT_TURNS)
+        assertEquals(500, HelperRunner.MAX_TURNS)
+        // The main chat takes its cap from the same constant (ChatViewModel
+        // needs an Android runtime, so pin it as a source fact).
+        val src = File("src/main/java/com/openminis/app/ui/chat/ChatViewModel.kt").readText()
+        assertTrue(
+            src.contains("private const val MAX_AGENT_TURNS = com.openminis.app.agent.AgentLoopLimits.MAX_AGENT_TURNS"),
+        )
     }
 }

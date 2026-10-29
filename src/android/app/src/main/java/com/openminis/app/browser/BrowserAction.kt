@@ -105,5 +105,19 @@ enum class UserAgentProfile(val value: String) {
 
     companion object {
         fun fromString(s: String): UserAgentProfile? = entries.find { it.value == s }
+
+        /**
+         * [ISS-033] A user_agent argument: case-insensitive, "-" read as "_",
+         * and "desktop" / "mobile" accepted as aliases. Null when unknown - it
+         * used to fall back to mobile silently, so "desktop" switched to MOBILE.
+         */
+        fun parse(raw: String?): UserAgentProfile? {
+            val s = raw?.trim()?.lowercase()?.replace('-', '_') ?: return null
+            return when (s) {
+                "desktop" -> DESKTOP_CHROME
+                "mobile" -> MOBILE_CHROME
+                else -> fromString(s)
+            }
+        }
     }
 }

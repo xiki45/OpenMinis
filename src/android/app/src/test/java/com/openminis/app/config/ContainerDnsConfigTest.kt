@@ -158,7 +158,7 @@ class ContainerDnsConfigTest {
     @Test
     fun `the builtins register these fields against the real prefs and refresh DNS`() {
         val builtins = ProductionSources.read("config/ConfigBuiltins.kt")
-        assertTrue(builtins.contains("registerNetwork(r, context)"))
+        assertTrue(builtins.contains("registerNetwork(r, context, envVarRepo)"))
         assertTrue(builtins.contains("ContainerDnsFields.build(ContainerDns.PrefsStore(context))"))
         assertTrue(builtins.contains("RootfsManager.getInstance(context).refreshDns()"))
         // The UI writes the same keys.

@@ -426,11 +426,12 @@ internal object ProviderMutationMethods {
 
         val before = repo.entriesFor(instanceId).map { it.baseModel.id }.toSet()
         val start = System.currentTimeMillis()
+        var outcome: com.openminis.app.data.repository.ProviderRepository.ModelRefreshOutcome? = null
         try {
             // [T-codex-dynamic-discovery GH#319] Mirror the in-app Refresh
             // button, which forces. Defaulted false so existing callers of this
             // RPC keep exercising the cached path.
-            repo.refreshModels(instance, forceRefresh = params.optBoolean("forceRefresh", false))
+            outcome = repo.refreshModels(instance, forceRefresh = params.optBoolean("forceRefresh", false))
         } catch (e: Exception) {
             throw RPCException(-32000, "refreshModels failed: ${e.message}")
         }
@@ -443,6 +444,12 @@ internal object ProviderMutationMethods {
             put("disappeared", disappeared)
             put("total", after.size)
             put("durationMs", System.currentTimeMillis() - start)
+            // [T-android-model-refresh-visible] Where the list came from and,
+            // when it was not the vendor's own, why.
+            outcome?.let {
+                put("source", it.source.name)
+                it.vendorError?.let { e -> put("vendorError", e) }
+            }
         }
     }
 
@@ -516,6 +523,7 @@ internal object ProviderMutationMethods {
             memberEntryIds = members,
             strategy = strategy,
             fallbackStrategy = fallback,
+            contextLimitTokens = contextLimitParam(params),
         )
         repo.addGroup(group)
         return JSONObject().put("group", groupToJson(repo, group))
@@ -561,6 +569,7 @@ internal object ProviderMutationMethods {
         }
         if (params.has("strategy")) current.strategy = parseStrategy(params.optString("strategy"))
         if (params.has("fallbackStrategy")) current.fallbackStrategy = parseFallback(params.optString("fallbackStrategy"))
+        if (params.has("contextLimitTokens")) current.contextLimitTokens = contextLimitParam(params)
         repo.updateGroup(current)
         return JSONObject().put("group", groupToJson(repo, current))
     }
@@ -623,6 +632,17 @@ internal object ProviderMutationMethods {
         else -> FallbackStrategy.default
     }
 
+    /**
+     * The group's context cap (the "Context limit" switch on the group page):
+     * a positive token count, or null / 0 / absent for no cap.
+     */
+    private fun contextLimitParam(params: JSONObject): Int? {
+        if (!params.has("contextLimitTokens") || params.isNull("contextLimitTokens")) return null
+        val value = params.optInt("contextLimitTokens", -1)
+        if (value < 0) throw RPCException(-32602, "contextLimitTokens must be a token count, or null / 0 for no cap")
+        return value.takeIf { it > 0 }
+    }
+
     private fun groupToJson(repo: ProviderRepository, group: ModelGroup): JSONObject {
         val cfg = repo.config.value
         return JSONObject().apply {
@@ -632,6 +652,7 @@ internal object ProviderMutationMethods {
             put("fallbackStrategy", group.fallbackStrategy.name)
             put("isDefault", group.id == cfg.defaultPrimaryGroupId)
             put("inAgentLoop", group.id in cfg.agentLoopGroupIds)
+            put("contextLimitTokens", group.contextLimitTokens ?: JSONObject.NULL)
             val ids = JSONArray()
             for (m in group.memberEntryIds) ids.put(m)
             put("memberEntryIds", ids)

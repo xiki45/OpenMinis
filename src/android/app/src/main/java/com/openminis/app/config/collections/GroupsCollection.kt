@@ -7,6 +7,15 @@ import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.ConfigSchema
 import com.openminis.app.config.ConfigValue
 import com.openminis.app.config.fields.ClosureField
+import com.openminis.app.config.readable.ConfigReadable
+import com.openminis.app.config.readable.ConfigRefKind
+import com.openminis.app.config.readable.ConfigRefResolver
+import com.openminis.app.config.readable.ConfigValueFormatter
+import com.openminis.app.config.readable.NumberUnit
+import com.openminis.app.config.readable.ReadableArg
+import com.openminis.app.config.readable.ReadableLine
+import com.openminis.app.config.readable.ReadableThinkingLabels
+import com.openminis.app.config.readable.RedactedConfigValue
 import com.openminis.app.data.model.FallbackStrategy
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.RoutingStrategy
@@ -96,6 +105,34 @@ class GroupsCollection(
         repo.removeGroup(id)
     }
 
+    // -- [T-config-readable] Readable descriptions (mirrors iOS GroupsCollection) --
+
+    override val readableSubjectFormat: String get() = "Group “%1\$@” – %2\$@"
+
+    override fun entityLabel(id: String): String? = group(id)?.name
+
+    override fun readableForAdd(payload: RedactedConfigValue): List<ReadableLine> {
+        val d = (payload.value as? ConfigValue.Obj)?.value ?: return emptyList()
+        val name = (d["name"] as? ConfigValue.Str)?.value ?: "?"
+        val entries = ((d["entries"] ?: d["members"]) as? ConfigValue.Arr)?.value
+            ?.mapNotNull { (it as? ConfigValue.Str)?.value?.takeIf(String::isNotEmpty) }
+            .orEmpty()
+        val lines = mutableListOf(
+            ReadableLine("Create group “%1\$@” with %2\$@ models", listOf(ReadableArg.Text(name), ReadableArg.Text("${entries.size}"))),
+        )
+        entries.firstOrNull()?.let {
+            lines.add(ReadableLine("Primary model: %@", listOf(ConfigRefResolver.name(ConfigRefKind.ModelEntry, it))))
+        }
+        return lines
+    }
+
+    override fun readableForRemove(id: String): List<ReadableLine> {
+        val g = group(id) ?: return emptyList()
+        return listOf(
+            ReadableLine("Delete group “%1\$@” (%2\$@ models)", listOf(ReadableArg.Text(g.name), ReadableArg.Text("${g.memberEntryIds.size}"))),
+        )
+    }
+
     // -- Field factories --
 
     private fun group(id: String): ModelGroup? =
@@ -123,6 +160,7 @@ class GroupsCollection(
             valueSchema = ConfigSchema.Str(maxLength = 200),
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Text()),
             reader = {
                 val g = group(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Str(g.name)
@@ -141,6 +179,7 @@ class GroupsCollection(
             valueSchema = ConfigSchema.StrEnum(listOf("fallback", "loadBalance")),
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.EnumLabels(strategyLabels)),
             reader = {
                 val g = group(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Str(g.strategy.name)
@@ -161,6 +200,7 @@ class GroupsCollection(
             valueSchema = ConfigSchema.StrEnum(listOf("default", "always")),
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.EnumLabels(fallbackLabels)),
             reader = {
                 val g = group(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Str(g.fallbackStrategy.name)
@@ -181,6 +221,7 @@ class GroupsCollection(
             valueSchema = ConfigSchema.StrEnum(listOf("", "off", "low", "medium", "high", "xhigh")),
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.EnumLabels(ReadableThinkingLabels.withNotSet)),
             reader = {
                 val g = group(id) ?: return@ClosureField ConfigValue.Null
                 // Wire token is lowercase to match iOS; null → empty string.
@@ -202,6 +243,7 @@ class GroupsCollection(
             valueSchema = ConfigSchema.Int(min = 0, max = 4_000_000),
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Number(NumberUnit.TOKENS, zero = "No limit")),
             reader = {
                 val g = group(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Int(g.contextLimitTokens ?: 0)
@@ -211,6 +253,11 @@ class GroupsCollection(
                 mutate(id) { it.contextLimitTokens = if (i == 0) null else i }
             },
         )
+
+    private val strategyLabels = mapOf("fallback" to "Fallback (in order)", "loadBalance" to "Load balance")
+
+    /** Android's `default` is iOS's `limited`: fall back only when the provider rejects. */
+    private val fallbackLabels = mapOf("default" to "Only when the provider rejects", "always" to "Also on transient errors")
 
     /** iOS uses lowercase tokens (`off`/`low`/…); Android `ThinkingLevel.name`
      *  is uppercase. Round-trip identical strings to keep the CLI contract
@@ -251,6 +298,7 @@ class GroupsCollection(
             valueSchema = ConfigSchema.Array(ConfigSchema.Str()),
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.RefList(ConfigRefKind.ModelEntry, ordered = true), label = "Models"),
             reader = {
                 val g = group(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Arr(g.memberEntryIds.map { ConfigValue.Str(it) })

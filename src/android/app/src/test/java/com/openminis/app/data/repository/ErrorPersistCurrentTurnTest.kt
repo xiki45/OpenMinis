@@ -223,7 +223,7 @@ class ErrorPersistCurrentTurnTest {
     @Test
     fun `setInlineError writes through persistTurnError, never the last-assistant UPDATE`() {
         val body = vm.substringAfter("private fun setInlineError(errorText: String) {")
-            .substringBefore("private fun setTransientInlineError(")
+            .substringBefore("private fun clearInlineError()")
         assertTrue(body.contains("chatRepository.persistTurnError(sid, safeError)"))
         assertFalse("a WRITE through updateLastAssistantError is the GH#263 bug",
             body.contains("updateLastAssistantError(sid, safeError)"))

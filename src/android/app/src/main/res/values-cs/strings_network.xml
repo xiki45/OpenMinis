@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Síť</string>
+    <string name="network_status">Stav</string>
+    <string name="network_status_starting">Spouštění…</string>
+    <string name="network_status_connecting">Připojování…</string>
+    <string name="network_status_off">Vypnuto</string>
+    <string name="network_device_name">Název zařízení</string>
+    <string name="network_device_name_automatic">Automaticky</string>
+    <string name="network_exit_node_none">Žádné</string>
+    <string name="network_sign_out">Odhlásit se</string>
+    <string name="network_scope_shell">Shell</string>
+    <string name="network_scope_browser">Prohlížeč</string>
+    <string name="network_scope_backup">Záloha</string>
+    <string name="network_proxy_type">Typ</string>
+    <string name="network_proxy_server">Server</string>
+    <string name="network_proxy_authentication">Ověření</string>
+    <string name="network_proxy_password">Heslo</string>
+    <string name="network_proxy_bypass">Obejít</string>
+    <string name="network_proxy_test">Otestovat připojení</string>
+    <string name="network_cancel">Zrušit</string>
+    <string name="network_save">Uložit</string>
+    <string name="network_provider_route">Síť</string>
+</resources>

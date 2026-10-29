@@ -1,5 +1,6 @@
 package com.openminis.app.ui.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,9 +20,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -31,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
 import com.openminis.app.ui.theme.ChatColors
+import kotlinx.coroutines.launch
 
 /**
  * Standardized half-screen modal sheet used by every popup launched from the
@@ -47,6 +51,12 @@ import com.openminis.app.ui.theme.ChatColors
  * [TokenUsageSheet] passes 0.5f to match iOS's `.medium` detent
  * (AIChatView.swift:508). The fraction is clamped to (0, 1] so callers can't
  * accidentally collapse the sheet to nothing.
+ *
+ * [onBack] lets a sheet with inner pages take system back first: return true
+ * when it handled the press (e.g. popped a page), false to close the sheet as
+ * usual. Needed because the sheet's own back-dismiss is registered on the
+ * window at overlay priority (Android 13+), ahead of any BackHandler in
+ * [content], so with it on, a BackHandler inside the sheet never runs.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,9 +65,11 @@ fun StandardChatSheet(
     onDismiss: () -> Unit,
     leadingAction: (@Composable () -> Unit)? = null,
     heightFraction: Float = 0.9f,
+    onBack: (() -> Boolean)? = null,
     content: @Composable () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
     val sheetHeight = (configuration.screenHeightDp * heightFraction.coerceIn(0.1f, 1f)).dp
 
@@ -66,7 +78,15 @@ fun StandardChatSheet(
         sheetState = sheetState,
         containerColor = ChatColors.background,
         dragHandle = { CompactDragHandle() },
+        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = onBack == null),
     ) {
+        if (onBack != null) {
+            BackHandler {
+                if (!onBack()) {
+                    scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
+                }
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()

@@ -188,15 +188,26 @@ object BackupRunController {
         )
         writeHistory(history, record)
 
-        fun note(line: String, problem: Boolean = false) {
-            log.add(BackupHistory.LogEntry(System.currentTimeMillis(), line, problem))
+        // [T-android-backup-progress-log] The log is appended from the export
+        // and delivery threads and read by the throttled writer's trailing
+        // write, so every access goes through its monitor.
+        fun note(line: String, problem: Boolean = false, transient: Boolean = false) {
+            val entry = BackupHistory.LogEntry(System.currentTimeMillis(), line, problem, transient)
+            synchronized(log) { BackupLogRules.append(log, entry) }
         }
-        fun progress(line: String) {
+        fun logSnapshot() = synchronized(log) { log.toList() }
+        // At most one history write a second; a throttled line still lands at
+        // the end of the interval, and `close()` in `finally` forces the last.
+        val historyWriter = ThrottledWriter(
+            schedule = { delayMs, block -> scope.launch { kotlinx.coroutines.delay(delayMs); block() } },
+            write = { writeHistory(history, record.copy(log = logSnapshot())) },
+        )
+        fun progress(line: String, transient: Boolean = false) {
             _statusText.value = line
-            note(line)
+            note(line, transient = transient)
             // The running history row's subtitle IS the latest log line, so
             // progress lives with the run rather than inside the button (iOS).
-            writeHistory(history, record.copy(log = log.toList()))
+            historyWriter.request()
         }
 
         runJob = scope.launch {
@@ -227,7 +238,7 @@ object BackupRunController {
                     deliverToDestinations(
                         app, summary.packageFile, summary.backupId,
                         isCancelled = { job?.isActive == false },
-                    ) { progress(it) }
+                    ) { line, transient -> progress(line, transient) }
                 }
                 outcomes.forEach {
                     note(
@@ -293,7 +304,7 @@ object BackupRunController {
                     },
                     packageName = summary.packageFile.name,
                     destinations = outcomes,
-                    log = log.toList(),
+                    log = logSnapshot(),
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Stopped by the user: a real outcome, not a vanished run —
@@ -304,7 +315,7 @@ object BackupRunController {
                     finishedAt = System.currentTimeMillis(),
                     status = BackupHistory.Status.FAILED,
                     errorMessage = STOPPED_MARKER,
-                    log = log.toList(),
+                    log = logSnapshot(),
                 )
                 throw e
             } catch (e: Exception) {
@@ -315,12 +326,14 @@ object BackupRunController {
                     finishedAt = System.currentTimeMillis(),
                     status = BackupHistory.Status.FAILED,
                     errorMessage = e.message,
-                    log = log.toList(),
+                    log = logSnapshot(),
                 )
             } finally {
                 runJob = null
                 _statusText.value = null
-                writeHistory(history, record)
+                // Forced: the final state must land whatever the throttle says,
+                // and no trailing write may follow it.
+                historyWriter.close()
                 _isRunning.value = false
             }
         }
@@ -436,7 +449,8 @@ object BackupRunController {
         packageFile: File,
         backupId: String,
         isCancelled: () -> Boolean = { false },
-        onProgress: (String) -> Unit,
+        /** (line, transient): byte-level progress lines are transient. */
+        onProgress: (String, Boolean) -> Unit,
     ): List<BackupHistory.DestinationOutcome> {
         val store = com.openminis.app.backup.remote.RcloneRemoteStore(context)
         val enabled = store.enabledRemotes
@@ -457,7 +471,7 @@ object BackupRunController {
                 break
             }
             try {
-                onProgress("Sending to ${remote.name}…")
+                onProgress("Sending to ${remote.name}…", false)
                 if (com.openminis.app.backup.remote.RcloneRemoteStore.isLocalFolder(remote.backend)) {
                     val treeUri = remote.params[
                         com.openminis.app.backup.remote.RcloneRemoteStore.PARAM_TREE_URI,
@@ -465,14 +479,20 @@ object BackupRunController {
                     if (treeUri.isEmpty()) {
                         throw IllegalStateException("This folder destination is missing its location.")
                     }
+                    // [T-android-backup-progress-log] The copy reports once per
+                    // 8 KB buffer — ~2,600 calls per percent of a 2 GB package.
+                    // Only a changed percent, at most once a second, goes on.
+                    val gate = PercentGate()
                     localDelivery.deliver(packageFile, treeUri, isCancelled) { sent, total ->
                         val pct = if (total > 0) (sent * 100 / total) else 0
-                        onProgress("Saving to ${remote.name}… $pct%")
+                        if (gate.admit(pct.toInt())) onProgress("Saving to ${remote.name}… $pct%", true)
                     }
                 } else {
                     uploader.upload(packageFile, remote, backupId, isCancelled = isCancelled) { p ->
                         val pct = if (p.totalBytes > 0) (p.bytesSent * 100 / p.totalBytes) else 0
-                        onProgress("Sending to ${remote.name}… $pct%")
+                        // Polled every 250 ms (unchanged); transient, so each
+                        // line replaces the last and a repeat is dropped.
+                        onProgress("Sending to ${remote.name}… $pct%", true)
                     }
                 }
                 outcomes.add(

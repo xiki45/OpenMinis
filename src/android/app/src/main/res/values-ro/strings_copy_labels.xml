@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-copy-toast-l10n] TalkBack label of a code block's copy button. Taken from kimi_login_copy_code in this locale (same English source). -->
+<resources>
+    <string name="copy_code_block">Copiază codul</string>
+</resources>

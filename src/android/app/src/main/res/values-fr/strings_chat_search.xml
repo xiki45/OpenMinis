@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-in-chat-search] Translations from the iOS catalog. -->
+<resources>
+    <string name="chat_search_no_results">Aucun résultat</string>
+    <string name="chat_search_clear">Effacer</string>
+    <string name="chat_search_done">Terminé</string>
+</resources>

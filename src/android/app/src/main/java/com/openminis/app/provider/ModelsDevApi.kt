@@ -38,6 +38,17 @@ object ModelsDevApi {
     private var cacheTimestamp: Long = 0L
 
     /**
+     * [FIX-261025-18] When the registry in hand was last fetched from
+     * models.dev (the disk cache's date, or 0 for the bundled copy, whose
+     * [cacheTimestamp] is set to "now" only to stop a refresh loop). A manual
+     * refresh compares against this, not [cacheTimestamp].
+     */
+    @Volatile private var fetchedAt: Long = 0L
+
+    /** A manual refresh re-fetches a registry older than this. */
+    private const val MANUAL_REFRESH_FRESH_MS = 10 * 60 * 1000L
+
+    /**
      * [T-android-modelsdev-aggregate-fallback] Memoized stage-3 index, keyed on
      * [cacheTimestamp] exactly like the registry itself. A background
      * models.dev refresh bumps that stamp, so the index rebuilds on the next
@@ -46,6 +57,16 @@ object ModelsDevApi {
      */
     private var cachedAggregateIndex: Map<String, ModelDevEntry>? = null
     private var aggregateIndexBuiltFrom: Long = -1L
+    private var aggregateIndexRegistry: Map<String, ProviderEntry>? = null
+
+    /**
+     * [T-android-modelsdev-id-normalization] Memoized stage-2 index (normalized
+     * id -> majority-vote winner), invalidated by [cacheTimestamp] like the
+     * aggregate index. Mirrors iOS `cachedStage2Index`.
+     */
+    private var cachedStage2Index: Map<String, ModelDevEntry>? = null
+    private var stage2IndexBuiltFrom: Long = -1L
+    private var stage2IndexRegistry: Map<String, ProviderEntry>? = null
     private val isRefreshing = AtomicBoolean(false)
     private var appContext: Context? = null
 
@@ -61,7 +82,19 @@ object ModelsDevApi {
 
     // MARK: - Public: Fetch models by base URL (fallback)
 
-    fun fetchModels(forBaseURL: String): List<LLMModel> {
+    /**
+     * @param fresh set by a user-initiated Refresh. The registry is normally
+     *   stale-while-revalidate (up to [CACHE_TTL_MS] old, and the bundled copy
+     *   on first use), so a provider listed only here never showed a model
+     *   models.dev had added since: the tap answered from the old copy and the
+     *   update landed in the background, after the screen had shown the result
+     *   (FIX-261025-18). With [fresh], a copy older than
+     *   [MANUAL_REFRESH_FRESH_MS] is fetched first, in the caller's thread.
+     */
+    fun fetchModels(forBaseURL: String, fresh: Boolean = false): List<LLMModel> {
+        if (fresh && System.currentTimeMillis() - fetchedAt > MANUAL_REFRESH_FRESH_MS) {
+            refreshFromNetwork()
+        }
         val registry = loadRegistry() ?: return emptyList()
 
         // Phase 1: Exact API base match (with/without /v1)
@@ -172,12 +205,36 @@ object ModelsDevApi {
      * catalogued model would shadow its own exact entry. So the whole
      * exact-match search runs for candidate 0 before any shortening is tried.
      */
-    private fun resolveDevEntry(
+    internal fun resolveDevEntry(
         registry: Map<String, ProviderEntry>,
         provider: String,
         modelId: String,
     ): ModelDevEntry? {
         val keys = providerKeyMap[provider] ?: emptyList()
+        val wanted = normalizedModelKey(modelId)
+
+        // [T-android-modelsdev-id-normalization] Stages 1-3 of iOS
+        // ModelsDevAPI.resolveDevModel, in its order.
+        //
+        // Stage 1: the model's OWN provider — exact id, then normalized id.
+        for (key in keys) {
+            val prov = registry[key] ?: continue
+            prov.models[modelId]?.let { return it }
+            for (id in prov.models.keys.sorted()) {
+                if (normalizedModelKey(id) == wanted) prov.models[id]?.let { return it }
+            }
+        }
+        // Stage 2: every provider, on the NORMALIZED id, majority vote over
+        // the declared effort sets. This is what a relay hits: its provider
+        // name maps to no catalog key and its id carries a namespace
+        // (`code-buddy/deepseek-v4.1-flash`) that no catalog id spells.
+        val index = stage2Index(registry)
+        index[wanted]?.let { return it }
+        // Stage 3: longest catalogued prefix at a segment boundary.
+        prefixMatch(wanted, index)?.let { return it }
+
+        // Pre-normalization alias walk on the raw id, kept as a further
+        // fallback so nothing that resolved before stops resolving.
         for (candidate in aliasCandidates(modelId)) {
             for (key in keys) {
                 registry[key]?.models?.get(candidate)?.let { return it }
@@ -206,14 +263,107 @@ object ModelsDevApi {
         // larger sibling's. Those providers have a real catalog identity and
         // must keep getting the exact answer or none at all.
         if (!isUnrecognizedProvider(provider)) return null
-        val index = aggregateIndex(registry)
-        for (candidate in aliasCandidates(modelId)) {
-            index[candidate]?.let {
+        val aggIndex = aggregateIndex(registry)
+        for (candidate in normalizedPrefixes(wanted) + aliasCandidates(modelId)) {
+            aggIndex[candidate]?.let {
                 Log.i(TAG, "aggregate fallback: $modelId -> prefix $candidate")
                 return it
             }
         }
         return null
+    }
+
+    // MARK: - [T-android-modelsdev-id-normalization] Normalized lookup (iOS parity)
+
+    /**
+     * Normalize a model id for catalog lookup. Mirrors iOS
+     * `ModelsDevAPI.normalizedModelKey` (ModelsDevAPI.swift:127-132): drop the
+     * vendor / namespace path, lowercase, and fold `.` and `_` to `-`.
+     *
+     * Relays publish one model under many spellings — `deepseek-v4.1-flash`,
+     * `deepseek/deepseek-v4.1-flash`, `deepseek-ai/DeepSeek-V4.1-Flash`,
+     * `code-buddy/deepseek-v4.1-flash`. Exact matching made the answer depend
+     * on the spelling: the last one matched nothing, so the model fell back to
+     * the id heuristic (128K window, no output cap, no effort tiers — the
+     * picker offered `xhigh`, which DeepSeek does not accept). Distinct
+     * families stay distinct (`v4.1` vs `v4` keep different segments).
+     */
+    internal fun normalizedModelKey(id: String): String =
+        id.substringAfterLast('/').lowercase().replace('.', '-').replace('_', '-')
+
+    /**
+     * Stage-2 winner for every normalized id: group the catalog by normalized
+     * id (providers and ids walked in sorted order) and pick, among entries
+     * that declare effort tiers, the MOST COMMONLY declared set — first seen
+     * on a tie; with no declaring entry, the first entry. Same rule as iOS
+     * `buildStage2Index`: relays copy the vendor's declaration, so the mode
+     * converges on it where an alphabetical pick lands on an outlier.
+     */
+    internal fun buildStage2Index(registry: Map<String, ProviderEntry>): Map<String, ModelDevEntry> {
+        val grouped = linkedMapOf<String, MutableList<ModelDevEntry>>()
+        for (provKey in registry.keys.sorted()) {
+            val prov = registry[provKey] ?: continue
+            for (id in prov.models.keys.sorted()) {
+                val entry = prov.models[id] ?: continue
+                grouped.getOrPut(normalizedModelKey(id)) { mutableListOf() }.add(entry)
+            }
+        }
+        return grouped.mapValues { (_, candidates) ->
+            val declaring = candidates.filter { it.reasoningEffortValues != null }
+            if (declaring.isEmpty()) return@mapValues candidates.first()
+            val counts = declaring.groupingBy { it.reasoningEffortValues!! }.eachCount()
+            var winner: List<String>? = null
+            var winnerCount = 0
+            for (c in declaring) {
+                val n = counts[c.reasoningEffortValues!!] ?: 0
+                if (n > winnerCount) {
+                    winnerCount = n
+                    winner = c.reasoningEffortValues
+                }
+            }
+            declaring.firstOrNull { it.reasoningEffortValues == winner } ?: declaring.first()
+        }
+    }
+
+    private fun stage2Index(registry: Map<String, ProviderEntry>): Map<String, ModelDevEntry> {
+        val cached = cachedStage2Index
+        // Same snapshot = same timestamp AND the same registry object, so an
+        // index built from one registry is never served for another.
+        if (cached != null && stage2IndexBuiltFrom == cacheTimestamp && stage2IndexRegistry === registry) return cached
+        val built = buildStage2Index(registry)
+        cachedStage2Index = built
+        stage2IndexBuiltFrom = cacheTimestamp
+        stage2IndexRegistry = registry
+        Log.i(TAG, "stage-2 index built: ${built.size} normalized keys")
+        return built
+    }
+
+    /** Fewest segments a normalized prefix may shrink to (iOS `minPrefixSegments`). */
+    private const val MIN_PREFIX_SEGMENTS = 2
+
+    /**
+     * The longest catalogued id that [wanted] extends at a `-` boundary, e.g.
+     * `glm-5-3-flash-cpa` -> `glm-5-3-flash`. Mirrors iOS `prefixMatch`.
+     */
+    internal fun prefixMatch(wanted: String, index: Map<String, ModelDevEntry>): ModelDevEntry? {
+        val segments = wanted.split('-').toMutableList()
+        if (segments.size <= MIN_PREFIX_SEGMENTS) return null
+        while (segments.size > MIN_PREFIX_SEGMENTS) {
+            segments.removeAt(segments.size - 1)
+            index[segments.joinToString("-")]?.let { return it }
+        }
+        return null
+    }
+
+    /** [wanted] and its shorter `-` prefixes down to [MIN_PREFIX_SEGMENTS], longest first. */
+    internal fun normalizedPrefixes(wanted: String): List<String> {
+        val segments = wanted.split('-').toMutableList()
+        val out = mutableListOf<String>()
+        while (segments.size >= MIN_PREFIX_SEGMENTS) {
+            out.add(segments.joinToString("-"))
+            segments.removeAt(segments.size - 1)
+        }
+        return out
     }
 
     // MARK: - [T-android-modelsdev-aggregate-fallback] Stage 3: aggregate fallback
@@ -248,10 +398,11 @@ object ModelsDevApi {
      */
     private fun aggregateIndex(registry: Map<String, ProviderEntry>): Map<String, ModelDevEntry> {
         val cached = cachedAggregateIndex
-        if (cached != null && aggregateIndexBuiltFrom == cacheTimestamp) return cached
+        if (cached != null && aggregateIndexBuiltFrom == cacheTimestamp && aggregateIndexRegistry === registry) return cached
         val built = buildAggregateIndex(registry)
         cachedAggregateIndex = built
         aggregateIndexBuiltFrom = cacheTimestamp
+        aggregateIndexRegistry = registry
         Log.i(TAG, "aggregate index built: ${built.size} prefixes")
         return built
     }
@@ -279,7 +430,10 @@ object ModelsDevApi {
                 // aliasCandidates already produces exactly that walk (longest
                 // first, floored at MIN_ALIAS_SEGMENTS), so reuse it rather
                 // than re-deriving the segmentation rule.
-                for (prefix in aliasCandidates(modelId)) {
+                // [T-android-modelsdev-id-normalization] Raw alias prefixes as
+                // before, plus the normalized prefixes iOS registers, so a
+                // namespaced or differently-cased relay id finds its family.
+                for (prefix in (aliasCandidates(modelId) + normalizedPrefixes(normalizedModelKey(modelId))).distinct()) {
                     grouped.getOrPut(prefix) { mutableListOf() }.add(entry)
                 }
             }
@@ -360,10 +514,23 @@ object ModelsDevApi {
 
     // MARK: - Apply models.dev data
 
-    private fun applyDevData(model: LLMModel, devModel: ModelDevEntry): LLMModel {
+    /**
+     * [OpenMinis#438] The catalog normally wins on the two limits (it is fresher
+     * than a built-in literal). A model whose endpoint reported its own limits
+     * is the exception: the endpoint is the authority on what it accepts - a
+     * catalog value matched by id comes from some OTHER provider and can be
+     * larger than this gateway allows (upstream 400) or, for a routing-prefixed
+     * id that matches nothing, absent (128K guess). There the model's value
+     * wins and the catalog only fills the one it left out. Every other field
+     * keeps the catalog-first rule.
+     */
+    internal fun applyDevData(model: LLMModel, devModel: ModelDevEntry): LLMModel {
+        val keepReported = model.limitsReportedByEndpoint == true
         return model.copy(
-            contextWindow = devModel.contextWindow ?: model.contextWindow,
-            maxOutputTokens = devModel.maxOutputTokens ?: model.maxOutputTokens,
+            contextWindow = if (keepReported) model.contextWindow ?: devModel.contextWindow
+            else devModel.contextWindow ?: model.contextWindow,
+            maxOutputTokens = if (keepReported) model.maxOutputTokens ?: devModel.maxOutputTokens
+            else devModel.maxOutputTokens ?: model.maxOutputTokens,
             supportsReasoning = devModel.reasoning ?: model.supportsReasoning,
             interleavedReasoningField = devModel.interleavedField ?: model.interleavedReasoningField,
             inputModalities = devModel.inputModalities ?: model.inputModalities,
@@ -458,6 +625,7 @@ object ModelsDevApi {
             val (parsed, diskDate) = diskResult
             cachedRegistry = parsed
             cacheTimestamp = diskDate
+            fetchedAt = diskDate
             if (System.currentTimeMillis() - diskDate >= CACHE_TTL_MS) {
                 scheduleBackgroundRefresh()
             }
@@ -485,6 +653,7 @@ object ModelsDevApi {
                 isRefreshing.set(false)
             }
         }.apply {
+            name = com.openminis.app.diagnostics.ThreadNames.of("modelsdev") // GH #453: per-name thread counts
             isDaemon = true
             priority = Thread.MIN_PRIORITY
             start()
@@ -494,7 +663,8 @@ object ModelsDevApi {
     private fun refreshFromNetwork() {
         try {
             val request = Request.Builder().url(SOURCE_URL).build()
-            val response = client.newCall(request).execute()
+            // [FEAT-261021-16] A public catalog: follows the default route.
+            val response = com.openminis.app.network.NetworkHttp.client(com.openminis.app.network.NetworkHttp.DEFAULT_TAG, client).newCall(request).execute()
             if (!response.isSuccessful) {
                 Log.e(TAG, "models.dev HTTP error: ${response.code}")
                 response.close()
@@ -508,6 +678,7 @@ object ModelsDevApi {
                 synchronized(this) {
                     cachedRegistry = parsed
                     cacheTimestamp = System.currentTimeMillis()
+                    fetchedAt = cacheTimestamp
                 }
                 saveDiskCache(body)
                 Log.d(TAG, "Background-refreshed models.dev registry: ${parsed.size} providers")
@@ -519,7 +690,7 @@ object ModelsDevApi {
 
     // MARK: - Parse registry JSON
 
-    private fun parseRegistry(jsonStr: String): Map<String, ProviderEntry>? {
+    internal fun parseRegistry(jsonStr: String): Map<String, ProviderEntry>? {
         return try {
             val json = JSONObject(jsonStr)
             val result = mutableMapOf<String, ProviderEntry>()

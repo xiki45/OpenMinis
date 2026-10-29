@@ -39,6 +39,12 @@ package com.openminis.app.scheduled
  * last tool call, not started by it), what to do with a prefilled result, and
  * that it should go back to the interrupted task afterwards. [parse] strips it
  * like the note.
+ *
+ * [T-scheduled-card-subline] `fire` / `remaining` / `trigger` carry which run
+ * this is, how many runs are left after it, and the trigger in iOS's
+ * `AgentJobTrigger.logLabel` form, the same attributes the iOS scheduled
+ * envelope has. The card builds its status line from them; without them a
+ * card whose next-fire time had passed had nothing left to say.
  */
 data class ScheduledTaskMarker(
     val taskId: String,
@@ -58,6 +64,14 @@ data class ScheduledTaskMarker(
      *  page finds "the fire whose card was tapped" in the task's history.
      *  Null on envelopes written before this existed. */
     val firedAtMs: Long? = null,
+    /** [T-scheduled-card-subline] 1-based index of this fire; null for a
+     *  one-shot, a manual run, or an envelope written before this existed. */
+    val fireIndex: Int? = null,
+    /** [T-scheduled-card-subline] Fires left after this one; null when the
+     *  schedule is unbounded or not counted. */
+    val remaining: Int? = null,
+    /** [T-scheduled-card-subline] e.g. `loop(60s×5)`, `cron(9:00 days=[2, 3])`. */
+    val triggerLabel: String? = null,
 ) {
     val xml: String
         get() {
@@ -66,6 +80,9 @@ data class ScheduledTaskMarker(
                 append(" label=\"").append(escapeAttr(label)).append('"')
                 nextFireAtMs?.let { append(" next=\"").append(it).append('"') }
                 firedAtMs?.let { append(" fired=\"").append(it).append('"') }
+                fireIndex?.takeIf { it > 0 }?.let { append(" fire=\"").append(it).append('"') }
+                remaining?.takeIf { it >= 0 }?.let { append(" remaining=\"").append(it).append('"') }
+                triggerLabel?.takeIf { it.isNotEmpty() }?.let { append(" trigger=\"").append(escapeAttr(it)).append('"') }
                 prefilledTool?.let { append(" prefilled=\"").append(escapeAttr(it)).append('"') }
                 if (insertedMidTask) append(" inserted=\"1\"")
             }
@@ -104,7 +121,9 @@ data class ScheduledTaskMarker(
                 ?.let { "Scheduled task \"$it\"" } ?: "A scheduled task"
             val preset = if (prefilledTool != null) " Preset command already ran; read the result below, don't re-run it." else ""
             return "<system-reminder>$name fired and was inserted here — not your last tool result, not a user request." +
-                "$preset Handle briefly, then resume your prior task.</system-reminder>"
+                // [T-bridge-to-reminder] "unfinished": what the dropped
+                // assistant bridge used to add.
+                "$preset Handle briefly, then resume your unfinished prior task.</system-reminder>"
         }
 
         fun isMarkerText(text: String): Boolean =
@@ -135,7 +154,10 @@ data class ScheduledTaskMarker(
                 prefilled != null -> prefillNote(prefilled)
                 else -> null
             }
-            val prompt = if (note != null && body.startsWith(note)) body.removePrefix(note).trimStart() else body
+            val prompt = when {
+                note != null && body.startsWith(note) -> body.removePrefix(note).trimStart()
+                else -> stripLegacyPreamble(body, inserted, prefilled != null)
+            }
             return ScheduledTaskMarker(
                 taskId = id,
                 label = label,
@@ -144,8 +166,98 @@ data class ScheduledTaskMarker(
                 prefilledTool = prefilled,
                 insertedMidTask = inserted,
                 firedAtMs = attrs["fired"]?.toLongOrNull(),
+                fireIndex = attrs["fire"]?.toIntOrNull()?.takeIf { it > 0 },
+                remaining = attrs["remaining"]?.toIntOrNull()?.takeIf { it >= 0 },
+                triggerLabel = attrs["trigger"]?.takeIf { it.isNotEmpty() },
             )
         }
+
+        /**
+         * [T-scheduled-card-subline] The envelope for one fire of [task], as
+         * the runner writes it. Mirrors iOS `ScheduledJobRunner.scheduledEnvelope`:
+         * only a repeating schedule (iOS loop / cron) numbers its fires, and
+         * `remaining` is what is left AFTER this fire.
+         *
+         * An interval fire is counted by the alarm receiver before the run
+         * starts ([ScheduledTask.triggeredCount] already includes it), so its
+         * index is that count and [ScheduledTask.remainingFires] is already the
+         * after-this-fire value. A calendar fire is recorded only when its run
+         * completes, so its index is one past the fires recorded so far. A
+         * manual "Run now" is not a fire of the schedule and gets no index.
+         */
+        fun forFire(
+            task: ScheduledTask,
+            firedAtMs: Long,
+            scheduledFire: Boolean,
+            prefilledTool: String?,
+            nextFireAtMs: Long? = task.nextTriggerMs(),
+        ): ScheduledTaskMarker {
+            val repeating = task.triggerKind == ScheduledTriggerKind.INTERVAL ||
+                (task.isCalendar && task.repeatMode != ScheduledRepeatMode.ONCE)
+            val fireIndex = when {
+                !scheduledFire || !repeating -> null
+                task.triggerKind == ScheduledTriggerKind.INTERVAL -> task.triggeredCount?.takeIf { it > 0 }
+                else -> task.firesSoFar + 1
+            }
+            return ScheduledTaskMarker(
+                taskId = task.id,
+                label = task.label,
+                nextFireAtMs = nextFireAtMs,
+                prompt = task.prompt,
+                prefilledTool = prefilledTool,
+                firedAtMs = firedAtMs,
+                fireIndex = fireIndex,
+                remaining = if (scheduledFire) task.remainingFires else null,
+                triggerLabel = triggerLabel(task),
+            )
+        }
+
+        /**
+         * [T-scheduled-card-subline] [task]'s trigger in iOS's
+         * `AgentJobTrigger.logLabel` form, which the iOS card shows verbatim:
+         * `once(+1800s)`, `loop(60s×5)` / `loop(60s×∞)`,
+         * `cron(9:05 days=[1, 2, 3, 4, 5, 6, 7])` (Calendar weekday numbers,
+         * Sunday = 1, the same on both platforms), `onCompletion(<8 chars>)`.
+         * A calendar one-shot has no iOS counterpart; it is `once`.
+         */
+        fun triggerLabel(task: ScheduledTask): String = when (task.triggerKind) {
+            ScheduledTriggerKind.AFTER -> "once(+${task.delaySec ?: 0}s)"
+            ScheduledTriggerKind.INTERVAL -> "loop(${task.intervalSec ?: 0}s×${task.maxFires?.toString() ?: "∞"})"
+            ScheduledTriggerKind.ON_COMPLETION -> "onCompletion(${task.onCompletionOf.orEmpty().take(8)})"
+            ScheduledTriggerKind.CALENDAR -> {
+                val days = when (task.repeatMode) {
+                    ScheduledRepeatMode.ONCE -> null
+                    ScheduledRepeatMode.DAILY -> (1..7).toList()
+                    ScheduledRepeatMode.WEEKDAYS -> (2..6).toList()
+                    ScheduledRepeatMode.CUSTOM -> task.customDays.sorted()
+                }
+                if (days == null) "once"
+                else "cron(${task.timeOfDayHour}:${String.format(java.util.Locale.ROOT, "%02d", task.timeOfDayMinute)} days=${days.joinToString(", ", "[", "]")})"
+            }
+        }
+
+        /**
+         * [T-scheduled-card-subline] Envelopes written by earlier builds opened
+         * with a differently worded note (59a58884f's long insertion reminder),
+         * which the exact-match strip above misses. Their card fell back to
+         * that reminder as its first line. Strip the leading
+         * `<system-reminder>…</system-reminder>` of an inserted fire, or the
+         * `[This task's first step already ran for you: …]` line of a prefilled
+         * one, by shape rather than by wording.
+         */
+        private fun stripLegacyPreamble(body: String, inserted: Boolean, prefilled: Boolean): String {
+            if (inserted && body.startsWith("<system-reminder>")) {
+                val end = body.indexOf("</system-reminder>")
+                if (end >= 0) return body.substring(end + "</system-reminder>".length).trimStart()
+            }
+            if (prefilled && body.startsWith(PREFILL_NOTE_HEAD)) {
+                val nl = body.indexOf('\n')
+                if (nl >= 0) return body.substring(nl + 1).trimStart()
+            }
+            return body
+        }
+
+        private const val PREFILL_NOTE_HEAD = "[This task's first step already ran for you:"
 
         /** The prompt without the envelope — what a plain reader should see. */
         fun stripMarker(text: String): String = parse(text)?.prompt ?: text

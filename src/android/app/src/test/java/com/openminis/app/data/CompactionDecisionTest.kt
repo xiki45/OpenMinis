@@ -252,11 +252,26 @@ class CompactionDecisionTest {
         assertNull(ContextSizeMeter.calibrationSample("""{"latestContextTokens":0,"estimatedRequestTokens":100}"""))
         assertNull(ContextSizeMeter.calibrationSample("not json"))
         val s = ContextSizeMeter.calibrationSample(
-            """{"latestContextTokens":130000,"estimatedRequestTokens":100000,"estimatedFixedTokens":7000,"calibrationModelId":"gpt-5"}""",
+            """{"latestContextTokens":130000,"estimatedRequestTokens":100000,"estimatedFixedTokens":7000,"calibrationModelId":"gpt-5","estimatorVersion":3}""",
         )!!
         assertEquals(CalibrationSample(130_000, 100_000, 7_000, "gpt-5"), s)
         assertNull("an empty model id is no model",
-            ContextSizeMeter.calibrationSample("""{"latestContextTokens":1,"estimatedRequestTokens":1,"calibrationModelId":""}""")!!.modelId)
+            ContextSizeMeter.calibrationSample("""{"latestContextTokens":1,"estimatedRequestTokens":1,"calibrationModelId":"","estimatorVersion":3}""")!!.modelId)
+        // [T-ctx-count-reasoning] A pair taken with the estimator that ignored
+        // replayed reasoning (no version = v1) is not comparable: skipped.
+        assertNull(ContextSizeMeter.calibrationSample("""{"latestContextTokens":341873,"estimatedRequestTokens":48958,"calibrationModelId":"deepseek-flash"}"""))
+        assertNull(ContextSizeMeter.calibrationSample("""{"latestContextTokens":341873,"estimatedRequestTokens":48958,"estimatorVersion":1}"""))
+        // [T-ctx-count-wire-framing] v3 counts wire framing, like iOS since
+        // e48d29ee9: a v2 pair's ratio already holds that framing (2x for
+        // small tool rounds) and is skipped like v1; an iOS v3 pair from a
+        // synced session is now comparable and replays.
+        assertEquals(3, ContextSizeMeter.ESTIMATOR_VERSION)
+        assertNull(ContextSizeMeter.calibrationSample("""{"latestContextTokens":130000,"estimatedRequestTokens":100000,"estimatorVersion":2}"""))
+        assertEquals(CalibrationSample(80_950, 80_968, 0, null),
+            ContextSizeMeter.calibrationSample("""{"latestContextTokens":80950,"estimatedRequestTokens":80968,"estimatorVersion":3}"""))
+        // [T-ctx-estimator-version-exact] A NEWER estimator is still not comparable.
+        assertNull(ContextSizeMeter.calibrationSample("""{"latestContextTokens":80950,"estimatedRequestTokens":80968,"estimatorVersion":4}"""))
+        assertNull(ContextSizeMeter.calibrationSample("""{"latestContextTokens":80950,"estimatedRequestTokens":80968,"estimatorVersion":99}"""))
         assertEquals(CalibrationState(), ContextSizeMeter.replayCalibration(emptyList()))
     }
 
@@ -318,15 +333,18 @@ class CompactionDecisionTest {
     @Test
     fun `view model routes its decisions through the tested functions`() {
         val vm = ProductionSources.read("ui/chat/ChatViewModel.kt")
-        assertEquals("both no-compaction exits share one table", 2,
+        // [T-ctx-trim-ladder] The failed-compaction exit settles on the re-trimmed measurement.
+        assertEquals("both no-compaction exits share one table", 1,
             vm.split("return settleWithoutCompacting(m, window, compactionsSoFar)").size - 1)
+        assertEquals(1, vm.split("return settleWithoutCompacting(contextMeasurement(), window, compactionsSoFar)").size - 1)
         assertTrue(vm.contains("val step = ContextPolicy.inLoopStep("))
         assertTrue(vm.contains("val state = learned?.let { seeded.carryingOver(it) } ?: seeded"))
         assertTrue("carry-over only within the same session",
             vm.contains("val learned = if (sid.isNotEmpty() && calibrationSessionId == sid) {"))
         assertTrue(vm.contains("val drop = ContextSizeMeter.warmUpDrop("))
         assertTrue("warm-up decided once per marker",
-            vm.contains("if (trim.decided) warmUpDropByMarker[marker.id] = preAnchorPruned.size - trim.kept.size"))
+            vm.contains("if (trim.decided) compaction.recordWarmUpDrop(marker.id, preAnchorPruned.size - trim.kept.size)") &&
+                vm.contains("recordWarmUpDrop = { id, drop -> warmUpDropByMarker[id] = drop },"))
         assertTrue("a rejection spends the valve", vm.contains("        sentPastExtrapolatedLimitThisLoop = true\n        AppLogger.warning("))
         assertTrue("an accepted request re-arms the valve",
             vm.contains("lastInLoopCompactionMadeNoProgress = false\n") &&

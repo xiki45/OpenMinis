@@ -47,16 +47,39 @@ class ImageBudgetCallSiteTest {
         assertEquals("expected a single streamMessage call site in runAgentLoop", 1, streamCalls)
         val callIdx = loop.indexOf("currentProvider.streamMessage(")
         val window = loop.substring(callIdx, callIdx + 700)
-        assertTrue("outgoing history must be budgeted", window.contains("applyRequestImageBudget("))
-        assertTrue("budget wraps the effective history", window.contains("effectiveAgentHistory()"))
-        assertTrue("byte audit sits outermost", window.contains("auditOutgoingPayload("))
+        // [T-ctx-builder] The request is RequestContextBuilder.build's output, bound right before
+        // the call; build budgets the outbound (effective) history and audits it outermost.
+        // [T-callback-queued-reminder] What is sent is `requestMessages`: the
+        // builder's output, to which only QueuedCallbackReminder.inject may
+        // append a reminder (it adds text to the last message, it never brings
+        // back unbudgeted history).
+        assertTrue("outgoing history must be budgeted", window.contains("currentProvider.streamMessage(\n                            requestMessages,"))
+        val before = loop.substring(0, callIdx)
+        val bind = before.lastIndexOf("val requestContext = RequestContextBuilder.build(requestContextInput())")
+        assertTrue("bound in the same block, just before the call", bind >= 0 && callIdx - bind < 3_000)
+        val between = before.substring(bind)
+        assertTrue(between.contains("var requestMessages = requestContext.messages"))
+        assertEquals(
+            "requestMessages is assigned from the builder, then only from the reminder",
+            listOf("requestContext.messages", "withReminder"),
+            Regex("""requestMessages = (\S+)""").findAll(between).map { it.groupValues[1] }.toList(),
+        )
+        assertTrue(between.contains("QueuedCallbackReminder.inject(requestMessages, it.text)"))
+        val build = vm.substringAfter("    fun build(input: Input, onOutbound").substringBefore("\n    }\n")
+        assertTrue(build.contains("val outbound = outbound(input, compactionTrace, orphanTrace)"))
+        assertTrue(build.contains("val budgeted = applyRequestBudget(outbound, input.resolveAttachmentsRoot)"))
+        assertTrue("byte audit sits outermost", build.contains("val messages = auditOutgoingPayload(budgeted, input.contextWindowTokens, findings)"))
         // Retry + fallback paths re-enter the same loop.
         assertTrue(loop.contains("while (!collectDone)"))
         assertTrue(loop.contains("retryAttempt = 0"))
         assertTrue(loop.contains("currentProvider = next"))
         // The budget function itself still exists and emits placeholders, not drops.
         assertTrue(vm.contains("private fun applyRequestImageBudget(messages: List<LLMMessage>): List<LLMMessage>"))
-        assertTrue(vm.contains("ImageBudget.elidedImagePlaceholder(path)"))
+        // [T-image-real-tests] The elision moved to ImageBudget.applyRequestBudget, which the
+        // ChatViewModel function delegates to — [T-ctx-builder] through the builder's stage 3.
+        assertTrue(vm.contains("RequestContextBuilder.applyRequestBudget(messages, ::requestBudgetSpillRoot, ::onRequestBudgetPlan)"))
+        assertTrue(vm.contains("val applied = ImageBudget.applyRequestBudget(messages, resolveAttachmentsRoot)"))
+        assertTrue(ProductionSources.read("provider/ImageBudget.kt").contains("ImageBudget.elidedImagePlaceholder(path)"))
     }
 
     // ── priority: this turn's attachments beat history ─────────────────────

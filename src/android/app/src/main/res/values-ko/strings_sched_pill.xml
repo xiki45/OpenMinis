@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">실행 중</string>
+    <string name="sched_pill_waiting">대기 중</string>
+    <string name="sched_pill_run_now">지금 실행</string>
+    <string name="sched_pill_hide">이 카운트다운 숨기기</string>
+    <string name="sched_pill_cancel_all">예약된 작업 모두 취소</string>
+    <string name="sched_pill_cancel_all_title">예약된 작업을 모두 취소할까요?</string>
+    <string name="sched_pill_cancel_all_confirm">모두 취소</string>
+    <string name="sched_pill_not_now">나중에</string>
+    <string name="sched_pill_cancel_all_message">이 대화에 아직 예약된 모든 작업이 취소됩니다.</string>
+    <string name="sched_pill_a11y_title">다가오는 예약 작업</string>
+    <string name="sched_pill_a11y_running">실행 중</string>
+    <string name="sched_pill_a11y_waiting">다른 작업이 끝나기를 기다리는 중</string>
+    <string name="sched_pill_a11y_upcoming_left">다음 실행 · %1$d회 남음</string>
+    <string name="sched_pill_a11y_upcoming">다음 실행</string>
+    <string name="sched_pill_a11y_run_of">%2$d회 중 %1$d회차</string>
+    <string name="sched_pill_a11y_run">%1$d회차</string>
+    <string name="sched_pill_a11y_next_in">다음 실행까지 %1$s</string>
+    <string name="sched_pill_a11y_more">외 %1$d개</string>
+    <string name="sched_pill_a11y_hint">작업 세부 정보를 엽니다</string>
+</resources>

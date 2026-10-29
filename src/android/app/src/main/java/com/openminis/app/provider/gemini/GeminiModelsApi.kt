@@ -38,6 +38,9 @@ object GeminiModelsApi {
         cloudCodeFallback: Boolean = false,
         context: Context? = null,
         forceRefresh: Boolean = false,
+        // [FEAT-261021-16] The instance's Settings > Network tag (prov:<id>);
+        // null follows the default route.
+        netTag: String? = null,
     ): List<LLMModel> = withContext(Dispatchers.IO) {
         if (cloudCodeFallback) return@withContext LLMModel.allGemini
 
@@ -56,7 +59,7 @@ object GeminiModelsApi {
 
         // [T-android-default-ua] brand outbound /v1beta/models request.
         builder.applyUserAgentOverride(null)
-        val response = client.newCall(builder.build()).execute()
+        val response = com.openminis.app.network.NetworkHttp.client(netTag, client).newCall(builder.build()).execute()
         val body = response.body?.string() ?: return@withContext LLMModel.allGemini
 
         if (!response.isSuccessful) {

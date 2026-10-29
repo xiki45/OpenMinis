@@ -40,6 +40,17 @@ enum class InterruptedTailShape {
 
 object InterruptedTailDetector {
 
+    /**
+     * [T-port-user-ask-recovery] The tail is an assistant turn whose tool calls
+     * include a user_ask question still waiting for the user (restored after a
+     * kill). Not interrupted: the question's card is the affordance, and a
+     * Resume banner would re-run the call and ask again.
+     */
+    fun awaitsUserAnswer(lastEntry: LLMMessage?, pendingToolCallIds: Set<String>): Boolean {
+        if (lastEntry == null || pendingToolCallIds.isEmpty() || lastEntry.role != LLMMessage.Role.ASSISTANT) return false
+        return lastEntry.contentParts.any { it is AgentContentPart.ToolUse && it.id in pendingToolCallIds }
+    }
+
     /** Marker text of the synthetic continue reminder (see `resume()`). */
     const val CONTINUE_REMINDER_MARKER = "The user stopped the previous response"
 

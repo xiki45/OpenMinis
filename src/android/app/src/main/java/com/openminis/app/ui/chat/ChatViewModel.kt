@@ -45,6 +45,7 @@ import com.openminis.app.R
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
+import com.openminis.app.provider.DsmlLeak
 import com.openminis.app.provider.ImageBudget
 import com.openminis.app.provider.LLMProvider
 import com.openminis.app.provider.ProviderFactory
@@ -63,6 +64,7 @@ import com.openminis.app.tools.FileEditTool
 import com.openminis.app.tools.FileReadTool
 import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryTools
+import com.openminis.app.tools.BatchToolOrder
 import com.openminis.app.tools.ReadImageTool
 import com.openminis.app.tools.ToolExecutionResult
 import com.openminis.app.offload.OffloadPermissionManager
@@ -89,6 +91,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -111,6 +114,12 @@ class ChatViewModel(
 ) : ViewModel() {
 
     companion object {
+        /** [T-stop-choice] Tools that never run a shell command: stopping only them leaves the shells alone. */
+        private val SHELL_FREE_TOOLS = setOf(
+            com.openminis.app.agent.jobs.HelperRunner.TOOL_NAME,
+            com.openminis.app.agent.userask.UserAskPromptText.TOOL_NAME,
+        )
+
         /**
          * [T-fallback-respects-user-switch] Whether a mid-turn group fallback may
          * adopt its new member as the SESSION binding: only while the class-level
@@ -279,8 +288,11 @@ class ChatViewModel(
                     //  - TransientError (5xx): server-side fault, payload
                     //    independent; retrying smaller multiplies the outage.
                     //  - InvalidApiKey: auth, not size.
+                    //  - CertificateError: the handshake was refused before any
+                    //    payload was sent ([T-android-tls-trust-error]).
                     is LLMError.Cancelled,
                     is LLMError.NetworkError,
+                    is LLMError.CertificateError,
                     is LLMError.RateLimited,
                     is LLMError.TransientError,
                     is LLMError.InvalidApiKey,
@@ -419,6 +431,17 @@ class ChatViewModel(
          * Stripping keeps the value matchable — findFolderByName's trim +
          * case-fold absorbs the difference for every realistic group name.
          */
+        /**
+         * [T-user-ask-deferred] A user bubble never shows a <system-reminder>
+         * note meant for the model (the deferred answer ends with one), the
+         * same rule the reload path applies. A text that is ONLY such a note
+         * stays as it is, so the rows that hide it keep recognising it.
+         */
+        internal fun userBubbleText(raw: String): String {
+            if (!raw.contains("<system-reminder>", ignoreCase = true)) return raw
+            return com.openminis.app.data.repository.InternalTags.stripSystemReminders(raw).ifBlank { raw }
+        }
+
         internal fun promptSafe(raw: String, max: Int): String =
             raw.replace(Regex("[\"'\\[\\]{};\\\\]"), " ")
                 // Unicode quote lookalikes: a model reads curly and CJK
@@ -595,9 +618,11 @@ class ChatViewModel(
          * finalizes as resumable — see runAgentLoop's tail and
          * [finalizeAtTurnLimit] — so the user gets an inline explanation +
          * Resume button rather than a silently stuck "thinking" indicator.
-         * Mirrors iOS AIChatViewModel.maxAgentTurns.
+         * Mirrors iOS AIChatViewModel.maxAgentTurns; the value lives in
+         * [com.openminis.app.agent.AgentLoopLimits] (500), shared with
+         * HelperRunner.MAX_TURNS.
          */
-        private const val MAX_AGENT_TURNS = 200
+        private const val MAX_AGENT_TURNS = com.openminis.app.agent.AgentLoopLimits.MAX_AGENT_TURNS
         private const val MIN_MAX_TOKENS = 1024
         /**
          * Hard ceiling on max_tokens we ever send to a provider, regardless
@@ -643,8 +668,11 @@ class ChatViewModel(
         /// Max per-tool-call retained `accumulated` JSON snapshots from
         /// `ToolInputDelta`. Drained on preflight failure for diagnosis.
         private const val TOOL_INPUT_CHUNK_RING_MAX = 10
-        /** Auto-retry backoff schedule (seconds). Mirrors iOS retryDelays, scaled to task spec: 1s → 2s → 4s. */
-        private val AUTO_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
+        /**
+         * Auto-retry backoff schedule (seconds). Mirrors iOS retryDelays, scaled to task spec: 1s → 2s → 4s.
+         * Also the voice correction's same-model retries (CorrectionFallback), so the two agree.
+         */
+        internal val AUTO_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
 
         /**
          * Factory for use with `viewModel(factory = ...)`. Binds the ChatViewModel
@@ -833,6 +861,242 @@ class ChatViewModel(
      */
     private val _streamingById = MutableStateFlow<Map<String, StreamingDelta>>(emptyMap())
     val streamingById: StateFlow<Map<String, StreamingDelta>> = _streamingById.asStateFlow()
+
+    /**
+     * [T-android-stop-late-write] The turn [runAgentLoop] is running, if any.
+     * Only that turn's current bubble may write [_streamingById]; a shell line
+     * or a progress write that arrives after Stop (or after the turn ended) is
+     * dropped instead of re-creating an overlay entry nothing would drain.
+     */
+    private val liveTurn = LiveTurnGuard()
+
+    /**
+     * [T-stop-choice] Tool calls of this chat's loop executing right now, so
+     * "Stop Current Tool Only" can cut them short without ending the turn.
+     */
+    private val foregroundTools = ForegroundToolInterrupts()
+
+    /**
+     * [T-stop-choice] The turn ([LiveTurnGuard] generation) whose tools the
+     * user stopped. Its loop ends at the next post-tool boundary unless a user
+     * message is waiting to go in ([StopScopePolicy.endsTurnAtBoundary]).
+     */
+    @Volatile private var toolOnlyStopTurn: Long? = null
+
+    /**
+     * [T-stop-choice] Bumped by "Stop Current Tool Only": a delegation the
+     * loop is waiting on moves to the background (it keeps running and reports
+     * back) instead of being stopped with the turn.
+     */
+    private val delegateDetach = MutableStateFlow(0)
+
+    /** [T-stop-choice] The cancel cleanup's last write, so a note stored after it lands after it. */
+    private var cleanupPersistJob: Job? = null
+
+    /**
+     * [T-port-user-ask] Whether this run offers user_ask, decided once when the
+     * run starts (UserAskExposure) and read by both the tool list and the
+     * system prompt, so the two always agree for the whole run.
+     */
+    @Volatile private var userAskExposedThisRun = false
+
+    /**
+     * [T-user-ask-deferred] This run offers user_ask in DEFERRED mode (no one
+     * can answer while it runs): a call returns at once and the card stays open.
+     */
+    @Volatile private var userAskDeferredThisRun = false
+
+    /** [T-user-ask-deferred] A deferred card was shown in this run (its silent end is right). */
+    @Volatile private var userAskAskedThisRun = false
+
+    /**
+     * [T-port-user-ask-recovery] The current tool batch's assistant row (parts
+     * JSON, as persistAssistantTurn will write it) and its tool_use ids. A
+     * user_ask record keeps a copy, because that row is only stored with the
+     * batch's results - after a kill mid-question nothing else would hold the
+     * call the answer belongs to.
+     */
+    @Volatile private var userAskBatchSnapshot: Pair<String, List<String>>? = null
+
+    /** [T-port-user-ask-recovery] Persistence + recovery hooks; idempotent. */
+    private fun ensureUserAskRecovery() {
+        com.openminis.app.agent.userask.UserAskRecoveryCoordinator.ensureInstalled(
+            context, chatRepository,
+            delivered = { sid, resume ->
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    val vm = ChatViewModelStore.existing(sid)
+                        ?: if (resume) runCatching { com.openminis.app.debug.HeadlessChatRunner.viewModelFor(context, sid) }.getOrNull() else null
+                    vm?.onUserAskRecovered(resume)
+                }
+            },
+            // [T-user-ask-deferred] A closed card only needs the open chat patched
+            // (a closed chat reads the rewritten row on load); an answer needs a
+            // view model to send it from.
+            deferredDelivered = { d ->
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    val vm = ChatViewModelStore.existing(d.sessionId)
+                        ?: if (d.answerMessage != null) runCatching { com.openminis.app.debug.HeadlessChatRunner.viewModelFor(context, d.sessionId) }.getOrNull() else null
+                    vm?.onUserAskDeferredDelivered(d)
+                }
+            },
+        )
+    }
+
+    /**
+     * [T-port-user-ask-recovery] A restored question was answered (or timed
+     * out, or was stopped) and its result written: reload the transcript and,
+     * after a real answer or a timeout, continue the run.
+     */
+    internal fun onUserAskRecovered(resume: Boolean) {
+        if (_isStreaming.value) return
+        val job = loadSession()
+        viewModelScope.launch {
+            job?.join()
+            if (resume && !_isStreaming.value && _canResume.value) {
+                AppLogger.info(TAG, "[UserAsk] RECOVER resuming run sid=${activeSessionId.take(8)}")
+                resume()
+            }
+        }
+    }
+
+    /**
+     * [T-port-user-ask] Decide user_ask exposure for the run whose system
+     * prompt is about to be built. Called right before each run's
+     * buildSystemPrompt(), never between it and the run, so the prompt line
+     * and the tool list always match - a drain that reuses the prompt keeps the
+     * decision made for it. [interactive] is false for a headless submit (a
+     * scheduled fire, the CLI, a sub agent's result posted back) and for a
+     * queue holding no prompt from the user.
+     */
+    private fun decideUserAskExposureForRun(interactive: Boolean, userAskAnswer: Boolean = false) {
+        // [T-user-ask-deferred] Only the switch and sub agents remove the tool;
+        // a run nobody can answer gets it in deferred mode (iOS 7a818b8c0).
+        val d = com.openminis.app.agent.userask.UserAskExposure.decision(
+            enabled = com.openminis.app.agent.userask.UserAskSettings.isEnabled(context),
+            isHelper = isHelper,
+            interactive = interactive,
+            foreground = appInForeground(),
+            userAskAnswer = userAskAnswer,
+        )
+        userAskExposedThisRun = d.exposed
+        userAskDeferredThisRun = d.deferred
+        userAskAskedThisRun = false
+        AppLogger.info(TAG, "[UserAsk] exposure=${d.exposed} deferred=${d.deferred} reason=${d.reason} sid=${activeSessionId.take(8)}")
+    }
+
+    /** Whether the app has a started activity (a run begun with it away has no one to ask). */
+    private fun appInForeground(): Boolean = runCatching {
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.currentState
+            .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+    }.getOrDefault(true)
+
+    /**
+     * [T-user-ask-deferred] A deferred ask of this session resolved and its
+     * stored result was rewritten: write the real result into the transcript
+     * in memory too (mid-run, every later request then carries the user's
+     * choice even without the answer message), and send a real answer as the
+     * user's next message. A running compaction is waited out (up to 5 min)
+     * rather than refusing the answer, and the context dialog is bypassed:
+     * the in-loop guard still compacts before the request (iOS e1c070d9b).
+     */
+    internal fun onUserAskDeferredDelivered(d: com.openminis.app.agent.userask.UserAskDeferredDelivery) {
+        val patched = replaceUserAskResultInMemory(d.toolUseId, d.resultJson)
+        AppLogger.info(TAG, "[UserAsk] DEFERRED delivered tool=${d.toolUseId.take(16)} history=$patched message=${d.answerMessage != null}")
+        val message = d.answerMessage ?: return
+        // With the switch now off, no user_ask text goes back to the model.
+        if (!com.openminis.app.agent.userask.UserAskSettings.isEnabled(context)) return
+        viewModelScope.launch {
+            val deadline = System.currentTimeMillis() + com.openminis.app.agent.userask.UserAskDeferred.COMPACTION_WAIT_MS
+            while (_isCompacting.value && System.currentTimeMillis() < deadline) kotlinx.coroutines.delay(500)
+            val outcome = submitUserAskAnswer(message)
+            if (outcome is SubmitOutcome.Rejected) {
+                AppLogger.error(TAG, "[UserAsk] DEFERRED answer NOT sent: ${outcome.reason} - the stored tool result carries it")
+            } else {
+                AppLogger.info(TAG, "[UserAsk] DEFERRED answered - sent as the next message: ${outcome.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /**
+     * [T-user-ask-deferred-live-batch] agentHistory patches waiting for the
+     * loop's own thread. The list is a plain ArrayList the loop restructures
+     * on Dispatchers.IO (sanitize inserts and removes, batch appends), so a
+     * delivery that lands while a run is live must not index into it from
+     * the main thread: it queues here and [applyPendingHistoryPatches] runs
+     * them right before the next request is built.
+     */
+    private val pendingHistoryPatches = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, String>>()
+
+    /** Runs on the loop's thread, before each request (see [pendingHistoryPatches]). */
+    private fun applyPendingHistoryPatches() {
+        while (true) {
+            val (id, output) = pendingHistoryPatches.poll() ?: break
+            val replaced = patchHistoryToolResult(id, output)
+            AppLogger.info(TAG, "[UserAsk] DEFERRED queued patch applied tool=${id.take(16)} replaced=$replaced")
+        }
+    }
+
+    /**
+     * [T-user-ask-deferred-delivery] The real result of a deferred ask, over
+     * the `deferred` one, in agentHistory and on the card block. In place: no
+     * index moves. Returns "patched", or "queued" while a run is live (the
+     * loop applies it before its next request), or "absent".
+     */
+    internal fun replaceUserAskResultInMemory(toolUseId: String, output: String): String {
+        val history = if (_isStreaming.value) {
+            pendingHistoryPatches.add(toolUseId to output)
+            "queued"
+        } else if (patchHistoryToolResult(toolUseId, output)) "patched" else "absent"
+        val msgs = _messages.value
+        if (msgs.any { m -> m.toolBlocks.any { it.id == toolUseId } }) {
+            _messages.value = msgs.map { m ->
+                if (m.toolBlocks.none { it.id == toolUseId }) m
+                else m.copy(toolBlocks = m.toolBlocks.map { b -> if (b.id == toolUseId) b.copy(content = output) else b })
+            }
+        }
+        return history
+    }
+
+    private fun patchHistoryToolResult(toolUseId: String, output: String): Boolean {
+        var replaced = false
+        for (i in agentHistory.indices) {
+            val m = agentHistory[i]
+            if (m.contentParts.none { it is AgentContentPart.ToolResult && it.id == toolUseId }) continue
+            agentHistory[i] = m.copy(contentParts = m.contentParts.map { part ->
+                if (part is AgentContentPart.ToolResult && part.id == toolUseId) { replaced = true; part.copy(content = output) } else part
+            })
+        }
+        return replaced
+    }
+
+    /**
+     * [T-user-ask-deferred] The user's answer to a deferred card, as their next
+     * message: visible, not gentle (a running loop takes it at the next gap
+     * like a follow-up), never parked behind the context dialog, and it takes
+     * neither the composer's staged files nor its draft.
+     */
+    internal fun submitUserAskAnswer(text: String): SubmitOutcome =
+        sendMessage(text, skipContextCheck = true, headless = true, userAskAnswer = true)
+
+    /**
+     * [T-user-ask-deferred] A message the user sends answers an open deferred
+     * card in their own words: the card closes as replaced and the transcript
+     * in memory gets the `dismissed` result before this message's request is
+     * built (the stored row is rewritten by the delivery).
+     */
+    private fun supersedeDeferredAsks(sessionId: String) {
+        for (a in com.openminis.app.agent.userask.UserAskCenter.pendingDeferred(sessionId)) {
+            com.openminis.app.agent.userask.UserAskCenter.dismiss(
+                a.requestId, com.openminis.app.agent.userask.UserAskDismissReason.SUPERSEDED_BY_USER_MESSAGE,
+            )
+            com.openminis.app.agent.userask.UserAskCenter.asks.value[a.requestId]?.resultJson?.let {
+                replaceUserAskResultInMemory(a.toolCallId, it)
+            }
+        }
+    }
+
+    /** [T-android-stop-late-write] Late writes dropped per tool / bubble id, to rate-limit the [StopLate] log. */
+    private val stopLateDrops = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     /**
      * [T-android-stream-flush-dualpath] Per-message streaming-flush state for
@@ -1063,6 +1327,28 @@ class ChatViewModel(
      *  default model name for one frame before the persisted binding settles. */
     private val sessionLoaded = MutableStateFlow(false)
 
+    /**
+     * [T-android-session-entering-dots] Read by the chat screen to show the
+     * entry "…" until loadSession has finished (see
+     * showSessionEnteringIndicator). Set in loadSession's finally block, so
+     * every exit path - draft, missing session, exception - clears it.
+     */
+    internal val sessionLoadedState: StateFlow<Boolean> = sessionLoaded.asStateFlow()
+
+    /** [T-android-session-entering-dots] A new chat: nothing to load, no entry dots. */
+    internal val isDraftSession: Boolean get() = isDraft
+
+    /**
+     * [T-subagent-detail-rich] Wait (bounded) until [loadSession] has filled
+     * `messages`. A reader that opens a session it did not load itself — the
+     * sub agent detail card on a cold process — otherwise reads the still-empty
+     * list once and shows a finished run with no tool calls. Port of iOS
+     * awaiting `vm.loadSession()` in HelperDetailCard.loadChildFacts.
+     * @return false on timeout.
+     */
+    internal suspend fun awaitSessionLoaded(timeoutMs: Long = 5_000L): Boolean =
+        sessionLoaded.value || withTimeoutOrNull(timeoutMs) { sessionLoaded.first { it } } != null
+
     private val _sessionTitle = MutableStateFlow(UNTITLED_SESSION_TITLE)
     val sessionTitle: StateFlow<String> = _sessionTitle.asStateFlow()
 
@@ -1094,6 +1380,21 @@ class ChatViewModel(
 
     internal val _attachments = MutableStateFlow<List<InputAttachment>>(emptyList())
     val attachments: StateFlow<List<InputAttachment>> = _attachments.asStateFlow()
+
+    /**
+     * [OpenMinis#433] A never-sent new chat holding something worth keeping
+     * when the user leaves: non-blank text or an attachment, no session row
+     * yet, nothing running. ChatScreen reports it on leave so the next New
+     * Chat can reopen this draft instead of an empty one.
+     */
+    val hasUnsentDraft: Boolean
+        get() = ChatViewModelStore.isUnsentDraft(
+            isDraft = isDraft,
+            realSessionId = realSessionId,
+            text = _inputText.value,
+            hasAttachments = _attachments.value.isNotEmpty(),
+            busy = hasWorkInFlight(),
+        )
 
     /**
      * [T-android-paste-placeholder] Long pasted blocks folded out of the
@@ -1278,6 +1579,21 @@ class ChatViewModel(
     @Volatile internal var helperWrapUpRequested = false
 
     /**
+     * [T-subagent-termination] The loop sent this helper its one-shot closing
+     * request after a turn that ended with no text. Read by the delegation
+     * runner when it records how the run ended.
+     */
+    @Volatile internal var helperClosingAttempted = false
+
+    /** [T-subagent-termination] The child's model-facing history, for the termination record. */
+    internal fun agentHistorySnapshot(): List<LLMMessage> {
+        // Read from the runner's thread; the loop does not lock the list, so a
+        // copy racing an append is retried rather than surfacing a CME.
+        repeat(3) { runCatching { return agentHistory.toList() } }
+        return emptyList()
+    }
+
+    /**
      * [T-sub-agents-steer] Course corrections the parent model sent to this
      * running child, read at its next turn boundary.
      *
@@ -1408,7 +1724,7 @@ class ChatViewModel(
     private data class ContextMeasurement(val history: Int, val fixed: Int, val ratio: Double, val source: String, val measured: Int)
 
     private fun contextMeasurement(override: Double? = null): ContextMeasurement {
-        val history = ContextSizeMeter.estimateTokens(effectiveAgentHistoryUncounted())
+        val history = ContextSizeMeter.estimateTokens(effectiveAgentHistoryUncounted(), reasoningEchoed())
         val model = currentModel?.id
         val ratio = override ?: contextCalibrationRatio(model)
         val source = if (override != null) "forced"
@@ -1451,13 +1767,208 @@ class ChatViewModel(
     private fun recordContextDispatch(history: List<LLMMessage>, model: LLMModel? = currentModel): Int {
         lastDispatchModel = model
         lastDispatchWindow = resolvedContextWindow(model)?.first ?: 0
-        lastDispatchEstimate = ContextSizeMeter.estimateTokens(history) + contextFixedTokens
+        lastDispatchEstimate = ContextSizeMeter.estimateTokens(history, reasoningEchoed()) + contextFixedTokens
         lastDispatchRatio = contextCalibrationRatio(model?.id)
         lastDispatchPredicted = ContextSizeMeter.calibrated(lastDispatchEstimate, lastDispatchRatio)
         return lastDispatchPredicted
     }
 
     /** Pair the provider's count with the recorded estimate, for the model that served it. */
+    // ---- [T-ctx-trim-ladder] Safe watermark + trim ladder ----------------------------
+
+    /** [T-ctx-count-reasoning] Whether the live provider replays past reasoning. */
+    private fun reasoningEchoed(): Boolean =
+        currentProvider?.echoesReasoningContent(_thinkingLevel.value) == true
+
+    /** Frozen trim for [trimStateSid]; re-applied to every request until the next re-plan. */
+    private var trimState: ContextTrimPlanner.State? = null
+    private var trimStateSid: String? = null
+
+    /**
+     * [T-ctx-trim-escalate] The last [replanTrim] call made a plan without
+     * collapse that recovered too little; see [ContextTrimPlanner.shouldEscalate].
+     * False after any call that did not.
+     */
+    private var lastTrimPlanEscalates = false
+
+    /** [T-ctx-trim-plan-window] The window the plan in [trimState] was sized for. */
+    private var trimStateWindow: Int? = null
+
+    /** [T-ctx-trim-plan-marker] Id of the compaction marker the plan was made on top of (null = none). */
+    private var trimStateMarkerId: String? = null
+
+    /** Set after a compaction: the next check re-plans even below the trigger. */
+    private var trimReplanPending = false
+
+    /**
+     * Session in which collapse has been allowed once (after a compaction,
+     * when it failed, or collapse-first). Later re-plans keep allowing it:
+     * field 2026-10-07 18:20-18:26, an after-compact plan collapsed 26
+     * iterations and the next plain in-loop re-plan (collapse not allowed)
+     * expanded them back, 72K -> 92K, re-crossing the trigger sooner and
+     * flipping the request shape (cache misses).
+     */
+    private var trimCollapseUnlockedSid: String? = null
+
+    /** Ceiling of the ratio applied to the fixed (text-only) share; see [currentWatermarks]. */
+    private val FIXED_RATIO_MAX = 1.5
+
+    /** Size assumed for a model summary when simulating a compaction; see [summaryWouldFreeLittle]. */
+    private val SIMULATED_SUMMARY_TOKENS = 3_000
+
+    /** Disk paths of outputs the ladder already offloaded, so a re-apply writes nothing. */
+    private val trimOffloadPaths = HashMap<String, String>()
+
+    private val trimOffloader = ContextTrimPlanner.Offloader { content, toolId, toolName ->
+        val sid = activeSessionId
+        val key = "$sid|$toolName|$toolId"
+        trimOffloadPaths[key] ?: com.openminis.app.data.ContextOffload
+            .offloadContent(context, sid, content, toolId, toolName)
+            .takeIf { it.isNotEmpty() }
+            ?.also { trimOffloadPaths[key] = it }
+    }
+
+    /** Watermarks for the live model, in measured tokens; null when the window is unknown. */
+    private fun currentWatermarks(): ContextTrimPlanner.Watermarks? {
+        val window = effectiveContextWindowTokens()?.takeIf { it > 0 } ?: return null
+        ensureContextFixedTokens()
+        // The fixed share is plain text (system prompt + tool schemas), where the
+        // estimator is within 0.66-1.18x; a ratio learned on history (images,
+        // reasoning) must not inflate it into an "unusable" window.
+        val ratio = contextCalibrationRatio().coerceAtMost(FIXED_RATIO_MAX)
+        val fixed = ContextSizeMeter.calibrated(contextFixedTokens, ratio)
+        val provider = currentProvider
+        val model = currentModel
+        val maxOut = if (provider != null && model != null) {
+            minOf(GLOBAL_MAX_TOKENS_CEILING, provider.effectiveMaxOutputTokens(model))
+        } else {
+            16_384
+        }
+        return ContextTrimPlanner.watermarks(window, fixed, maxOut)
+    }
+
+    private fun trimMeasure(): (List<LLMMessage>) -> Int {
+        val ratio = contextCalibrationRatio()
+        val echo = reasoningEchoed()
+        val fixed = contextFixedTokens
+        return { history -> ContextSizeMeter.calibrated(ContextSizeMeter.estimateTokens(history, echo) + fixed, ratio) }
+    }
+
+    /** The frozen trim applied to a compacted history (measurement and requests share it). */
+    private fun applyFrozenTrim(compacted: List<LLMMessage>): List<LLMMessage> {
+        val state = trimState?.takeIf { trimStateSid == activeSessionId } ?: return compacted
+        return ContextTrimPlanner.apply(compacted, state, trimOffloader) ?: run {
+            // A cut-off key is gone (history rebuilt by retry / rerun / revert): plan again.
+            AppLogger.info(TAG, "[ctx-trim] frozen plan no longer matches the history — dropped, will re-plan")
+            trimState = null
+            trimReplanPending = true
+            compacted
+        }
+    }
+
+    /**
+     * Re-plans the trim when the frozen one no longer keeps the request under
+     * the trigger (or after a compaction, or always on a tight window), down to
+     * the target watermark. [allowCollapse]: L4 may drop whole iterations -
+     * only once a model summary had its chance or none is available.
+     * Returns the plan's result, or null when nothing was re-planned.
+     */
+    private fun replanTrim(site: String, allowCollapse: Boolean): ContextTrimPlanner.Result? {
+        lastTrimPlanEscalates = false
+        val wm = currentWatermarks() ?: return null
+        // [T-ctx-trim-plan-window] A plan (and its collapse unlock) made for
+        // another window is dropped before anything is measured: a larger
+        // window gets its history back, a smaller one is planned afresh. The
+        // window changes inside one session on a model or group switch and
+        // when a group's cap is added, changed or removed.
+        val planned = trimStateSid == activeSessionId && (trimState != null || trimCollapseUnlockedSid == activeSessionId)
+        if (planned && !ContextTrimPlanner.planFitsWindow(trimStateWindow, wm.window)) {
+            AppLogger.info(TAG, "[ctx-trim] the frozen plan was made for a ${trimStateWindow ?: 0} window, now ${wm.window} — dropped, will re-plan")
+            trimState = null
+            trimCollapseUnlockedSid = null
+            trimReplanPending = true
+        }
+        // [T-ctx-trim-plan-marker] Same for a plan made on top of another
+        // compaction marker (a manual /compact, an in-loop compaction, a
+        // revert): the history it was sized for is not this one. The collapse
+        // unlock stays - it belongs to the session, not to the marker.
+        val markerId = _cachedLatestMarker?.id
+        if (trimState != null && trimStateSid == activeSessionId && !ContextTrimPlanner.planFitsMarker(trimStateMarkerId, markerId)) {
+            AppLogger.info(TAG, "[ctx-trim] the frozen plan was made on compaction marker ${trimStateMarkerId ?: "none"}, now ${markerId ?: "none"} — dropped, will re-plan")
+            trimState = null
+            trimReplanPending = true
+        }
+        val compacted = RequestContextBuilder.compacted(agentHistory, currentCompaction(), COMPACT_KEEP_RECENT_USER_TURNS)
+        val measure = trimMeasure()
+        val applied = applyFrozenTrim(compacted)
+        val size = measure(applied)
+        // [T-ctx-trim-trigger-margin] min(compaction line, watermark trigger).
+        val trigger = ContextTrimPlanner.trigger(currentContextPolicy()?.first?.compactThreshold, wm)
+        val tight = wm.mode != ContextTrimPlanner.Mode.NORMAL
+        if (!tight && !trimReplanPending && size <= trigger) return null
+        trimReplanPending = false
+        if (!tight && size <= wm.target) return null
+        val collapse = allowCollapse || tight || trimCollapseUnlockedSid == activeSessionId
+        if (collapse) trimCollapseUnlockedSid = activeSessionId
+        val options = ContextTrimPlanner.Options(
+            stripReasoning = reasoningEchoed(),
+            reasoningFloor = if (tight) 0 else 1,
+            keepRecentIterations = if (tight) 1 else 3,
+            allowCollapse = collapse,
+        )
+        val result = ContextTrimPlanner.plan(compacted, wm.target, options, measure, trimOffloader)
+        trimState = result.state.takeUnless { it.isEmpty }
+        trimStateSid = activeSessionId
+        trimStateWindow = wm.window
+        trimStateMarkerId = markerId
+        lastTrimPlanEscalates = !collapse && ContextTrimPlanner.shouldEscalate(result.after, wm.target, trigger)
+        AppLogger.info(
+            TAG,
+            "[ctx-trim] site=$site mode=${wm.mode} window=${wm.window} fixed=${wm.fixed} hard=${wm.hard} " +
+                "trigger=$trigger target=${wm.target} before=${result.before} after=${result.after} " +
+                "steps=${result.steps} collapse=${options.allowCollapse} reached=${result.reachedTarget} " +
+                "echo=${options.stripReasoning} state=${result.state}",
+        )
+        return result
+    }
+
+    /**
+     * Whether a model summary would free less than half of what this request
+     * must lose to reach the target. Simulated without a model call: the same
+     * slicing a real in-loop compaction applies (anchor = newest message, the
+     * last user turns kept, the warm-up prune) with a placeholder summary of
+     * [SIMULATED_SUMMARY_TOKENS]. Inside one long user turn the turn itself IS
+     * the kept slice - field 2026-10-07 18:20: a compaction took 244K -> 226K
+     * for a model call, and the collapse that followed did the real work.
+     */
+    private fun summaryWouldFreeLittle(measured: Int): Boolean {
+        val wm = currentWatermarks() ?: return false
+        val raw = RequestContextBuilder.simulatedSummaryGain(
+            agentHistory, currentCompaction(), COMPACT_KEEP_RECENT_USER_TURNS, SIMULATED_SUMMARY_TOKENS,
+        ) ?: return false
+        val gain = ContextSizeMeter.calibrated(raw, contextCalibrationRatio())
+        val needed = measured - wm.target
+        val little = gain < needed / 2
+        AppLogger.info(TAG, "[ctx-trim] summary would free ~$gain of $needed needed — ${if (little) "collapse first" else "compact"}")
+        return little
+    }
+
+    /**
+     * True when even the trimmed request would not fit under the hard
+     * watermark - by the calibrated size AND by the raw estimate. When only
+     * the ratio says "over", the existing valve sends once so the provider's
+     * count can correct the ratio (settleWithoutCompacting); stopping here
+     * instead would never send, never recalibrate, and stop every turn.
+     */
+    private fun trimmedOverHard(): Boolean {
+        val wm = currentWatermarks() ?: return false
+        val compacted = RequestContextBuilder.compacted(agentHistory, currentCompaction(), COMPACT_KEEP_RECENT_USER_TURNS)
+        val trimmed = applyFrozenTrim(compacted)
+        val calibrated = trimMeasure()(trimmed)
+        val raw = ContextSizeMeter.estimateTokens(trimmed, reasoningEchoed()) + contextFixedTokens
+        return calibrated > wm.hard && raw > wm.hard
+    }
+
     private fun calibrateContextSize(reportedTokens: Int): Boolean {
         val sample = ContextSizeMeter.calibrationRatio(reportedTokens, lastDispatchEstimate) ?: return false
         val model = lastDispatchModel?.id ?: currentModel?.id
@@ -1566,47 +2077,21 @@ class ChatViewModel(
     }
 
     /**
-     * [T-ctx-warmup-fit] Trim a compaction's warm-up turns so the request fits
-     * under the compact line. Mirrors iOS `trimWarmUpToFit`.
-     *
-     * A compaction keeps the last few user turns before its anchor as warm-up.
-     * When those turns are large, or the model's tokenizer is denser than the
-     * one the session ran on, summary + warm-up can still be over the line;
-     * every later compaction keeps the same warm-up, so the session can never
-     * continue on that model (measured on device with a 1.8x-denser model:
-     * compacted and still at 100% of the window). Only runs over budget, so a
-     * normal compaction's request and prompt-cache prefix are unchanged. Drops
-     * whole user-TEXT turns oldest-first (tool results are USER messages too,
-     * and cutting between a call and its result would orphan it), in
-     * raw-estimate units so it cannot recurse into the measurement.
+     * [T-ctx-warmup-fit] The raw-estimate budget a compaction's warm-up is
+     * trimmed against ([RequestContextBuilder.trimWarmUpToFit]), or null when
+     * it cannot be known yet (see [warmUpBudget]).
      */
-    private fun trimWarmUpToFit(warmUp: List<LLMMessage>, rest: List<LLMMessage>, summaryText: String): WarmUpTrim {
-        if (warmUp.isEmpty()) return WarmUpTrim(warmUp, decided = true)
-        // [T-ctx-warmup-trim-undecided] No entry / unknown window / fixed
-        // tokens not yet seeded: there is no budget to judge against, so the
-        // warm-up passes through UNDECIDED and the caller must not cache it.
-        val budget = warmUpBudget(
-            window = effectiveContextWindowTokens(),
-            compactThreshold = currentContextPolicy()?.first?.compactThreshold,
-            ratio = contextCalibrationRatio(),
-            fixedTokens = contextFixedTokens,
-        ) ?: return WarmUpTrim(warmUp, decided = false)
-        val restTokens = ContextSizeMeter.estimateTokens(rest) + ContextSizeMeter.estimateTokens(summaryText)
-        if (ContextSizeMeter.estimateTokens(warmUp) + restTokens < budget) return WarmUpTrim(warmUp, decided = true)
-        val drop = ContextSizeMeter.warmUpDrop(
-            sizes = warmUp.map { ContextSizeMeter.estimateTokens(listOf(it)) },
-            startsTurn = warmUp.map { m -> m.role == LLMMessage.Role.USER && m.contentParts.none { it is AgentContentPart.ToolResult } },
-            restTokens = restTokens,
-            budget = budget,
-        )
-        AppLogger.info(TAG, "[CtxMeter] warmup trimmed to fit: kept ${warmUp.size - drop}/${warmUp.size} message(s) (budget=$budget raw tokens)")
-        return WarmUpTrim(warmUp.drop(drop), decided = true)
-    }
+    private fun currentWarmUpBudget(): Int? = warmUpBudget(
+        window = effectiveContextWindowTokens(),
+        compactThreshold = currentContextPolicy()?.first?.compactThreshold,
+        ratio = contextCalibrationRatio(),
+        fixedTokens = contextFixedTokens,
+    )
 
     /** `"estimatedRequestTokens":…,"estimatedFixedTokens":…` for the usage row, or "". Same keys as iOS StoredTokenUsage. */
     private fun calibrationJsonFields(): String = lastCalibratedPair?.let { (est, fixed, model) ->
         val modelField = model?.let { ""","calibrationModelId":${JSONObject.quote(it)}""" } ?: ""
-        ""","estimatedRequestTokens":$est,"estimatedFixedTokens":$fixed$modelField"""
+        ""","estimatedRequestTokens":$est,"estimatedFixedTokens":$fixed$modelField,"estimatorVersion":${ContextSizeMeter.ESTIMATOR_VERSION}"""
     } ?: ""
 
     // ---- [T-android-context-usage-hint] Context-window pressure surface ----
@@ -1727,7 +2212,7 @@ class ChatViewModel(
                 TokenCountFormatter.sizePair(usage),
             ),
             tier = usage.tier,
-        )
+        ).withQuota(composerQuotaPart())
         contextTierTracker.markFired(usage.tier, now)
         AppLogger.info(
             TAG,
@@ -1756,6 +2241,60 @@ class ChatViewModel(
      * next loop-end line carries the real reported size and must not be
      * deduplicated against this estimate.
      */
+    /**
+     * [T-quota-composer-hint] The current model's quota for the composer's
+     * usage line, from data the quota store already holds (no request here:
+     * the store refreshes on its own schedule). null when the model has no
+     * quota data - the line is then the context figures alone, as before.
+     */
+    private fun composerQuotaPart(): com.openminis.app.quota.QuotaComposerHintRules.Segment? {
+        val entryId = _activeEntryId.value ?: return null
+        val entry = providerRepository.config.value.modelEntries.find { it.id == entryId } ?: return null
+        val st = com.openminis.app.quota.QuotaStore.state.value
+        val locale = context.resources.configuration.locales[0] ?: java.util.Locale.getDefault()
+        return com.openminis.app.quota.QuotaComposerHintRules.segment(
+            st.modelView(entry.providerInstanceId, entry.model.id), st.pools,
+            locale = locale, strings = com.openminis.app.ui.quota.QuotaResourceStrings(context),
+        )
+    }
+
+    private fun ContextUsageHint.withQuota(seg: com.openminis.app.quota.QuotaComposerHintRules.Segment?): ContextUsageHint {
+        seg ?: return this
+        return copy(
+            quotaText = seg.text,
+            quotaHighlight = seg.highlight,
+            quotaTier = when (seg.level) {
+                com.openminis.app.quota.QuotaLevel.normal -> ContextUsage.Tier.NORMAL
+                com.openminis.app.quota.QuotaLevel.low -> ContextUsage.Tier.WARNING
+                com.openminis.app.quota.QuotaLevel.depleted -> ContextUsage.Tier.CRITICAL
+            },
+        )
+    }
+
+    /**
+     * [T-port-composer-hint-debug] DEV_TOOLS builds only (the
+     * `debug.chat.usageHint` RPC): publish a composer usage line with chosen
+     * figures as a new generation, so the context / quota carousel can be
+     * tested without filling 70% of a context window. [useLiveQuota] takes the
+     * quota page from the quota store, like a real line; otherwise [quota]
+     * (null = context page only). Returns null and changes nothing in a
+     * release build.
+     */
+    internal fun debugShowContextUsageHint(
+        percent: Int,
+        windowTokens: Int,
+        quota: DebugUsageHint.Quota?,
+        useLiveQuota: Boolean,
+    ): ContextUsageHint? {
+        if (!com.openminis.app.BuildConfig.DEV_TOOLS) return null
+        contextHintGeneration += 1
+        val base = DebugUsageHint.build(contextHintGeneration, percent, windowTokens, quota)
+        val hint = if (useLiveQuota) base.withQuota(composerQuotaPart()) else base
+        _contextUsageHint.value = hint
+        AppLogger.info(TAG, "[ContextUsage] DEBUG hint gen=$contextHintGeneration tier=${hint.tier} percent=$percent quota=${hint.quotaText != null}")
+        return hint
+    }
+
     private fun announceContextUsageAfterCompaction() {
         if (isHelper) return
         val usage = ContextUsage.from(
@@ -1772,7 +2311,7 @@ class ChatViewModel(
                 TokenCountFormatter.sizePair(usage),
             ),
             tier = usage.tier,
-        )
+        ).withQuota(composerQuotaPart())
         AppLogger.info(
             TAG,
             "[ContextUsage] post-compact hint gen=$contextHintGeneration tier=${usage.tier} " +
@@ -1859,6 +2398,24 @@ class ChatViewModel(
     /** Seconds remaining in the current auto-retry countdown (0 = not counting down). */
     private val _autoRetryCountdown = MutableStateFlow(0)
     val autoRetryCountdown: StateFlow<Int> = _autoRetryCountdown.asStateFlow()
+
+    /** [T-android-retry-badge] Retries per ladder, for the badge's "1/3". */
+    val autoRetryMax: Int get() = AUTO_RETRY_DELAYS_SEC.size
+
+    /**
+     * [T-android-retry-badge] This generation's automatic retries so far, for
+     * the badge's detail sheet. In memory only: emptied when the generation
+     * ends (streaming stops); each retry is also logged.
+     */
+    private val _retryLog = MutableStateFlow<List<RetryRecord>>(emptyList())
+    val retryLog: StateFlow<List<RetryRecord>> = _retryLog.asStateFlow()
+
+    @Suppress("unused")
+    private val retryLogReset = viewModelScope.launch {
+        _isStreaming.collect { streaming ->
+            if (!streaming && _retryLog.value.isNotEmpty()) _retryLog.value = emptyList()
+        }
+    }
 
     // [T-android-stale-streamjob-clears-isstreaming] @Volatile so cross-coroutine
     // reads (the orphaned previous streamJob's tail block running on a different
@@ -1962,6 +2519,7 @@ class ChatViewModel(
             // request and the enum can never advertise a name the resolver
             // would reject.
             rosterNames = providerRepository.subAgents.map { it.name },
+            userAskExposed = userAskExposedThisRun,
         )
 
     /**
@@ -2023,7 +2581,8 @@ class ChatViewModel(
         val queued = org.json.JSONArray()
         for (childId in candidates) {
             when {
-                registry.canStartChildJob -> {
+                // [T-new-limits] This conversation's own sub agent slots.
+                registry.canStartChildJob(activeSessionId) -> {
                     if (resumeInterruptedChild(childId)) resumed.put(childId) else deferred.put(childId)
                 }
                 enqueueResume(childId) -> queued.put(childId)
@@ -2224,6 +2783,9 @@ class ChatViewModel(
                 registry.markRunning(job.id, childId) {
                     viewModelScope.launch(Dispatchers.Main) { childVm.cancelStream() }
                 }
+                // [T-subagent-termination] A resume restarts the record too.
+                childVm.helperClosingAttempted = false
+                com.openminis.app.agent.jobs.SubAgentTerminationStore.shared.begin(childId, job.id, parentSid)
                 registry.registerSteerHook(job.id) { msg -> childVm.enqueueSteer(msg) }
                 registry.registerMissedSteerDrain(job.id) { childVm.drainMissedSteers() }
                 // [T-sub-agents-resume] Reattach the block to this run BEFORE
@@ -2240,12 +2802,22 @@ class ChatViewModel(
                 // path's hook. Registered BEFORE the prompt so a run that ends
                 // instantly still writes it.
                 registry.setCompletionHook(job.id) { finished ->
+                    // [T-subagent-termination] Same as the background hook:
+                    // recorded before the callback is built.
+                    val termination = recordChildTermination(
+                        childVm, childId, finished.id, parentSid,
+                        loopStatus = hr.statusWord(finished.state),
+                        budgetExpired = childVm.helperWrapUpRequested,
+                        errorText = childVm.messages.value.lastOrNull { it.role == "assistant" }?.error,
+                        resultText = finished.resultText ?: "",
+                        delivery = com.openminis.app.agent.jobs.SubAgentTermination.Delivery.PENDING,
+                    )
                     viewModelScope.launch(Dispatchers.IO) {
                         val facts = hr.childRunFacts(chatRepository.dao.loadMessages(childId))
                         val summary = hr.runSummaryLine(facts.toolNames, facts.turns, facts.input, facts.output, facts.cacheRead)
                         registry.setSummaryLine(finished.id, summary)
                         val result = finished.resultText ?: ""
-                        val status = hr.resolvedStatus(hr.statusWord(finished.state), result)
+                        val status = hr.reportedStatus(hr.statusWord(finished.state), result, termination)
                         val json = hr.resultJson(
                             status, result, childVm.modelName.value,
                             com.openminis.app.agent.jobs.HelperModelTier.PRIMARY, "",
@@ -2255,6 +2827,7 @@ class ChatViewModel(
                             wasResumed = true,
                             errorText = childVm.messages.value.lastOrNull { it.role == "assistant" }?.error,
                             thinkingLevel = chatRepository.getSession(childId)?.thinkingOverride,
+                            termination = termination,
                         )
                         val blockStatus = when (finished.state) {
                             com.openminis.app.agent.jobs.AgentJobState.DONE -> ToolBlockStatus.SUCCESS
@@ -2443,7 +3016,7 @@ class ChatViewModel(
             return CardResume.REFUSED
         }
         val outcome = when {
-            com.openminis.app.agent.jobs.AgentJobRegistry.canStartChildJob ->
+            com.openminis.app.agent.jobs.AgentJobRegistry.canStartChildJob(activeSessionId) ->
                 if (resumeInterruptedChild(childId)) CardResume.STARTED else CardResume.REFUSED
             enqueueResume(childId) -> CardResume.QUEUED
             else -> CardResume.REFUSED
@@ -2763,13 +3336,32 @@ class ChatViewModel(
      * chat reads the same flag. The provider reads FastModePrefs directly at
      * request-build time, so this flow only drives the menu row + nav badge.
      */
-    internal val _fastModeEnabled =
-        MutableStateFlow(com.openminis.app.data.FastModePrefs.isEnabled())
-    val fastModeEnabled: StateFlow<Boolean> = _fastModeEnabled.asStateFlow()
+    //
+    // [T-speed-tier] Now a three-way speed choice (Standard / Fast /
+    // Ultrafast). The boolean view stays for the single-switch row and the
+    // nav badge: "on" means Fast or Ultrafast.
+    internal val _speedTier =
+        MutableStateFlow(com.openminis.app.data.FastModePrefs.tier())
+    val speedTier: StateFlow<com.openminis.app.data.SpeedTier> = _speedTier.asStateFlow()
 
+    fun setSpeedTier(tier: com.openminis.app.data.SpeedTier) {
+        com.openminis.app.data.FastModePrefs.setTier(context, tier)
+        _speedTier.value = tier
+    }
+
+    val fastModeEnabled: StateFlow<Boolean> =
+        _speedTier.map { it != com.openminis.app.data.SpeedTier.STANDARD }
+            .stateIn(
+                viewModelScope,
+                kotlinx.coroutines.flow.SharingStarted.Eagerly,
+                com.openminis.app.data.FastModePrefs.isEnabled(),
+            )
+
+    /** The single-switch row (models without Ultrafast): on = Fast, off = Standard. */
     fun setFastModeEnabled(enabled: Boolean) {
-        com.openminis.app.data.FastModePrefs.setEnabled(context, enabled)
-        _fastModeEnabled.value = enabled
+        setSpeedTier(
+            if (enabled) com.openminis.app.data.SpeedTier.FAST else com.openminis.app.data.SpeedTier.STANDARD,
+        )
     }
 
     /**
@@ -2791,7 +3383,7 @@ class ChatViewModel(
 
     /**
      * [T-codex-fast-mode] Whether the Fast Mode menu row (and, when enabled,
-     * the nav ⚡ badge) is shown. Mirrors iOS activeModelSupportsFastMode
+     * the nav bolt badge) is shown. Mirrors iOS activeModelSupportsFastMode
      * (838ba929): the active model id contains "gpt" (case-insensitive —
      * matches the official fast catalog gpt-5.6-sol/terra/luna, gpt-5.5,
      * gpt-5.4) AND the request travels the Responses path — the instance has
@@ -2810,7 +3402,7 @@ class ChatViewModel(
      * because xAI serves Priority Processing on its Chat Completions endpoint,
      * which is the path ProviderFactory always resolves xAI to.
      */
-    val showFastModeToggle: StateFlow<Boolean> =
+    private val speedEligibility: StateFlow<SpeedEligibility> =
         kotlinx.coroutines.flow.combine(
             _activeEntryId,
             providerRepository.config,
@@ -2822,19 +3414,56 @@ class ChatViewModel(
                 instance.credentialType == com.openminis.app.data.model.ProviderCredential.oauth &&
                 instance.customBaseURL.isNullOrBlank()
             val isXAI = instance?.providerType == com.openminis.app.data.model.ProviderType.xAI
-            entry != null && instance != null &&
-                (
-                    isXAI ||
-                        (
-                            entry.model.id.contains("gpt", ignoreCase = true) &&
-                                (instance.useResponsesAPI || isCodexOAuth)
-                            )
-                    )
+            val responsesGpt = entry != null && instance != null && !isXAI &&
+                entry.model.id.contains("gpt", ignoreCase = true) &&
+                (instance.useResponsesAPI || isCodexOAuth)
+            SpeedEligibility(
+                fast = entry != null && instance != null && (isXAI || responsesGpt),
+                // [T-speed-tier] Ultrafast = the Fast gate's Responses branch
+                // PLUS the model allow-list. Never on xAI (Priority only).
+                // [T-ultrafast-catalog-tiers] The catalog's declared tiers
+                // when discovery supplied them, else the allow-list.
+                ultrafast = responsesGpt && com.openminis.app.data.SpeedTiers.supportsUltrafast(entry!!.model),
+            )
         }.stateIn(
             viewModelScope,
             kotlinx.coroutines.flow.SharingStarted.Eagerly,
-            false,
+            SpeedEligibility(fast = false, ultrafast = false),
         )
+
+    val showFastModeToggle: StateFlow<Boolean> =
+        speedEligibility.map { it.fast }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+
+    /**
+     * [T-speed-tier] Whether the active model offers Ultrafast. When false the
+     * menu keeps the old single Fast Mode switch; when true it becomes a
+     * "Speed ›" submenu with Standard / Fast / Ultrafast.
+     */
+    val showUltrafastOption: StateFlow<Boolean> =
+        speedEligibility.map { it.ultrafast }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+
+    /**
+     * [T-speed-tier] The tier the menu row and nav badge show for the active
+     * model — the same fallback the request builder applies: a stored
+     * Ultrafast shows (and is sent) as Fast on a model without Ultrafast.
+     */
+    val displayedSpeedTier: StateFlow<com.openminis.app.data.SpeedTier> =
+        kotlinx.coroutines.flow.combine(_speedTier, speedEligibility) { tier, elig ->
+            com.openminis.app.data.SpeedTiers.displayed(tier, elig.fast, elig.ultrafast)
+        }.stateIn(
+            viewModelScope,
+            kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            com.openminis.app.data.SpeedTier.STANDARD,
+        )
+
+    // [T-ultrafast-no-false-downgrade] There used to be an "account doesn't
+    // support Ultrafast" toast here, driven by response.completed echoing
+    // service_tier=default. For ChatGPT (Codex OAuth) auth that echo is not a
+    // reliable signal (openai/codex issue #14204: it "is not an end-to-end
+    // field you can reliably verify"), and a Pro user saw the toast on every
+    // Astra reply. The echo is now only logged, without a conclusion.
 
     internal val _showSlashMenu = MutableStateFlow(false)
     val showSlashMenu: StateFlow<Boolean> = _showSlashMenu.asStateFlow()
@@ -4179,8 +4808,8 @@ class ChatViewModel(
      * Returns the budgeted message list. When nothing was elided this
      * is the same instance as [messages].
      *
-     * Emits a one-shot [requestBudgetEvent] for the UI Snackbar so the
-     * user knows older images were compacted into placeholders.
+     * Emits a one-shot [requestBudgetEvent] and logs the elision.
+     * [T-silence-auto-notices] Nothing in the UI shows it any more.
      */
     /**
      * [T-android-payload-size-audit] (GH#352) Report parts whose serialized
@@ -4202,50 +4831,8 @@ class ChatViewModel(
      * escalated and points at the self-heal path, which is where an actual
      * mutation happens — and only after the provider has confirmed the overflow.
      */
-    private fun auditOutgoingPayload(messages: List<LLMMessage>): List<LLMMessage> {
-        val window = effectiveContextWindowTokens() ?: 0
-        for ((msgIdx, msg) in messages.withIndex()) {
-            for (part in msg.contentParts) {
-                val (bytes, estTokens, kind, id) = when (part) {
-                    is AgentContentPart.ImageData ->
-                        // Base64 is what actually leaves the device, so measure
-                        // that, not the raw byte count.
-                        Quad(base64Size(part.data.size), BPETokenizer.countImageTokens(part.data), "image", null)
-                    is AgentContentPart.ToolResult -> {
-                        val imgBytes = part.imageData?.size ?: 0
-                        Quad(
-                            part.content.length + base64Size(imgBytes),
-                            BPETokenizer.countTokens(part.content) +
-                                (part.imageData?.let { BPETokenizer.countImageTokens(it) } ?: 0),
-                            "tool_result",
-                            part.id,
-                        )
-                    }
-                    is AgentContentPart.Text ->
-                        Quad(part.text.length, BPETokenizer.countTokens(part.text), "text", null)
-                    is AgentContentPart.ToolUse -> {
-                        val raw = part.input.toString()
-                        Quad(raw.length, BPETokenizer.countTokens(raw), "tool_use", part.id)
-                    }
-                }
-                val finding = PayloadSizeAudit.audit(bytes, estTokens, window)
-                if (!finding.suspicious && !finding.dangerous) continue
-                AppLogger.warning(
-                    TAG,
-                    "[PayloadAudit] GH#352 oversized part msgIdx=$msgIdx role=${msg.role} " +
-                        "kind=$kind id=${id ?: "-"} bytes=${finding.bytes} " +
-                        "estTokens=${finding.estimatedTokens} bytesPerToken=${finding.bytesPerToken} " +
-                        "window=$window suspicious=${finding.suspicious} dangerous=${finding.dangerous}" +
-                        if (finding.dangerous) {
-                            " — this part alone could exhaust the window if measured as text; " +
-                                "if the provider now 400s on context length the self-heal path " +
-                                "([T-android-context-overflow-selfheal]) will offload it."
-                        } else "",
-                )
-            }
-        }
-        return messages
-    }
+    private fun auditOutgoingPayload(messages: List<LLMMessage>): List<LLMMessage> =
+        RequestContextBuilder.auditOutgoingPayload(messages, ::effectiveContextWindowTokens)
 
     /**
      * [T-android-context-overflow-selfheal] (GH#352) Offload the single largest
@@ -4347,112 +4934,26 @@ class ChatViewModel(
     }
 
     /** Base64 expands 3 bytes to 4; the wire size is what the audit cares about. */
-    private fun base64Size(rawBytes: Int): Int = if (rawBytes <= 0) 0 else (rawBytes + 2) / 3 * 4
+    private fun base64Size(rawBytes: Int): Int = RequestContextBuilder.base64Size(rawBytes)
 
-    /** Local 4-tuple so the audit's per-part extraction stays one expression. */
-    private data class Quad(val a: Int, val b: Int, val c: String, val d: String?)
+    private fun applyRequestImageBudget(messages: List<LLMMessage>): List<LLMMessage> =
+        RequestContextBuilder.applyRequestBudget(messages, ::requestBudgetSpillRoot, ::onRequestBudgetPlan)
 
-    private fun applyRequestImageBudget(messages: List<LLMMessage>): List<LLMMessage> {
-        // Collect every image in chronological order so the planner can
-        // walk in reverse and protect the most recent images.
-        data class ImageRef(val msgIdx: Int, val partIdx: Int, val image: ImageBudget.BudgetImage)
-        val images = mutableListOf<ImageRef>()
-        messages.forEachIndexed { mi, msg ->
-            msg.contentParts.forEachIndexed { pi, part ->
-                when (part) {
-                    is AgentContentPart.ImageData -> {
-                        images.add(
-                            ImageRef(
-                                mi, pi,
-                                ImageBudget.BudgetImage(part.data, part.linuxPath, part.mimeType),
-                            )
-                        )
-                    }
-                    is AgentContentPart.ToolResult -> {
-                        val img = part.imageData
-                        if (img != null) {
-                            images.add(
-                                ImageRef(
-                                    mi, pi,
-                                    ImageBudget.BudgetImage(
-                                        img,
-                                        part.imageLinuxPath,
-                                        part.imageMimeType ?: "image/jpeg",
-                                    ),
-                                )
-                            )
-                        }
-                    }
-                    else -> Unit
-                }
-            }
-        }
-        if (images.isEmpty()) return messages
-
-        val plan = ImageBudget.planRequestBudget(images.map { it.image })
-        if (!plan.mutated) return messages
-
-        // For dropped images without a linuxPath, lazily spill to disk so
-        // the placeholder still gives the model an addressable reference.
-        val attachmentsRoot = activeSessionId?.let { sid ->
+    /**
+     * For dropped images without a linuxPath, lazily spill to disk so the
+     * placeholder still gives the model an addressable reference.
+     */
+    private fun requestBudgetSpillRoot(): java.io.File? =
+        activeSessionId?.let { sid ->
             java.io.File(context.filesDir, "minis-sessions/$sid/attachments")
         }
-        val resolvedPaths = HashMap<ImageBudget.ImagePartId, String?>()
-        for (ref in images) {
-            val id = ImageBudget.ImagePartId.of(ref.image.data)
-            if (id !in plan.droppedIds) continue
-            val existing = ref.image.linuxPath
-            if (existing != null) {
-                resolvedPaths[id] = existing
-            } else if (attachmentsRoot != null) {
-                resolvedPaths[id] = ImageBudget.ensureSpillover(
-                    attachmentsRoot, ref.image.data, ref.image.mimeType,
-                )
-            } else {
-                resolvedPaths[id] = null
-            }
-        }
 
-        // Build a new message list with dropped image parts replaced by
-        // text placeholders. Same-message multiple drops collapse cleanly
-        // because we never touch parts whose ids weren't in droppedIds.
-        val byMsg = images.groupBy { it.msgIdx }
-        val mutated = messages.toMutableList()
-        for ((mi, refs) in byMsg) {
-            val msg = mutated[mi]
-            val newParts = msg.contentParts.toMutableList()
-            for (ref in refs) {
-                val id = ImageBudget.ImagePartId.of(ref.image.data)
-                if (id !in plan.droppedIds) continue
-                val path = resolvedPaths[id]
-                val placeholder = AgentContentPart.Text(ImageBudget.elidedImagePlaceholder(path))
-                val originalPart = newParts[ref.partIdx]
-                newParts[ref.partIdx] = when (originalPart) {
-                    is AgentContentPart.ImageData -> placeholder
-                    is AgentContentPart.ToolResult -> originalPart.copy(
-                        // Strip the bytes but keep the structural ToolResult
-                        // role; append the elision marker into content so
-                        // the model sees it next to the rest of the tool
-                        // output. linux path remains in the part for any
-                        // subsequent diagnostic round-trip.
-                        imageData = null,
-                        imageMimeType = null,
-                        content = originalPart.content +
-                            (if (originalPart.content.isEmpty()) "" else "\n") +
-                            ImageBudget.elidedImagePlaceholder(path),
-                    )
-                    else -> originalPart
-                }
-            }
-            mutated[mi] = msg.copy(contentParts = newParts)
-        }
-
+    private fun onRequestBudgetPlan(plan: ImageBudget.RequestBudgetPlan) {
         _requestBudgetEvent.tryEmit(plan)
         AppLogger.info(
             TAG,
             "applyRequestImageBudget: dropped=${plan.droppedCount}/${plan.totalCount} keptBytes=${plan.keptBytes}B elidedBytes=${plan.elidedBytes}B",
         )
-        return mutated
     }
 
     /**
@@ -4462,7 +4963,34 @@ class ChatViewModel(
      * cannot fix.
      */
     private fun effectiveAgentHistory(): List<LLMMessage> =
-        dropOrphanedToolParts(effectiveAgentHistoryUncounted())
+        RequestContextBuilder.outbound(requestContextInput())
+
+    /**
+     * [T-ctx-builder] This ViewModel's state as [RequestContextBuilder] input.
+     * Built immediately before use, so every value is read at the moment the
+     * former inline code read it (the lookups stay functions).
+     */
+    private fun requestContextInput(): RequestContextBuilder.Input =
+        RequestContextBuilder.Input(
+            history = agentHistory,
+            compaction = currentCompaction(),
+            keepRecentUserTurns = COMPACT_KEEP_RECENT_USER_TURNS,
+            sessionId = { activeSessionId },
+            contextWindowTokens = ::effectiveContextWindowTokens,
+            resolveAttachmentsRoot = ::requestBudgetSpillRoot,
+            onRequestBudget = ::onRequestBudgetPlan,
+            trim = ::applyFrozenTrim,
+        )
+
+    /** The summary and marker as they are now, with the per-marker warm-up cache behind them. */
+    private fun currentCompaction(): RequestContextBuilder.Compaction =
+        RequestContextBuilder.Compaction(
+            summary = _compactSummary.value,
+            marker = _cachedLatestMarker,
+            cachedWarmUpDrop = { id -> warmUpDropByMarker[id] },
+            recordWarmUpDrop = { id, drop -> warmUpDropByMarker[id] = drop },
+            warmUpBudget = ::currentWarmUpBudget,
+        )
 
     // ---- [T-longctx-persona-reminder-cachebreak] Long-context persona reminder ----
     //
@@ -4631,248 +5159,8 @@ class ChatViewModel(
         Log.i(TAG, "[PersonaReminder] appended at ~$contextTokens ctx tokens (agentHistory.size=${agentHistory.size})")
     }
 
-    private fun effectiveAgentHistoryUncounted(): List<LLMMessage> {
-        val summary = _compactSummary.value
-        val marker = _cachedLatestMarker
-        // No compact in play → return full history untouched.
-        if (summary.isNullOrBlank() || marker == null) return agentHistory.toList()
-
-        val summaryWrappedText = "<context-summary>\n" +
-            "The following is a summary of the earlier conversation that was compacted to save context space.\n" +
-            "Treat it as background context only. The user's most recent message (below or in the next turn) takes precedence — if it changes the task, the goal, or any numbers/scope, follow the new instruction and do not resume the old plan from this summary. Do not re-run discovery (reading memory, scanning skills, re-reading files) unless the new instruction requires it.\n\n" +
-            summary +
-            "\n</context-summary>"
-
-        // ─── v2 markers (id-only anchor model) ─────────────────────────
-        //
-        // anchor = lastCompactedMessageId. What we send to the model:
-        //   1. last [COMPACT_KEEP_RECENT_USER_TURNS] user-text turns BEFORE
-        //      anchor (inclusive of anchor) — recent verbatim warm-up
-        //   2. the summary, INLINED as a `<context-summary>` text part
-        //      prepended to the first user message AFTER anchor (preserves
-        //      strict role alternation — no synthetic standalone user turn)
-        //   3. all messages strictly after anchor (the kept-tail "active"
-        //      region — typically empty right after compact, populated as
-        //      the user sends new prompts)
-        //
-        // If anchor unresolvable, degrade to full history (over-inform
-        // beats summary-only; the M-Team session bug taught us that a lone
-        // summary message paired with hot tools makes the model loop).
-        if (marker.version >= 2) {
-            val anchorId = marker.lastCompactedMessageId?.takeIf { it.isNotEmpty() }
-            val anchorIdx = anchorId?.let { id ->
-                agentHistory.indexOfLast { it.dbMessageId == id }
-            } ?: -1
-            if (anchorIdx < 0) {
-                Log.w(TAG, "[Compact] effectiveAgentHistory v2: anchorId=${anchorId?.take(8) ?: "nil"} not in agentHistory(size=${agentHistory.size}) — degrading to full history (no summary)")
-                return agentHistory.toList()
-            }
-
-            // Step 1: walk back from anchor collecting user-text turns. Stop
-            // when EITHER we've collected N user-text turns OR including the
-            // next turn would push preAnchor over 100 messages. Decisions
-            // happen only at user-message boundaries so we never split a
-            // user/assistant/tool round in half (which would orphan a
-            // tool_use with no matching tool_result).
-            //
-            // [T-compact-preanchor-prune, port iOS 8b76cd74]
-            val keepN = COMPACT_KEEP_RECENT_USER_TURNS
-            val preAnchorCap = 100
-            val walkBack = walkBackUserTurnsBounded(
-                anchorIdx = anchorIdx,
-                maxUserTextTurns = keepN,
-                maxMessages = preAnchorCap,
-            )
-            val priorIdxResolved: Int? = walkBack.priorIdx
-            val priorIdx = walkBack.priorIdx ?: (anchorIdx + 1) // empty preAnchor sentinel
-            if (walkBack.stopReason != "userTextTargetMet") {
-                AppLogger.info(TAG, "[CompactDiag] eAH v2 walkBack stopped: reason=${walkBack.stopReason} priorIdx=$priorIdx userTextTurnsFound=${walkBack.userTextTurnsFound} preAnchorMsgs=${walkBack.messageCount}")
-            }
-
-            // PRE-ANCHOR PRUNE (tool-heavy session fix):
-            // The walk-back-N-user-text strategy pulls in everything between
-            // the Nth-last and last user-text turn — in a heavy tool-call
-            // session that can be many messages of tool_result / tool_use,
-            // tens of thousands of tokens that the summary already covers.
-            // Drop any tool_result > 1000 chars in the preAnchor slice and
-            // strip the matching tool_use part (same id) from the assistant
-            // message so the model never sees a dangling tool_use/result.
-            val preAnchorRaw: List<LLMMessage> =
-                if (priorIdx <= anchorIdx) agentHistory.subList(priorIdx, anchorIdx + 1).toList()
-                else emptyList()
-
-            val droppedToolIds = mutableSetOf<String>()
-            var droppedToolResultCount = 0
-            for (msg in preAnchorRaw) {
-                for (part in msg.contentParts) {
-                    if (part is AgentContentPart.ToolResult && part.content.length > 1000) {
-                        droppedToolIds.add(part.id)
-                        droppedToolResultCount += 1
-                    }
-                }
-            }
-
-            val preAnchorPruned: MutableList<LLMMessage> = ArrayList(preAnchorRaw.size)
-            for (msg in preAnchorRaw) {
-                if (msg.contentParts.isEmpty()) {
-                    // Plain text-only message — nothing to prune.
-                    preAnchorPruned.add(msg)
-                    continue
-                }
-                val kept = msg.contentParts.filter { part ->
-                    when (part) {
-                        is AgentContentPart.ToolUse -> !droppedToolIds.contains(part.id)
-                        is AgentContentPart.ToolResult -> !droppedToolIds.contains(part.id)
-                        else -> true
-                    }
-                }
-                if (kept.isEmpty()) continue // skip empty shells
-                preAnchorPruned.add(msg.copy(contentParts = kept))
-            }
-
-            if (droppedToolResultCount > 0) {
-                AppLogger.info(TAG, "[CompactDiag] eAH v2 preAnchor prune: dropped $droppedToolResultCount toolResult(>1kc) + paired toolUse, ${preAnchorRaw.size - preAnchorPruned.size} messages emptied; pruned slice=${preAnchorPruned.size}")
-            }
-
-            // ROLE ALIGNMENT: the API requires the first message to be `user`.
-            // After clamp (cap may land on assistant) and after prune (the
-            // head user may have been emptied), peel any leading non-user
-            // messages so preAnchor starts on a user turn.
-            while (preAnchorPruned.isNotEmpty() && preAnchorPruned.first().role != LLMMessage.Role.USER) {
-                preAnchorPruned.removeAt(0)
-            }
-
-            val postAnchor = if (anchorIdx + 1 < agentHistory.size) {
-                agentHistory.subList(anchorIdx + 1, agentHistory.size)
-            } else {
-                emptyList()
-            }
-            // [T-ctx-warmup-fit] Warm-up turns are optional context — the summary
-            // covers them. Drop them oldest-first when keeping them all would
-            // leave the request over the compact line (see trimWarmUpToFit).
-            // Decided ONCE per marker, then reused: re-deciding every request
-            // slid the warm-up window one turn per message (measured on the
-            // iOS twin), changing the request prefix every turn and defeating
-            // prompt caching. Fixed per marker, the prefix is stable, the
-            // request grows normally, and compaction fires at the line.
-            // [T-ctx-warmup-trim-undecided] Cache only a REAL decision. When no
-            // budget could be computed yet (no entry, unknown window, fixed
-            // tokens not seeded) the trim passes the warm-up through unchanged;
-            // caching drop=0 then would pin "keep everything" for this marker
-            // forever, even once the budget is known and says it does not fit.
-            val warmUp = warmUpDropByMarker[marker.id]?.let { drop ->
-                preAnchorPruned.drop(minOf(drop, preAnchorPruned.size))
-            } ?: trimWarmUpToFit(preAnchorPruned, postAnchor, summaryWrappedText).let { trim ->
-                if (trim.decided) warmUpDropByMarker[marker.id] = preAnchorPruned.size - trim.kept.size
-                trim.kept
-            }
-            // Step 2 & 3: copy the lookback window (post-prune, trimmed to fit),
-            // then splice in the summary as parts[0] of the first post-anchor user msg.
-            val result = mutableListOf<LLMMessage>()
-            result.addAll(warmUp)
-
-            // DIAG: explain how the slice was sized using post-prune /
-            // post-alignment counts so the log reflects what actually
-            // reaches the model.
-            val preAnchorRawCount = maxOf(0, anchorIdx - priorIdx + 1)
-            val priorIdxSource =
-                if (priorIdxResolved == null) "fallback=empty(<$keepN user-text turns before anchor or cap hit)"
-                else "userTextWalkBack(N=$keepN)"
-            AppLogger.info(TAG, "[CompactDiag] eAH v2 slice: priorIdx=$priorIdx anchorIdx=$anchorIdx agentHistory.size=${agentHistory.size} → preAnchorRaw=$preAnchorRawCount preAnchorSent=${preAnchorPruned.size} postAnchor=${postAnchor.size} summaryChars=${summary.length} priorIdxSource=$priorIdxSource markerId=${marker.id.take(8)}")
-
-            val firstUserOffset = postAnchor.indexOfFirst { it.role == LLMMessage.Role.USER }
-            if (firstUserOffset >= 0) {
-                if (firstUserOffset > 0) {
-                    result.addAll(postAnchor.subList(0, firstUserOffset))
-                }
-                val target = postAnchor[firstUserOffset]
-                // Prepend `<context-summary>...` to the user turn.
-                //
-                // [T-android-compact-summary-dropped] `content` alone is NOT
-                // enough. Every persisted message carries contentParts (its
-                // partsJson round-trips into a Text part), and the provider
-                // serializers prefer parts when they exist — the Responses
-                // API builder emits `textParts.joinToString("")` for a user
-                // turn and never reads `msg.content`. So injecting into
-                // `content` only meant the summary was assembled, logged
-                // (summaryChars=734 in CompactDiag) and then silently dropped
-                // on the way to the wire: the model got neither the compacted
-                // detail nor the summary standing in for it. Measured on
-                // device — the post-compact request carried 27 rows exactly as
-                // the slice log predicted, with no `<context-summary>`
-                // anywhere in the body.
-                //
-                // Update BOTH representations so the summary survives whichever
-                // one a given provider reads.
-                val injectedParts = if (target.contentParts.isEmpty()) {
-                    target.contentParts
-                } else {
-                    val firstTextIdx = target.contentParts.indexOfFirst { it is AgentContentPart.Text }
-                    if (firstTextIdx < 0) {
-                        // No text part to prepend onto (image/tool-only turn):
-                        // add one at the front rather than editing a non-text
-                        // part, so nothing already there is disturbed.
-                        listOf(AgentContentPart.Text(summaryWrappedText)) + target.contentParts
-                    } else {
-                        target.contentParts.mapIndexed { i, part ->
-                            if (i != firstTextIdx || part !is AgentContentPart.Text) part
-                            else AgentContentPart.Text(summaryWrappedText + "\n\n" + part.text)
-                        }
-                    }
-                }
-                val injected = target.copy(
-                    content = summaryWrappedText + "\n\n" + target.content,
-                    contentParts = injectedParts,
-                )
-                result.add(injected)
-                if (firstUserOffset + 1 < postAnchor.size) {
-                    result.addAll(postAnchor.subList(firstUserOffset + 1, postAnchor.size))
-                }
-            } else {
-                // Rare: no user message after anchor. Append everything
-                // post-anchor (typically empty) then a standalone summary
-                // user turn. Safe — no later user follows it to break
-                // alternation.
-                result.addAll(postAnchor)
-                result.add(LLMMessage(role = LLMMessage.Role.USER, content = summaryWrappedText))
-            }
-            return result
-        }
-
-        // ─── v1 (legacy) markers ──────────────────────────────────────
-        //
-        // Original behavior preserved unchanged so old markers keep
-        // rendering / sending data the same way they always did.
-        val summaryHead = LLMMessage(role = LLMMessage.Role.USER, content = summaryWrappedText)
-        val firstKeptId = (marker.firstKeptMessageId?.takeIf { it.isNotEmpty() })
-            ?: (marker.boundaryMessageId?.takeIf { it.isNotEmpty() })
-
-        if (firstKeptId != null) {
-            val keepStart = agentHistory.indexOfFirst { it.dbMessageId == firstKeptId }
-            if (keepStart >= 0) {
-                return buildList(agentHistory.size - keepStart + 1) {
-                    add(summaryHead)
-                    addAll(agentHistory.subList(keepStart, agentHistory.size))
-                }
-            }
-            // Fall through to safety net.
-        } else {
-            val lcmId = marker.lastCompactedMessageId?.takeIf { it.isNotEmpty() }
-            val lcmIdx = lcmId?.let { id ->
-                agentHistory.indexOfLast { it.dbMessageId == id }
-            } ?: -1
-            val postCompactStart = lcmIdx + 1
-            return buildList(agentHistory.size - postCompactStart + 1) {
-                add(summaryHead)
-                if (postCompactStart < agentHistory.size) {
-                    addAll(agentHistory.subList(postCompactStart, agentHistory.size))
-                }
-            }
-        }
-
-        Log.w(TAG, "[Compact] effectiveAgentHistory: marker ${marker.id.take(8)} unresolvable in agentHistory (size=${agentHistory.size}); returning full history")
-        return agentHistory.toList()
-    }
+    private fun effectiveAgentHistoryUncounted(): List<LLMMessage> =
+        applyFrozenTrim(RequestContextBuilder.compacted(agentHistory, currentCompaction(), COMPACT_KEEP_RECENT_USER_TURNS))
 
     /**
      * [T-android-compact-orphan-toolcall] Last line of defence before a history
@@ -4899,141 +5187,14 @@ class ChatViewModel(
      * Messages emptied by the drop are removed — a parts-less message is itself
      * invalid on several providers.
      */
-    /**
-     * [T-android-orphan-toolcall-diag] (GH#352) `role:id` for every orphan, so
-     * a log alone says which side of the pairing broke.
-     */
-    private fun orphanRoleSummary(
-        history: List<LLMMessage>,
-        orphanedResults: Set<String>,
-        orphanedUses: Set<String>,
-    ): String {
-        val out = mutableListOf<String>()
-        for (msg in history) {
-            for (part in msg.contentParts) {
-                val id = when (part) {
-                    is AgentContentPart.ToolUse -> part.id.takeIf { com.openminis.app.provider.ToolPairing.key(it) in orphanedUses }
-                    is AgentContentPart.ToolResult -> part.id.takeIf { com.openminis.app.provider.ToolPairing.key(it) in orphanedResults }
-                    else -> null
-                } ?: continue
-                out += "${msg.role}:$id"
-            }
-        }
-        return out.joinToString(",")
-    }
-
-    private fun dropOrphanedToolParts(history: List<LLMMessage>): List<LLMMessage> {
-        // [T-android-responses-tool-id-normalize] Paired on ToolPairing.key,
-        // not the raw id: the Responses path stores "call|fc" ids and a history
-        // can hold both forms for one call, which raw ids called orphans.
-        val toolUseIds = HashSet<String>()
-        val toolResultIds = HashSet<String>()
-        for (msg in history) {
-            for (part in msg.contentParts) {
-                when (part) {
-                    is AgentContentPart.ToolUse -> toolUseIds.add(com.openminis.app.provider.ToolPairing.key(part.id))
-                    is AgentContentPart.ToolResult -> toolResultIds.add(com.openminis.app.provider.ToolPairing.key(part.id))
-                    else -> {}
-                }
-            }
-        }
-        val orphanedResults = toolResultIds - toolUseIds
-        val orphanedUses = HashSet(toolUseIds - toolResultIds)
-
-        // [T-android-compact-orphan-toolcall] IN-FLIGHT EXEMPTION (iOS
-        // 5d346dc2e). The tool_uses in the FINAL assistant message are not
-        // orphans while the loop sits between "model asked for tools" and
-        // "results appended" — agentHistory legitimately looks unpaired for
-        // that whole window (the assistant turn is appended at ~7500 and its
-        // tool results only at ~7517). Any snapshot taken inside that gap would
-        // otherwise carry fabricated "interrupted" results for tools that were
-        // about to run normally, telling the model its tools had failed.
-        // Trailing unanswered calls need no repair anyway: a request ending on
-        // an assistant tool_use is exactly what the API expects mid-round.
-        val last = history.lastOrNull()
-        if (last != null && last.role == LLMMessage.Role.ASSISTANT) {
-            for (part in last.contentParts) {
-                if (part is AgentContentPart.ToolUse) orphanedUses.remove(com.openminis.app.provider.ToolPairing.key(part.id))
-            }
-        }
-
-        if (orphanedResults.isEmpty() && orphanedUses.isEmpty()) return history
-
-        AppLogger.warning(
-            TAG,
-            // [T-android-orphan-toolcall-diag] (GH#352) Session id and the
-            // roles carrying each orphan were missing, and both are what a
-            // report like GH#352 needs: without the session id a log cannot be
-            // tied to the conversation the user complains about, and without
-            // the roles it is impossible to tell WHICH side lost its partner
-            // (a dangling assistant tool_call is a different bug from a
-            // stranded tool reply). ALL ids are listed, not a sample of three —
-            // the case worth diagnosing is the one where a specific id repeats.
-            "[CompactDiag] orphan tool parts in OUTGOING history — repairing. " +
-                "session=$activeSessionId " +
-                "orphanedOutputs=${orphanedResults.size} [${orphanedResults.sorted().joinToString(",")}] " +
-                "orphanedCalls=${orphanedUses.size} [${orphanedUses.sorted().joinToString(",")}] " +
-                "orphanRoles=[${orphanRoleSummary(history, orphanedResults, orphanedUses)}] " +
-                "historyCount=${history.size}",
-        )
-
-        val cleaned = ArrayList<LLMMessage>(history.size)
-        for (msg in history) {
-            val kept = msg.contentParts.filter { part ->
-                if (part is AgentContentPart.ToolResult) !orphanedResults.contains(com.openminis.app.provider.ToolPairing.key(part.id)) else true
-            }
-            // Only drop the message when it HAD parts and lost them all. A
-            // plain text message legitimately carries no contentParts and must
-            // survive untouched.
-            if (kept.isEmpty() && msg.contentParts.isNotEmpty()) continue
-            cleaned.add(if (kept.size == msg.contentParts.size) msg else msg.copy(contentParts = kept))
-
-            // Follow an assistant turn holding orphaned calls with the
-            // placeholder results it never got, so the pair is complete.
-            if (msg.role != LLMMessage.Role.ASSISTANT) continue
-            val unanswered = kept.filterIsInstance<AgentContentPart.ToolUse>()
-                .filter { orphanedUses.contains(com.openminis.app.provider.ToolPairing.key(it.id)) }
-            if (unanswered.isNotEmpty()) {
-                cleaned.add(
-                    LLMMessage(
-                        role = LLMMessage.Role.USER,
-                        content = "",
-                        contentParts = unanswered.map {
-                            AgentContentPart.ToolResult(
-                                id = it.id,
-                                name = it.name,
-                                content = "Tool execution was interrupted by an unexpected error.",
-                                isError = true,
-                            )
-                        },
-                    ),
-                )
-            }
-        }
-        return cleaned
-    }
+    private fun dropOrphanedToolParts(history: List<LLMMessage>): List<LLMMessage> =
+        RequestContextBuilder.dropOrphanedToolParts(history, { activeSessionId })
 
     /** Latest in-memory compact marker, used by [effectiveAgentHistory] to
      * resolve boundaries the same way iOS `cachedLatestMarker` does. Refreshed
      * on every compactAll write and on session reload. */
     @Volatile
     private var _cachedLatestMarker: com.openminis.app.data.db.CompactMarkerEntity? = null
-
-    /**
-     * Result of a bounded walk-back. `priorIdx` is the agentHistory index
-     * the caller should use as the start of preAnchor; `null` means even
-     * the first user turn including anchor would exceed `maxMessages`, so
-     * preAnchor should be empty.
-     *
-     * Mirrors iOS `WalkBackResult` in AIChatViewModel.swift (8b76cd74).
-     */
-    private data class WalkBackResult(
-        val priorIdx: Int?,
-        val userTextTurnsFound: Int,
-        val messageCount: Int,
-        /** "userTextTargetMet" | "messageCapWouldExceed" | "reachedStart" | "invalidAnchor" */
-        val stopReason: String,
-    )
 
     /**
      * Walk back from `anchorIdx` toward 0, deciding ONLY at user-message
@@ -5051,71 +5212,8 @@ class ChatViewModel(
         anchorIdx: Int,
         maxUserTextTurns: Int,
         maxMessages: Int,
-    ): WalkBackResult {
-        if (anchorIdx < 0 || anchorIdx >= agentHistory.size) {
-            return WalkBackResult(null, 0, 0, "invalidAnchor")
-        }
-        var acceptedPriorIdx: Int? = null
-        var acceptedUserTextTurns = 0
-        var acceptedMessageCount = 0
-
-        var i = anchorIdx
-        while (i >= 0) {
-            val msg = agentHistory[i]
-            if (msg.role != LLMMessage.Role.USER) {
-                i -= 1
-                continue
-            }
-            // [T-android-compact-orphan-toolcall] A user message CARRYING a
-            // tool result is the second half of a round, not the start of one.
-            // This walk-back's whole premise is that `role == USER` marks a
-            // round boundary — but tool results are themselves persisted as
-            // USER messages (see the agentHistory.add at the end of the tool
-            // dispatch loop), so stopping on one cuts between an assistant's
-            // tool_use and its own tool_result. The call is then discarded with
-            // pre-history while the result survives in preAnchor and goes out
-            // alone, which every OpenAI-compatible provider answers with
-            //     400 No tool call found for function call output with call_id …
-            // and, since the slice is recomputed identically on every retry and
-            // fallback, the session wedges permanently. Port of iOS c7f6a299e.
-            if (msg.contentParts.any { it is AgentContentPart.ToolResult }) {
-                i -= 1
-                continue
-            }
-            val candidateMessageCount = anchorIdx - i + 1
-            if (candidateMessageCount > maxMessages) {
-                return WalkBackResult(
-                    priorIdx = acceptedPriorIdx,
-                    userTextTurnsFound = acceptedUserTextTurns,
-                    messageCount = acceptedMessageCount,
-                    stopReason = "messageCapWouldExceed",
-                )
-            }
-            // Accept this user as the new tentative priorIdx.
-            acceptedPriorIdx = i
-            acceptedMessageCount = candidateMessageCount
-            val hasText = msg.content.isNotBlank() ||
-                msg.contentParts.any { it is AgentContentPart.Text && it.text.isNotBlank() }
-            if (hasText) {
-                acceptedUserTextTurns += 1
-                if (acceptedUserTextTurns >= maxUserTextTurns) {
-                    return WalkBackResult(
-                        priorIdx = acceptedPriorIdx,
-                        userTextTurnsFound = acceptedUserTextTurns,
-                        messageCount = acceptedMessageCount,
-                        stopReason = "userTextTargetMet",
-                    )
-                }
-            }
-            i -= 1
-        }
-        return WalkBackResult(
-            priorIdx = acceptedPriorIdx,
-            userTextTurnsFound = acceptedUserTextTurns,
-            messageCount = acceptedMessageCount,
-            stopReason = "reachedStart",
-        )
-    }
+    ): RequestContextBuilder.WalkBackResult =
+        RequestContextBuilder.walkBackUserTurnsBounded(agentHistory, anchorIdx, maxUserTextTurns, maxMessages)
 
     /**
      * Format the agent history as a plain-text transcript for the
@@ -5397,6 +5495,9 @@ class ChatViewModel(
         // provider's count for the previous one — which after a /compact or a
         // revert described a context that no longer exists.
         ensureContextFixedTokens()
+        // [T-ctx-trim-ladder] A trimmed history that fits needs neither a
+        // compaction nor the user's confirmation.
+        replanTrim("pre-send", allowCollapse = currentContextPolicy()?.first?.exhaustedOnly == true)
         val m = contextMeasurement()
         val tokens = m.measured
         if (tokens <= 0) return PreSendContextAction.PROCEED
@@ -5477,6 +5578,14 @@ class ChatViewModel(
      */
     private var pendingSendHeadless: Boolean = false
 
+    /**
+     * [T-headless-own-attachments] The files of a parked HEADLESS prompt. The
+     * user's own parked send keeps its files in the composer (where the dialog
+     * leaves them); a headless one never touches the composer, so its files
+     * travel here and go out with it after the compaction.
+     */
+    private var pendingSendAttachments: List<InputAttachment> = emptyList()
+
     private val _showCompactBeforeSendPrompt = MutableStateFlow(false)
     val showCompactBeforeSendPrompt: StateFlow<Boolean> = _showCompactBeforeSendPrompt.asStateFlow()
 
@@ -5494,12 +5603,14 @@ class ChatViewModel(
         pendingSendPrefill = emptyList()
         val headless = pendingSendHeadless
         pendingSendHeadless = false
+        val ownFiles = pendingSendAttachments
+        pendingSendAttachments = emptyList()
         viewModelScope.launch {
             val ok = awaitCompaction()
             if (!ok) {
                 AppLogger.warning(TAG, "[Context] pre-send compaction failed — sending anyway")
             }
-            sendMessage(text, skipContextCheck = true, headless = headless, prefill = prefill)
+            sendMessage(text, skipContextCheck = true, headless = headless, prefill = prefill, headlessAttachments = ownFiles)
         }
     }
 
@@ -5512,7 +5623,9 @@ class ChatViewModel(
         pendingSendPrefill = emptyList()
         val headless = pendingSendHeadless
         pendingSendHeadless = false
-        sendMessage(text, skipContextCheck = true, headless = headless, prefill = prefill)
+        val ownFiles = pendingSendAttachments
+        pendingSendAttachments = emptyList()
+        sendMessage(text, skipContextCheck = true, headless = headless, prefill = prefill, headlessAttachments = ownFiles)
     }
 
     /** Dialog dismissed — restore the text to the composer so it isn't lost. */
@@ -5523,6 +5636,7 @@ class ChatViewModel(
         pendingSendText = null
         pendingSendPrefill = emptyList()
         pendingSendHeadless = false
+        pendingSendAttachments = emptyList()
     }
 
     /**
@@ -5564,12 +5678,34 @@ class ChatViewModel(
         // The provider's count for the previous one is stale the moment a
         // compaction or offload changes the history, and the one-shot "stale"
         // flag that used to cover that only existed on this path.
+        //
+        // [T-ctx-trim-ladder] Trim first (no model call): reasoning, offload,
+        // skeleton. Collapsing whole iterations waits until a model summary had
+        // its chance, unless none is available here.
+        val compactAvailable = currentContextPolicy()?.first?.let { !it.exhaustedOnly } == true &&
+            compactionsSoFar < maxInLoopCompactions && !lastInLoopCompactionMadeNoProgress
+        replanTrim("in-loop", allowCollapse = !compactAvailable)
+        val escalate = lastTrimPlanEscalates && compactAvailable
+        if (!compactAvailable && trimmedOverHard()) {
+            AppLogger.warning(TAG, "[ctx-trim] trimmed request still over the hard watermark — stopping (context full)")
+            return InLoopContextAction.STOP
+        }
         val m = contextMeasurement()
         val tokens = m.measured
         if (tokens <= 0) return InLoopContextAction.PROCEED
         // [T-ctx-user-cap] Same resolution as the pre-send check.
         val (policy, window) = currentContextPolicy() ?: return InLoopContextAction.PROCEED
-        val verdict = policy.check(tokens, window)
+        val policyVerdict = policy.check(tokens, window)
+        // [T-ctx-trim-escalate] The re-plan above could not collapse and won
+        // back less than half the room: go to the compaction branch now, where
+        // collapse-first decides between collapsing and a model summary,
+        // instead of re-planning again a few requests later.
+        val verdict = if (policyVerdict == ContextPolicy.CheckResult.OK && escalate) {
+            AppLogger.info(TAG, "[ctx-trim] the re-plan recovered too little without collapse — escalating to the compaction branch")
+            ContextPolicy.CheckResult.NEEDS_COMPACT
+        } else {
+            policyVerdict
+        }
         logContextDecision("in-loop", m, policy.compactThreshold, window, verdict.name)
         return when (verdict) {
             ContextPolicy.CheckResult.OK -> InLoopContextAction.PROCEED
@@ -5577,6 +5713,17 @@ class ChatViewModel(
             ContextPolicy.CheckResult.NEEDS_COMPACT -> {
                 val canCompact = compactionsSoFar < maxInLoopCompactions && !lastInLoopCompactionMadeNoProgress
                 if (!canCompact) return settleWithoutCompacting(m, window, compactionsSoFar)
+                // [T-ctx-trim-ladder] Collapse first when a summary could not
+                // pay for its model call; compact only if that is not enough.
+                if (summaryWouldFreeLittle(tokens)) {
+                    trimReplanPending = true
+                    replanTrim("collapse-first", allowCollapse = true)
+                    val m2 = contextMeasurement()
+                    if (m2.measured > 0 && policy.check(m2.measured, window) == ContextPolicy.CheckResult.OK) {
+                        logContextDecision("collapse-first", m2, policy.compactThreshold, window, "OK")
+                        return InLoopContextAction.PROCEED
+                    }
+                }
                 // NOTE: deliberately NOT gated on AutoCompactPrefs. That flag
                 // governs the SEND-time decision (compact silently vs. ask
                 // first) — mid-loop there is nobody to ask, and the alternative
@@ -5589,18 +5736,23 @@ class ChatViewModel(
                     "[AutoCompact] mid-loop compact #${compactionsSoFar + 1}: $tokens / $window tokens " +
                         "(autoCompactPref=${com.openminis.app.data.AutoCompactPrefs.isEnabled()}, not a gate here)",
                 )
-                appendSystemInfo(
-                    text = "Context is filling up ($tokens / $window tokens) — compacting to continue.",
-                    iconKind = "compact",
-                )
+                // [T-silence-auto-notices] No "Context is filling up" line: the
+                // compaction's own progress row and its "N messages compacted"
+                // divider follow at once, so it only repeated them. Logged above.
                 val ok = awaitCompaction()
                 // [T-ctx-measure-outbound] A failed compaction counts as no
                 // progress (parity with iOS) and settles like one: still
                 // sendable if it fits, or once on the raw estimate.
                 if (!ok) {
                     lastInLoopCompactionMadeNoProgress = true
-                    return settleWithoutCompacting(m, window, compactionsSoFar)
+                    // [T-ctx-trim-ladder] No summary: collapse is allowed now.
+                    replanTrim("compact-failed", allowCollapse = true)
+                    if (trimmedOverHard()) return InLoopContextAction.STOP
+                    return settleWithoutCompacting(contextMeasurement(), window, compactionsSoFar)
                 }
+                // [T-ctx-trim-ladder] Bring what the summary kept down to the target.
+                trimReplanPending = true
+                replanTrim("after-compact", allowCollapse = true)
                 // [T-ctx-measure-outbound] The next iteration re-measures the
                 // compacted history, so there is no stale number to guard
                 // against (this used to need `lastTurnContextTokensStale`: two
@@ -5624,6 +5776,9 @@ class ChatViewModel(
             // it just freed). Attempting a "rescue" compaction here would
             // contradict the policy, so stop and let the user decide.
             ContextPolicy.CheckResult.EXHAUSTED -> {
+                // [T-ctx-trim-ladder] The ladder needs no model call, so it runs
+                // on these tiers too (the trim above already allowed collapse);
+                // only a request it could not bring under the window stops.
                 AppLogger.warning(
                     TAG,
                     "[AutoCompact] exhausted on a no-auto-compact tier ($tokens / $window) — stopping",
@@ -5805,6 +5960,15 @@ class ChatViewModel(
                     return@collect
                 }
                 publishContextUsage(crossingOnly = false)
+            }
+        }
+        // [T-android-thinking-row-follows-run] Same edge, for the thinking
+        // row: whichever of the ~10 exits ended the run (normal, error,
+        // cancel, a model switch during a retry), no bubble may still be
+        // marked as running once the ViewModel is not streaming.
+        viewModelScope.launch {
+            isStreaming.collect { streaming ->
+                if (!streaming) settleThinkingRows("run-ended")
             }
         }
         // [T-session-paused-badge-active-false-positive] Drive the session-list
@@ -6001,6 +6165,33 @@ class ChatViewModel(
         return runCatching { chatRepository.getSession(sid) }.getOrNull()
     }
 
+    private var storedTitleJob: Job? = null
+
+    /**
+     * [T-android-chat-title-follows-store] The top bar follows the session row.
+     *
+     * `_sessionTitle` used to be a snapshot: read once in loadSession and
+     * afterwards changed only by this ViewModel's own writes. ViewModels are
+     * kept and reused (ChatViewModelStore), so a title written by anyone else
+     * - Regenerate Title or a rename in the session list, a title arriving
+     * from sync - never reached an already-created chat: the list showed the
+     * new title, the chat's top bar the old one, until the app restarted.
+     *
+     * Started once the row exists: in loadSession for a stored session, in
+     * ensureSession for a draft. This ViewModel's own writes store first and
+     * then set the same value, so the two never disagree visibly.
+     */
+    private fun followStoredTitle(sid: String) {
+        if (sid.isEmpty()) return
+        storedTitleJob?.cancel()
+        storedTitleJob = viewModelScope.launch {
+            chatRepository.observeSessionTitle(sid).collect { row ->
+                _sessionTitle.value = SessionTitleRules.display(row.title, UNTITLED_SESSION_TITLE)
+                _sessionCategory.value = row.category
+            }
+        }
+    }
+
     /** T-chat-title-pill-edit: update title + category from the in-chat
      *  edit sheet. Mirrors SessionListViewModel.updateTitleAndCategory but
      *  also refreshes the local StateFlows so the pill updates immediately
@@ -6028,6 +6219,7 @@ class ChatViewModel(
             memoryEnabled = _memoryEnabled.value,
         )
         realSessionId = session.id
+        followStoredTitle(session.id)
         // [T-android-opencode-session-header] Hand the just-minted real id to
         // the provider built while this chat was still a draft. Without it the
         // FIRST turn of every new conversation would reach OpenCode Go with no
@@ -6168,7 +6360,7 @@ class ChatViewModel(
         }
     }.getOrDefault(false)
 
-    private fun loadSession() {
+    private fun loadSession(): kotlinx.coroutines.Job? {
         // T-android-crash-detected-halt: when CrashFrequencyDetector
         // tripped (#459, ≥3 crashes in last hour), skip the heavy
         // session-restore path entirely. Re-running the same persisted
@@ -6187,9 +6379,9 @@ class ChatViewModel(
                 "loadSession.skipped",
                 "reason=safeMode",
             )
-            return
+            return null
         }
-        viewModelScope.launch {
+        return viewModelScope.launch {
             // [T-HANG-DIAG] timing markers to localise where session entry
             // stalls. Sentinel-tagged so a single grep -v can strip them
             // when this diagnostic is removed. Declared OUTSIDE the try
@@ -6229,8 +6421,9 @@ class ChatViewModel(
 
             // Existing session: load from DB
             val session = chatRepository.getSession(sessionId) ?: return@launch
-            _sessionTitle.value = session.title ?: UNTITLED_SESSION_TITLE
+            _sessionTitle.value = SessionTitleRules.display(session.title, UNTITLED_SESSION_TITLE)
             _sessionCategory.value = session.category
+            followStoredTitle(sessionId)
             _memoryEnabled.value = session.memoryEnabled != 0
             // T239: hydrate persisted thinking-mode override. null = unset
             // (use OFF as the legacy default); non-null = explicit user
@@ -6345,6 +6538,14 @@ class ChatViewModel(
                 val transformMs: Long,
             )
             com.openminis.app.diagnostics.PerfLongCtx.step(sessionId, "db.query.begin")
+            // [T-port-user-ask-recovery] Before the transcript is read: a
+            // question that was waiting when the app was killed comes back
+            // answerable (its assistant row written so the card shows), and one
+            // answered or expired meanwhile gets its result written now.
+            ensureUserAskRecovery()
+            val resumeAfterUserAskRecovery = withContext(Dispatchers.IO) {
+                com.openminis.app.agent.userask.UserAskRecoveryCoordinator.restoreForSession(sessionId)
+            }
             val loaded = withContext(Dispatchers.IO) {
                 val tIoBeforeLoad = System.currentTimeMillis()
                 val rows = chatRepository.loadMessages(sessionId)
@@ -6494,6 +6695,21 @@ class ChatViewModel(
             // rather than by a comment nobody can enforce.
             agentHistory.clear()
             agentHistory.addAll(loaded.llmHistory)
+            // Restore the most-recent compact summary, if any, so the first
+            // outgoing turn after reopening a compacted session still sees
+            // the folded-away context via [effectiveAgentHistory].
+            //
+            // [T-ctx-reopen-compacted-glow] This must happen BEFORE
+            // publishMeasuredContextUsage() below. It used to come after it,
+            // so reopening a compacted session measured the whole uncompacted
+            // history: on device a 49% context (31047/64000) showed the amber
+            // 76% glow until the next response's usage replaced it (Alice Q3).
+            // iOS restores cachedLatestMarker first for the same reason.
+            val marker = runCatching { chatRepository.dao.latestCompactMarker(sessionId) }
+                .onFailure { Log.w(TAG, "latestCompactMarker failed: ${it.message}") }
+                .getOrNull()
+            _compactSummary.value = marker?.summary
+            _cachedLatestMarker = marker
             // [T-ctx-measure-outbound] Re-seed the size meter from this session's
             // usage rows — the calibration RATIO only, never a raw size, so a
             // compaction or revert done since the last response cannot leave the
@@ -6533,16 +6749,10 @@ class ChatViewModel(
                 "[T-HANG-DIAG] agentHistory rebuilt session=$sessionId tookMs=${tHangDiagAfterAgentHistory - tHangDiagAfterTransform}",
             )
 
-            // Restore the most-recent compact summary, if any, so the first
-            // outgoing turn after reopening a compacted session still sees
-            // the folded-away context via [effectiveAgentHistory]. Also gray
-            // out every UI message that falls before the marker's boundary —
-            // mirrors iOS Phase 2.5 restore (AIChatViewModel.swift:3360+).
-            val marker = runCatching { chatRepository.dao.latestCompactMarker(sessionId) }
-                .onFailure { Log.w(TAG, "latestCompactMarker failed: ${it.message}") }
-                .getOrNull()
-            _compactSummary.value = marker?.summary
-            _cachedLatestMarker = marker
+            // Gray out every UI message that falls before the restored
+            // marker's boundary — mirrors iOS Phase 2.5 restore
+            // (AIChatViewModel.swift:3360+). The marker itself is restored
+            // above, before the context is measured.
 
             com.openminis.app.diagnostics.PerfLongCtx.step(
                 sessionId,
@@ -6569,6 +6779,24 @@ class ChatViewModel(
                 }
                 applyCompactMarkerGraying(ordered, marker, loaded.messages, historyDbIds)
             }
+            // [T-ctx-reopen-compacted-glow] A v1 marker whose boundary row is
+            // gone is healed inside applyCompactMarkerGraying, and only the
+            // healed marker resolves an anchor; the measurement above saw the
+            // unhealed one and therefore the full history. Measure again.
+            if (marker != null && _cachedLatestMarker !== marker) {
+                withContext(Dispatchers.Main) {
+                    runCatching { publishMeasuredContextUsage() }
+                    val healed = ContextUsage.from(
+                        usedTokens = _lastTurnContextTokens.value,
+                        windowTokens = effectiveContextWindowTokens(),
+                    )
+                    contextTierTracker.reset(healed?.tier ?: ContextUsage.Tier.NORMAL)
+                }
+            }
+            // [T-android-stop-late-write] The DB rebuild itself never yields an
+            // in-flight status, but a reload into a reused view model keeps its
+            // overlay; heal both before the first frame of the reopened chat.
+            healStaleInFlightTools("load")
 
             // Cold-start interrupt detection: an agent loop that was killed by
             // the OS (or app force-quit) leaves agentHistory in one of four
@@ -6593,7 +6821,13 @@ class ChatViewModel(
             // while a request is genuinely in flight THERE. Without it, Case D
             // would light Resume on a turn that is merely still waiting.
             val trackerActive = SessionActivityTracker.isActive(activeSessionId)
-            if (lastEntry != null && !_isStreaming.value && !trackerActive) {
+            // [T-port-user-ask-recovery] A tail that is a question still
+            // waiting for the user is not interrupted: its card is the
+            // affordance, and a Resume banner would re-ask it.
+            val awaitsUserAnswer = com.openminis.app.agent.InterruptedTailDetector.awaitsUserAnswer(
+                lastEntry, com.openminis.app.agent.userask.UserAskRecoveryCoordinator.pendingToolCallIds(activeSessionId),
+            )
+            if (lastEntry != null && !_isStreaming.value && !trackerActive && !awaitsUserAnswer) {
                 val isInterrupted = when (lastEntry.role) {
                     LLMMessage.Role.USER -> {
                         val parts = lastEntry.contentParts
@@ -6675,6 +6909,12 @@ class ChatViewModel(
                     }
                     Log.i(TAG, "loadSession: detected interrupted agent loop, canResume=true (lastRole=${lastEntry.role} shape=$shape)")
                 }
+            }
+            // [T-port-user-ask-recovery] A recovered answer (or timeout) was
+            // written above: the run continues from it.
+            if (resumeAfterUserAskRecovery && _canResume.value && !_isStreaming.value) {
+                AppLogger.info(TAG, "[UserAsk] RECOVER resuming run after load sid=${activeSessionId.take(8)}")
+                resume()
             }
             } finally {
                 // T201: open the gate even on early `return@launch` (draft path,
@@ -7090,6 +7330,18 @@ class ChatViewModel(
      * No-op when nothing is in flight, so an ordinary model pick on an idle
      * conversation costs nothing.
      */
+    /**
+     * [T-android-thinking-row-follows-run] Clears the "is thinking" flags left
+     * on any bubble once nothing is running. See [ThinkingRowSettle].
+     */
+    private fun settleThinkingRows(site: String) {
+        if (_isStreaming.value) return
+        flushAllStreamingDeltas()
+        val settled = ThinkingRowSettle.settled(_messages.value) ?: return
+        _messages.value = settled
+        AppLogger.info(TAG_STREAM, "[ThinkingRow] settled a bubble still marked as running after the run ended (site=$site)")
+    }
+
     private fun cancelWorkBoundToPreviousModel(reason: String) {
         if (!_isStreaming.value && streamJob?.isActive != true) return
         val leaving = currentProvider?.model?.displayName ?: "(unresolved)"
@@ -7130,10 +7382,15 @@ class ChatViewModel(
         _autoRetryAttempt.value = 0
         _autoRetryCountdown.value = 0
         clearInlineError()
+        // [T-bgnotif-outcome] Treated as a stop of this turn (see above).
+        SessionActivityTracker.markStreamInterrupted(activeSessionId)
         SessionActivityTracker.setInactive(activeSessionId)
         if (isDraft && realSessionId.isNotEmpty() && activeSessionId != sessionId) {
             SessionActivityTracker.setInactive(sessionId)
         }
+        // [T-android-thinking-row-follows-run] The placeholder bubble of the
+        // cancelled attempt still says "thinking"; nothing below clears it.
+        settleThinkingRows("switch-model")
         // [T-android-switch-model-let-stream-finish] Deliberately NOT
         // `handleUserCancelledCleanup()`. That is Stop's per-turn closer: its
         // tool branch flips in-flight tool blocks to CANCELLED, persists
@@ -7219,7 +7476,14 @@ class ChatViewModel(
         val registry = com.openminis.app.agent.jobs.AgentJobRegistry
         val agentWork = setOf(activeSessionId, sessionId, realSessionId)
             .filter { it.isNotEmpty() }
-            .any { registry.hasAgentWork(it) }
+            .any { registry.hasAgentWork(it) } ||
+            // [T-new-limits] A sub agent's own job, PENDING included. Between
+            // the child view model's creation and its first send (up to 5 s
+            // waiting for a provider) nothing else marks it busy, and with up
+            // to 18 children starting at once a sibling's insert evicted it:
+            // the job then sat RUNNING forever and leaked its slot (Pixel 4a
+            // load test, P1).
+            helperConfig?.jobId?.let { registry.job(it)?.isActive } == true
         return EvictionGuard.hasWorkInFlight(
             isStreaming = _isStreaming.value,
             streamJobActive = streamJob?.isActive == true,
@@ -7422,6 +7686,74 @@ class ChatViewModel(
         val entryId: String,
     )
 
+    /**
+     * [T-b13-empty-fallback] The session side of moving a run to the group
+     * member [nextCandidate]: class-level provider, top bar, active entry,
+     * capsule flash and the persisted binding. Shared by the error fallback
+     * and the empty-turn fallback in the agent loop (it used to be inline in
+     * the error path). Returns true when the session binding moved, i.e. the
+     * caller's `classProviderAtSend` must become the new provider; false when
+     * the user picked another model mid-turn and the fallback stays local.
+     */
+    private fun adoptLoopFallbackBinding(
+        nextCandidate: FallbackCandidate,
+        classProviderAtSend: LLMProvider?,
+        isRealModelChange: Boolean,
+    ): Boolean {
+        val next = nextCandidate.provider
+        val userSwitchedMidTurn = !fallbackMayRebindSession(currentProvider, classProviderAtSend)
+        if (userSwitchedMidTurn) {
+            AppLogger.info(
+                TAG_STREAM,
+                "[SwitchModel] fallback to ${next.model.displayName} stays turn-local — " +
+                    "user switched model mid-turn, binding kept",
+            )
+        } else {
+            // Also update class-level provider so the next sendMessage() starts from here
+            currentProvider = next
+            // Update top bar model info + active entry. (For a same-
+            // model endpoint recovery these are no-ops on the visible
+            // model name, but still keep activeEntryId / provider name
+            // in sync with the instance we actually used.)
+            _modelName.value = next.model.displayName
+            // Update activeEntryId so model picker reflects the switch.
+            // [T-android-fallback-entry-identity] Look the entry up by
+            // its OWN id, carried on the candidate. The previous
+            // `find { it.model.id == currentProvider.model.id }` was
+            // ambiguous: two instances can expose the same model id, so
+            // it returned whichever entry sits earlier in modelEntries.
+            // Observed in the field — falling back onto
+            // `deepseek-v4-flash` served by "DeekSeak" showed the
+            // provider as "Bailian OpenAI", because Bailian also has a
+            // `deepseek-v4-flash` entry and happened to be found first.
+            // That also poisoned activeEntryId and the persisted
+            // binding, so re-entering the session resumed on the WRONG
+            // instance.
+            val newEntry = providerRepository.config.value.modelEntries.find {
+                it.id == nextCandidate.entryId
+            }
+            if (newEntry != null) {
+                _activeEntryId.value = newEntry.id
+                currentModel = newEntry.model
+                val newInstance = providerRepository.instance(newEntry.providerInstanceId)
+                if (newInstance != null) {
+                    _providerName.value = newInstance.label.ifEmpty { newEntry.model.provider }
+                }
+            }
+            // Flash ONLY on a genuine model switch — never on a
+            // transparent same-model endpoint retry.
+            if (isRealModelChange) _fallbackTrigger.value++
+            // Persist the fallback model so re-entering the session starts from here
+            val groupId = _selectedGroupId.value
+            if (groupId != null && newEntry != null) {
+                persistBinding("""{"type":"group","groupId":"$groupId","lastEntryId":"${newEntry.id}"}""")
+            } else if (newEntry != null) {
+                persistBinding("""{"type":"entry","entryId":"${newEntry.id}"}""")
+            }
+        }
+        return !userSwitchedMidTurn
+    }
+
     private fun buildFallbackProviders(primaryProvider: LLMProvider): List<FallbackCandidate> {
         // [T-android-compact-fallback] A session bound to a SINGLE entry (no
         // group) used to return an empty chain here, so "my model ran out of
@@ -7472,6 +7804,20 @@ class ChatViewModel(
      * Claude subscription was logged out, so every Anthropic entry was
      * silently filtered and fallback kept cycling OpenAI-only.
      */
+    /** [ISS-036] Identity of the provider behind [entryId], read while the entry still exists. */
+    private fun providerIdentity(entryId: String?): ProviderAvailability.Identity? {
+        if (entryId == null) return null
+        val config = providerRepository.config.value
+        val entry = config.modelEntries.find { it.id == entryId } ?: return null
+        val instance = config.instances.find { it.id == entry.providerInstanceId }
+        return ProviderAvailability.Identity(
+            entryId = entry.id,
+            instanceId = entry.providerInstanceId,
+            instanceLabel = instance?.label?.ifEmpty { null } ?: entry.model.provider,
+            modelName = entry.model.displayName,
+        )
+    }
+
     private fun unavailableGroupMembers(): List<String> {
         val groupId = _selectedGroupId.value ?: return emptyList()
         val config = providerRepository.config.value
@@ -7793,6 +8139,13 @@ class ChatViewModel(
      * of truth.
      */
     fun rerunFromToolBlock(assistantMessageId: String, blockId: String): Boolean {
+        // [stop-diag] Entry state of a re-run, before any guard can return.
+        AppLogger.info(
+            TAG_STREAM,
+            "[stop-diag] rerunFromToolBlock ENTER sid=$activeSessionId targetToolUseId=$blockId " +
+                "assistantMessageId=$assistantMessageId muted=${com.openminis.app.agent.jobs.AgentJobRegistry.mutedSnapshot().contains(activeSessionId)} " +
+                "mutedSet=${com.openminis.app.agent.jobs.AgentJobRegistry.mutedSnapshot()} isStreaming=${_isStreaming.value} canResume=${_canResume.value}",
+        )
         if (_isStreaming.value) return false
         val messages = _messages.value
         val asstIdx = messages.indexOfFirst { it.id == assistantMessageId }
@@ -8285,6 +8638,7 @@ class ChatViewModel(
             }
         }
 
+        decideUserAskExposureForRun(interactive = true)  // [T-port-user-ask]
         val baseSystemPrompt = buildSystemPrompt()
         val systemPrompt = if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
             val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
@@ -8294,10 +8648,13 @@ class ChatViewModel(
 
         // _isStreaming was already set synchronously by the caller.
         val launchedProvider = provider
+        // [T-new-limits] A sub agent child never takes a session slot (see
+        // sendMessage); captured once so acquire and release always pair.
+        val holdsSlot = helperConfig == null
         streamJob = viewModelScope.launch(Dispatchers.IO) {
             AppLogger.info(TAG_STREAM, "$label streamJob ENTER sid=$activeSessionId")
             try {
-                SessionConcurrencyManager.acquireSlot(activeSessionId)
+                if (holdsSlot) SessionConcurrencyManager.acquireSlot(activeSessionId)
                 AppLogger.debug(TAG_STREAM, "$label streamJob slot acquired")
                 SessionActivityTracker.setActive(
                     activeSessionId,
@@ -8314,6 +8671,13 @@ class ChatViewModel(
                 val fallbackProviders = buildFallbackProviders(launchedProvider)
                 try {
                     AppLogger.info(TAG_STREAM, "$label runAgentLoop CALL")
+                    // [stop-diag] Mute state as the re-run's loop starts.
+                    AppLogger.info(
+                        TAG_STREAM,
+                        "[stop-diag] $label entering runAgentLoop sid=$activeSessionId " +
+                            "muted=${com.openminis.app.agent.jobs.AgentJobRegistry.mutedSnapshot().contains(activeSessionId)} mutedSet=${com.openminis.app.agent.jobs.AgentJobRegistry.mutedSnapshot()} " +
+                            "isStreaming=${_isStreaming.value} canResume=${_canResume.value}",
+                    )
                     runAgentLoop(
                         provider = launchedProvider,
                         systemPrompt = systemPrompt,
@@ -8342,8 +8706,9 @@ class ChatViewModel(
                     // we're in the finally block of the agent loop and
                     // the stream has already flushed its last delta.
                     publishOverlayReplyExcerpt(activeSessionId)
+                    markRunOutcomeForNotification(activeSessionId)
                     SessionActivityTracker.setInactive(activeSessionId)
-                    SessionConcurrencyManager.releaseSlot(activeSessionId)
+                    if (holdsSlot) SessionConcurrencyManager.releaseSlot(activeSessionId)
                     AppLogger.info(TAG_STREAM, "$label streamJob FINALLY exit")
                 }
             } catch (e: CancellationException) {
@@ -8571,13 +8936,28 @@ class ChatViewModel(
         // [T-scheduled-tool-prefill] Runs as the first turn of whichever loop
         // eventually carries this prompt (drain or mid-loop injection).
         prefill: List<com.openminis.app.scheduled.PrefilledToolCall> = emptyList(),
+        // [T-user-ask-deferred] False for the answer to a deferred card: it is
+        // queued as USER (not gentle) but takes no staged files and closes no
+        // other question.
+        ownsComposer: Boolean = origin == QueuedPromptOrigin.USER,
+        // [T-headless-own-attachments] A prompt that does not own the composer
+        // brings its own files (a CLI / RPC prompt with attachments).
+        ownAttachments: List<InputAttachment> = emptyList(),
     ) {
         val trimmed = text.trim()
         // [T-p2-gentle-injection] Only a USER prompt owns the composer's staged
         // attachments. A programmatic prompt arriving while the user has files
         // staged must not walk off with them (and must not clear them below).
-        val pendingAttachments = if (origin == QueuedPromptOrigin.USER) _attachments.value else emptyList()
+        val pendingAttachments = PromptAttachments.of(ownsComposer, ownAttachments, _attachments.value)
         if ((trimmed.isBlank() && pendingAttachments.isEmpty()) || !_isStreaming.value) return
+        // [T-port-user-ask] A new message from the user while a question waits
+        // answers it in their own words: the card closes as replaced, the tool
+        // call returns `dismissed`, and this message becomes the next turn.
+        if (ownsComposer) {
+            com.openminis.app.agent.userask.UserAskCenter.dismissPending(
+                activeSessionId, com.openminis.app.agent.userask.UserAskDismissReason.SUPERSEDED_BY_USER_MESSAGE,
+            )
+        }
         // [T-android-image-input-preflight] Same gate as sendMessage: a queued
         // prompt drains against the same model, so an image the model cannot
         // take would fail just as surely a turn later.
@@ -8612,7 +8992,7 @@ class ChatViewModel(
         val chatMsg = ChatMessage(
             id = "queued_msg_${prompt.id}",
             role = "user",
-            content = trimmed,
+            content = userBubbleText(trimmed),
             imageUris = imageUris,
             attachmentNames = attachmentNames,
             attachmentUris = attachmentUris,
@@ -8620,7 +9000,7 @@ class ChatViewModel(
             queuedPromptId = prompt.id,
         )
         _messages.value = _messages.value + chatMsg
-        if (origin == QueuedPromptOrigin.USER) clearAttachments()
+        if (PromptAttachments.clearsComposer(ownsComposer)) clearAttachments()
         Log.i(TAG, "Enqueued prompt (${trimmed.length}ch, ${pendingAttachments.size} attachments, origin=$origin), queue=${_promptQueue.value.size}")
     }
 
@@ -8644,11 +9024,10 @@ class ChatViewModel(
      * [T-android-queued-message-interrupt-on-toolclose] Mid-tool-loop
      * interrupt: take everything in [_promptQueue] right now, finalize the
      * just-finished assistant bubble in the UI, persist a fresh user
-     * message carrying the queued text + attachments, append an assistant
-     * "bridge" entry into [agentHistory] (so Anthropic's
-     * mergeConsecutiveSameRole doesn't fold the queued user msg into the
-     * preceding tool_result), and spawn a new assistant placeholder for
-     * the next iteration's response.
+     * message carrying the queued text + attachments (plus, in agentHistory
+     * only, a <system-reminder> note that the user interrupted a task —
+     * [T-bridge-to-reminder], formerly an assistant "bridge" entry), and spawn
+     * a new assistant placeholder for the next iteration's response.
      *
      * Returns an [InjectedTurn] carrying the new assistantId (which the
      * caller swaps into its loop-scope `assistantId` before `continue`-ing
@@ -8657,9 +9036,9 @@ class ChatViewModel(
      * dispatch in that case).
      *
      * Mirrors iOS `injectQueuedPromptsAsNewTurn`
-     * (AIChatViewModel.swift:2794). Unlike iOS we don't persist the bridge
-     * entry — its sole purpose is to break up the consecutive-user run for
-     * the next API call; chat history reconstruction would just hide it.
+     * (AIChatViewModel+PromptQueue.swift). Like the old bridge, the note is
+     * not persisted on Android; iOS keeps it in the stored row, stripped
+     * from display.
      */
     /**
      * [T-scheduled-preemptive-insert] [envelopeText] rewritten as a mid-loop
@@ -8695,6 +9074,9 @@ class ChatViewModel(
         // A scheduled fire travels alone (see nextInsertBatch), so the batch
         // is either exactly one of those or has none.
         val scheduledInsert = queued.size == 1 && queued[0].isScheduledFire
+        // [T-loop-reminder-scheduled-exempt] A queued fire slipped in at a tool
+        // boundary: exempt its poll now that it is about to run.
+        if (scheduledInsert) toolLoopDetector.exemptNextCallForScheduledFire()
         // [T-queue-dequeue-after-persist] The prompts stay ON the queue until
         // their user row is persisted (see the dequeue after appendMessage
         // below). This used to empty the queue here, ahead of four suspension
@@ -8744,25 +9126,17 @@ class ChatViewModel(
         val combinedAttachments = queued.flatMap { it.attachments }
         val prepared = prepareUserAttachments(combinedAttachments, sid)
 
-        val combinedParts = mutableListOf<AgentContentPart>()
-        val combinedText = StringBuilder()
-        for (prompt in queued) {
-            // [T-scheduled-preemptive-insert] A scheduled fire landing mid-loop
-            // is re-wrapped as an INSERTED envelope, whose reminder tells the
-            // model where this turn came from and to resume its plan after.
-            // Persisted as such, so a reloaded session shows the model the
-            // same thing it saw live.
-            val text = if (scheduledInsert) insertedScheduledEnvelope(prompt.text) else prompt.text
-            if (text.isNotEmpty()) {
-                if (combinedText.isNotEmpty()) combinedText.append("\n\n")
-                combinedText.append(text)
-                combinedParts.add(AgentContentPart.Text(text))
-            }
-        }
-        prepared.imageParts.forEachIndexed { idx, part ->
-            combinedParts.addModelImage(part, prepared.imageUploadPaths.getOrNull(idx), prepared.imageModelNotes.getOrNull(idx))
-        }
-        prepared.attachedFilesXml?.let { combinedParts.add(AgentContentPart.Text(it)) }
+        // [T-scheduled-preemptive-insert] A scheduled fire landing mid-loop
+        // is re-wrapped as an INSERTED envelope, whose reminder tells the
+        // model where this turn came from and to resume its plan after.
+        // Persisted as such, so a reloaded session shows the model the
+        // same thing it saw live.
+        val queuedTurn = ChatAttachmentIngest.queuedTurn(
+            queued.map { prompt -> if (scheduledInsert) insertedScheduledEnvelope(prompt.text) else prompt.text },
+            prepared,
+            ::visionPlaceholderFor,
+        )
+        val combinedParts = queuedTurn.parts
 
         // Guard: every queued prompt produced no content (no text, no
         // image). An empty user msg is a 400 from every provider. Skip —
@@ -8777,30 +9151,19 @@ class ChatViewModel(
             return null
         }
 
-        // Bridge entry into agentHistory ONLY (not persisted). The tail
-        // before this call is user(tool_result); without the bridge the
-        // queued user message becomes two consecutive user roles and the
-        // provider merges them — exactly the regression iOS hit at #579.
-        // Empty/whitespace-only bridge text would itself be merged out by
-        // some sanitizers; keep a small visible string for parity with iOS.
-        // [T-scheduled-preemptive-insert] A scheduled fire is not the user
-        // changing course, so it gets its own bridge: a pause to handle the
-        // task, then back to the plan. A user follow-up keeps the original
-        // wording, which leaves "should the prior task continue?" open.
-        // Both texts live in ChatMessage, whose isInternalBridge keeps them
-        // out of the chat UI.
-        val bridgeText = if (scheduledInsert) ChatMessage.SCHEDULED_INSERT_BRIDGE_TEXT else ChatMessage.INTERNAL_BRIDGE_TEXT
-        agentHistory.add(
-            LLMMessage(
-                role = LLMMessage.Role.ASSISTANT,
-                content = bridgeText,
-                contentParts = listOf(AgentContentPart.Text(bridgeText)),
-            ),
-        )
+        // [T-bridge-to-reminder] No assistant bridge any more. The tail
+        // before this call is user(tool_result); the queued message used to be
+        // preceded by an assistant bridge so the provider would not merge the
+        // two user rows (#579). That assistant line taught the model to write
+        // it itself (iOS sid AA40533E). Now the note rides at the END of the
+        // queued message as a <system-reminder> (agentHistory only, like the
+        // bridge was): Anthropic merges the two user rows with the tool_result
+        // first, OpenAI-style APIs send tool → user. A scheduled fire needs no
+        // extra note: its inserted envelope already says to resume the task.
 
         // Persist the queued user message as its own DB row + append to
         // agentHistory so the next API call carries it.
-        val userText = combinedText.toString()
+        val userText = queuedTurn.text
         // [T-android-paste-mediaref] Queued prompts carry markers too.
         //
         // sendMessage hands off to enqueuePrompt whenever a turn is already
@@ -8823,23 +9186,13 @@ class ChatViewModel(
         // emptying: a prompt enqueued during the window above stays queued.
         _promptQueue.value = _promptQueue.value.filterNot { it.id in queuedIds }
         agentHistory.add(
-            LLMMessage(
-                role = LLMMessage.Role.USER,
-                // Expanded for the model; the persisted row above stays small.
-                content = queuedPaste?.modelText ?: userText,
+            ChatAttachmentIngest.queuedHistoryMessage(
+                userText = userText,
+                pastedModelText = queuedPaste?.modelText,
                 imageParts = prepared.imageParts,
-                contentParts = queuedPaste?.let { p ->
-                    // Replace the whole LEADING RUN of text parts with the one
-                    // expanded body, then keep everything after it.
-                    //
-                    // Not "index 0": each queued prompt contributes its own text
-                    // part, and combinedText joined them with blank lines —
-                    // p.modelText is the expansion of that join, so it stands
-                    // for all of them. The image and <user-attached-files> parts
-                    // that follow must survive untouched.
-                    val bodyCount = combinedParts.takeWhile { it is AgentContentPart.Text }.size
-                    listOf(AgentContentPart.Text(p.modelText)) + combinedParts.drop(bodyCount)
-                } ?: combinedParts,
+                combinedParts = combinedParts,
+                // [T-bridge-to-reminder] The interrupt note, after the text.
+                interruptReminder = if (scheduledInsert) null else ChatMessage.QUEUED_INTERRUPT_REMINDER_TEXT,
                 dbMessageId = userEntity.id,
             ),
         )
@@ -8873,7 +9226,7 @@ class ChatViewModel(
             val queuedUserMsg = ChatMessage(
                 id = userEntity.id,
                 role = "user",
-                content = userText,
+                content = userBubbleText(userText),
                 imageUris = prepared.imageUris,
                 attachmentNames = prepared.attachmentNames,
                 attachmentUris = prepared.nonImageUris,
@@ -8926,6 +9279,9 @@ class ChatViewModel(
             // [T-scheduled-preemptive-insert] One scheduled fire per round,
             // never merged; everything else merges as before.
             val queued = QueuedPromptBatching.nextDrainBatch(_promptQueue.value)
+            // [T-loop-reminder-scheduled-exempt] A queued fire drained as its
+            // own turn (fires travel alone): exempt its poll.
+            if (queued.any { it.isScheduledFire }) toolLoopDetector.exemptNextCallForScheduledFire()
             // [T-queue-dequeue-after-persist] Same as injectQueuedPromptsAsNewTurn:
             // the prompts leave the queue (and their bubbles flip to "sent") only
             // after appendMessage below, so a Stop during the suspending persist
@@ -8945,21 +9301,10 @@ class ChatViewModel(
             // image emit "[attached image: <path>]" + ImageData, finally the
             // <user-attached-files> XML. Keeps caption adjacent to image and
             // lets the agent re-read the file via read_image.
-            val combinedParts = mutableListOf<AgentContentPart>()
-            val combinedText = StringBuilder()
-            for (prompt in queued) {
-                if (prompt.text.isNotEmpty()) {
-                    if (combinedText.isNotEmpty()) combinedText.append("\n\n")
-                    combinedText.append(prompt.text)
-                    combinedParts.add(AgentContentPart.Text(prompt.text))
-                }
-            }
-            prepared.imageParts.forEachIndexed { idx, part ->
-                combinedParts.addModelImage(part, prepared.imageUploadPaths.getOrNull(idx), prepared.imageModelNotes.getOrNull(idx))
-            }
-            prepared.attachedFilesXml?.let { combinedParts.add(AgentContentPart.Text(it)) }
+            val queuedTurn = ChatAttachmentIngest.queuedTurn(queued.map { it.text }, prepared, ::visionPlaceholderFor)
+            val combinedParts = queuedTurn.parts
 
-            val userText = combinedText.toString()
+            val userText = queuedTurn.text
             // [T-android-paste-mediaref] Same marker handling as the mid-loop
             // inject path above — see the note there for why queued prompts
             // need it at all.
@@ -8994,14 +9339,13 @@ class ChatViewModel(
                 } else m
             }
 
-            agentHistory.add(LLMMessage(
-                role = LLMMessage.Role.USER,
-                content = drainPaste?.modelText ?: userText,
+            agentHistory.add(ChatAttachmentIngest.queuedHistoryMessage(
+                userText = userText,
+                pastedModelText = drainPaste?.modelText,
                 imageParts = prepared.imageParts,
-                contentParts = drainPaste?.let { p ->
-                    val bodyCount = combinedParts.takeWhile { it is AgentContentPart.Text }.size
-                    listOf(AgentContentPart.Text(p.modelText)) + combinedParts.drop(bodyCount)
-                } ?: combinedParts,
+                combinedParts = combinedParts,
+                interruptReminder = null,
+                dbMessageId = null,
             ))
 
             try {
@@ -9026,6 +9370,65 @@ class ChatViewModel(
                 break
             }
         }
+    }
+
+    /**
+     * Provider instances edited in Settings since this view model last looked,
+     * by id. [currentProvider] is built when the chat opens or a model is
+     * picked and then reused turn after turn, so an edit made meanwhile -
+     * switching the API format between Chat Completions and Responses, the
+     * base URL, the User-Agent - never reached an open chat: its requests kept
+     * going to the old endpoint until the provider was deleted and re-added
+     * (moyan, 10-20: "model does not support /v1/chat/completions" after
+     * switching to Responses). Filled by [watchProviderEdits] and, for a new
+     * or removed API key, [providerKeyWatch]; consumed by
+     * [rebuildProviderIfEdited] before a turn starts.
+     */
+    @Volatile private var pendingProviderEdits: Set<String> = emptySet()
+    private var providerInstancesSeen: Map<String, com.openminis.app.data.model.ProviderInstance>? = null
+
+    private fun watchProviderEdits(): kotlinx.coroutines.Job =
+        viewModelScope.launch {
+            providerRepository.config.collect { cfg ->
+                val now = cfg.instances.associateBy { it.id }
+                val before = providerInstancesSeen
+                providerInstancesSeen = now
+                if (before == null) return@collect
+                val edited = editedProviderInstanceIds(before, now)
+                if (edited.isNotEmpty()) pendingProviderEdits = pendingProviderEdits + edited
+            }
+        }
+
+    private val providerEditWatch = watchProviderEdits()
+
+    /** [FIX-261025-12] A saved / removed API key counts as an edit of its instance. */
+    private val providerKeyWatch = viewModelScope.launch {
+        com.openminis.app.data.repository.ProviderCredentialEdits.ids.collect { id ->
+            pendingProviderEdits = pendingProviderEdits + id
+        }
+    }
+
+    /**
+     * Rebuild [currentProvider] from the active model entry when its provider
+     * instance was edited since it was built. Called where a turn takes
+     * [currentProvider] (send, retry, resume); never mid-stream.
+     */
+    private fun rebuildProviderIfEdited() {
+        if (pendingProviderEdits.isEmpty() || _isStreaming.value) return
+        val entryId = _activeEntryId.value ?: return
+        val entry = providerRepository.config.value.modelEntries.find { it.id == entryId } ?: return
+        val id = entry.providerInstanceId
+        if (id !in pendingProviderEdits) return
+        pendingProviderEdits = pendingProviderEdits - id
+        val instance = providerRepository.instance(id) ?: return
+        if (!providerRepository.hasAnyCredential(instance)) return
+        val apiKey = providerRepository.usableApiKey(instance) ?: ""
+        currentProvider = ProviderFactory.create(
+            instance, apiKey, currentModel ?: entry.model, context,
+            sessionId = activeSessionId, overrides = entry.overrides,
+        )
+        _providerName.value = instance.label.ifEmpty { entry.model.provider }
+        AppLogger.info(TAG, "[provider-edit] rebuilt provider for edited instance ${id.take(8)} (responses=${instance.useResponsesAPI})")
     }
 
     fun sendMessage(text: String) {
@@ -9073,8 +9476,11 @@ class ChatViewModel(
         // [T-scheduled-tool-prefill] Tool calls executed as the loop's first
         // turn, before any model request (a scheduled task's prefilled call).
         prefill: List<com.openminis.app.scheduled.PrefilledToolCall> = emptyList(),
+        // [T-headless-own-attachments] The prompt's own files (CLI / RPC). The
+        // user's staged composer files are never read, sent or cleared.
+        attachments: List<InputAttachment> = emptyList(),
     ): SubmitOutcome =
-        sendMessage(text, skipContextCheck = false, headless = true, prefill = prefill)
+        sendMessage(text, skipContextCheck = false, headless = true, prefill = prefill, headlessAttachments = attachments)
 
     /**
      * @param skipContextCheck set by the pre-send context dialog's own actions,
@@ -9088,11 +9494,21 @@ class ChatViewModel(
         skipContextCheck: Boolean,
         headless: Boolean = false,
         prefill: List<com.openminis.app.scheduled.PrefilledToolCall> = emptyList(),
+        // [T-user-ask-deferred] The answer to a deferred card (submitUserAskAnswer).
+        userAskAnswer: Boolean = false,
+        // [T-headless-own-attachments] A headless prompt's own files.
+        headlessAttachments: List<InputAttachment> = emptyList(),
     ): SubmitOutcome {
         // [T-android-mute-reset-on-drain] Headless submits (submitPrompt, a
         // scheduled fire into an idle chat) reach this funnel without the
         // public sendMessage, and are new work too.
         com.openminis.app.agent.jobs.AgentJobRegistry.clearDelegationMute(activeSessionId)
+        // [T-headless-own-attachments] A prompt nobody typed (scheduled fire,
+        // CLI / RPC, a sub agent's result or progress report, a steer nudge,
+        // a deferred answer) neither reads nor clears the composer: its text
+        // is an argument, and so are its files. Before, the idle path took the
+        // user's staged files into the background turn and cleared them.
+        val promptAttachments = PromptAttachments.of(ownsComposer = !headless, own = headlessAttachments, composer = _attachments.value)
         // [T-android-paste-mediaref] `[Pasted#N]` markers are NOT expanded here
         // any more.
         //
@@ -9117,14 +9533,22 @@ class ChatViewModel(
             val before = _promptQueue.value.size
             // [T-p2-gentle-injection] A headless send is PROGRAMMATIC: it waits
             // for the running loop to finish instead of interrupting it.
-            enqueuePrompt(text, if (headless) QueuedPromptOrigin.PROGRAMMATIC else QueuedPromptOrigin.USER, prefill)
+            // [T-user-ask-deferred] The user's answer is not gentle: it is
+            // queued like their own follow-up, without the composer's files.
+            enqueuePrompt(
+                text,
+                if (headless && !userAskAnswer) QueuedPromptOrigin.PROGRAMMATIC else QueuedPromptOrigin.USER,
+                prefill,
+                ownsComposer = !headless,
+                ownAttachments = if (headless) headlessAttachments else emptyList(),
+            )
             return if (_promptQueue.value.size == before + 1) SubmitOutcome.Queued
             else SubmitOutcome.Rejected("enqueue_declined")
         }
         // T180: allow attachments-only sends (no caption). Mirrors iOS, where
         // an empty text + non-empty attachments still produces a valid user
         // message. Without this an image-only "look at this" send dropped.
-        if (trimmed.isBlank() && _attachments.value.isEmpty()) return SubmitOutcome.Rejected("empty_prompt")
+        if (trimmed.isBlank() && promptAttachments.isEmpty()) return SubmitOutcome.Rejected("empty_prompt")
         // [T-android-image-input-preflight] Refuse to send images to a model
         // that does not accept them — the request would only come back as an
         // upstream 400 (or have its pixels silently swapped for a placeholder).
@@ -9148,6 +9572,7 @@ class ChatViewModel(
                     pendingSendText = text
                     pendingSendPrefill = prefill
                     pendingSendHeadless = headless
+                    pendingSendAttachments = if (headless) headlessAttachments else emptyList()
                     // [T-android-programmatic-prompt-keeps-draft] Only the
                     // user's own send owns the composer. A headless prompt (a
                     // scheduled fire, a sub-agent callback, the sessions CLI)
@@ -9186,6 +9611,7 @@ class ChatViewModel(
         // inside the send button's tap closure).
         if (_hasInjectedShareContent.value) _hasInjectedShareContent.value = false
 
+        rebuildProviderIfEdited()
         val initialProvider = currentProvider
         if (initialProvider == null) {
             _error.value = "No provider configured"
@@ -9195,8 +9621,19 @@ class ChatViewModel(
 
         _error.value = null
 
-        val currentAttachments = _attachments.value
-        clearAttachments()
+        // [T-headless-own-attachments] Only the user's own send takes (and
+        // clears) the composer's files; a headless prompt sends its own.
+        val currentAttachments = promptAttachments
+        if (PromptAttachments.clearsComposer(ownsComposer = !headless)) clearAttachments()
+
+        // [T-loop-reminder-scheduled-exempt] A scheduled fire starting a turn
+        // on an idle session: its poll is an expected repeat, not a loop. (A
+        // queued fire is exempted where it is taken off the queue instead —
+        // exempting at enqueue time would let the RUNNING turn's next call
+        // consume it.)
+        if (com.openminis.app.scheduled.ScheduledTaskMarker.parse(text) != null) {
+            toolLoopDetector.exemptNextCallForScheduledFire()
+        }
 
         // T145: claim _isStreaming synchronously so a rapid second tap can't
         // slip past the entry guard during DB/OAuth setup. See retryFromMessage.
@@ -9223,7 +9660,13 @@ class ChatViewModel(
         // edited text as a fresh user turn. Snapshot + clear the id here so
         // any error in the truncate path doesn't leave the composer stuck
         // in edit mode.
-        val editingId = _editingMessageId.value
+        //
+        // [T-headless-keeps-edit-mode] Edit mode belongs to the composer, like
+        // its text and files: a prompt nobody typed (scheduled fire, sub agent
+        // result, CLI / RPC, a deferred answer) neither consumes it nor
+        // truncates the conversation from the message being edited. The user
+        // stays in edit mode and their own next send applies the edit.
+        val editingId = if (headless) null else _editingMessageId.value
         if (editingId != null) _editingMessageId.value = null
 
         viewModelScope.launch {
@@ -9245,6 +9688,16 @@ class ChatViewModel(
             }
             // Ensure session exists in DB (creates on first message for draft sessions)
             val activeSessionId = ensureSession()
+            // [T-port-user-ask-recovery] A question restored after a kill waits
+            // with no run behind it: this message answers it in the user's own
+            // words. Its result row must land before this message, so it is
+            // written now and mirrored into the in-memory history.
+            if (!headless) {
+                com.openminis.app.agent.userask.UserAskRecoveryCoordinator.supersedeRecovered(activeSessionId)?.let { parts ->
+                    agentHistory.add(LLMMessage(role = LLMMessage.Role.USER, content = "", contentParts = parts))
+                }
+                supersedeDeferredAsks(activeSessionId)
+            }
 
             if (editingId != null) {
                 truncateBeforeEdit(editingId)
@@ -9282,11 +9735,11 @@ class ChatViewModel(
                 // file cards now stand for them. Only ids that actually
                 // resolved are removed, so a literal the user typed for an
                 // unknown id survives as text, matching how it is persisted.
-                content = pasted?.let { p ->
+                content = userBubbleText(pasted?.let { p ->
                     p.consumedIds.fold(trimmed) { acc, id ->
                         acc.replace(PastedText.placeholderFor(id), "")
                     }.trim()
-                } ?: trimmed,
+                } ?: trimmed),
                 imageUris = prepared.imageUris,
                 // Pasted blocks render exactly like attached documents: append
                 // them to the non-image suffix, preserving the
@@ -9316,19 +9769,9 @@ class ChatViewModel(
             // session reload, compaction) sees the identical text.
             val modelBody = pasted?.modelText ?: trimmed
 
-            val userContentParts = mutableListOf<AgentContentPart>()
-            if (modelBody.isNotEmpty()) userContentParts.add(AgentContentPart.Text(modelBody))
-            imageParts.forEachIndexed { idx, part ->
-                userContentParts.addModelImage(part, prepared.imageUploadPaths.getOrNull(idx), prepared.imageModelNotes.getOrNull(idx))
-            }
-            prepared.attachedFilesXml?.let { userContentParts.add(AgentContentPart.Text(it)) }
-
-            agentHistory.add(LLMMessage(
-                role = LLMMessage.Role.USER,
-                content = modelBody,
-                imageParts = imageParts,
-                contentParts = userContentParts,
-                dbMessageId = persistedUser.id,
+            agentHistory.add(ChatAttachmentIngest.liveUserTurn(
+                modelBody, imageParts, prepared.imageUploadPaths, prepared.imageModelNotes,
+                prepared.attachedFilesXml, persistedUser.id, ::visionPlaceholderFor,
             ))
 
             // Refresh OAuth token if needed before sending (mirrors iOS validAccessToken)
@@ -9366,6 +9809,7 @@ class ChatViewModel(
 
             // Build system prompt
             // Anthropic OAuth requires the Claude Code prefix in the system prompt
+            decideUserAskExposureForRun(interactive = !headless, userAskAnswer = userAskAnswer)  // [T-port-user-ask]
             val baseSystemPrompt = buildSystemPrompt()
             val systemPrompt = if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
                 val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
@@ -9375,6 +9819,9 @@ class ChatViewModel(
 
             // Start agent loop with fallback. _isStreaming was set synchronously at top.
             streamLaunched = true
+            // [T-new-limits] A sub agent child never takes a session slot;
+            // captured once so the acquire and the release below always pair.
+            val holdsSlot = helperConfig == null
             streamJob = launch(Dispatchers.IO) {
                 AppLogger.info(TAG_STREAM, "send streamJob ENTER sid=$activeSessionId")
                 try {
@@ -9390,9 +9837,11 @@ class ChatViewModel(
                     // Acquire concurrency slot (suspends if at max).
                     // [T-p1-delegate-task] Helpers bypass the pool (design §4.4):
                     // the parent awaiting them already holds a slot, so routing
-                    // children through the same 5 would deadlock every parent
-                    // behind its own helpers. AgentJobRegistry caps helpers at 3.
-                    if (helperConfig == null) SessionConcurrencyManager.acquireSlot(activeSessionId)
+                    // children through the same pool would deadlock every parent
+                    // behind its own helpers. [T-new-limits] AgentJobRegistry caps
+                    // helpers at MAX_CONCURRENT_CHILD_JOBS_PER_PARENT per parent;
+                    // sessions get SessionConcurrencyManager.MAX_CONCURRENT (6).
+                    if (holdsSlot) SessionConcurrencyManager.acquireSlot(activeSessionId)
                     AppLogger.debug(TAG_STREAM, "send streamJob slot acquired")
                     SessionActivityTracker.setActive(
                     activeSessionId,
@@ -9453,8 +9902,9 @@ class ChatViewModel(
                         // we're in the finally block of the agent loop and
                         // the stream has already flushed its last delta.
                         publishOverlayReplyExcerpt(activeSessionId)
+                        markRunOutcomeForNotification(activeSessionId)
                         SessionActivityTracker.setInactive(activeSessionId)
-                        if (helperConfig == null) SessionConcurrencyManager.releaseSlot(activeSessionId)
+                        if (holdsSlot) SessionConcurrencyManager.releaseSlot(activeSessionId)
                         AppLogger.info(TAG_STREAM, "send streamJob FINALLY exit")
                     }
                 } catch (e: CancellationException) {
@@ -9479,6 +9929,28 @@ class ChatViewModel(
             }
         }
         return SubmitOutcome.Sent
+    }
+
+    /**
+     * [T-bgnotif-outcome] Tell the tracker how this run ended before it is
+     * deactivated, so a background notification does not call an unfinished
+     * turn "completed": an error shown on this turn's reply is a failure
+     * (setInlineError: dropped stream, max tokens, refusal, empty reply, DSML
+     * give-up), a resumable stop (context full, those same endings) is
+     * paused. A thrown error has already called markStreamError.
+     */
+    private fun markRunOutcomeForNotification(sid: String) {
+        val outcome = com.openminis.app.notification.BackgroundTurnOutcome.decide(
+            streamError = false,
+            turnError = com.openminis.app.notification.BackgroundTurnOutcome.currentTurnError(_messages.value) != null,
+            canResume = _canResume.value,
+            userStopped = false,
+        )
+        when (outcome) {
+            com.openminis.app.notification.BackgroundTurnOutcome.FAILED -> SessionActivityTracker.markStreamError(sid)
+            com.openminis.app.notification.BackgroundTurnOutcome.INTERRUPTED -> SessionActivityTracker.markStreamInterrupted(sid)
+            com.openminis.app.notification.BackgroundTurnOutcome.COMPLETED -> Unit
+        }
     }
 
     /** Set error inline on the last assistant message (iOS: message.error).
@@ -9534,20 +10006,6 @@ class ChatViewModel(
             // No assistant message yet — fall back to top-level error
             _error.value = safeError
         }
-    }
-
-    /**
-     * Show a transient error on the last assistant message while keeping isStreaming=true
-     * so the "thinking" indicator and streaming UI stay intact during auto-retry countdowns.
-     * Mirrors iOS streamWithAutoRetry: `chatMessage?.error = desc` without dropping the loop.
-     */
-    private fun setTransientInlineError(errorText: String) {
-        val msgs = _messages.value.toMutableList()
-        val lastAssistantIdx = msgs.indexOfLast { it.role == "assistant" }
-        if (lastAssistantIdx < 0) return
-        val msg = msgs[lastAssistantIdx]
-        msgs[lastAssistantIdx] = msg.copy(error = errorText)
-        _messages.value = msgs
     }
 
     /** Clear any inline error on the last assistant message (used after successful retry). */
@@ -9682,9 +10140,17 @@ class ChatViewModel(
             }
         }
 
+        rebuildProviderIfEdited()
         val initialProvider = currentProvider ?: return
         var provider: LLMProvider = initialProvider
         _error.value = null
+        // [T-android-model-refusal] A retry is a new run: drop any pending
+        // Resume (iOS retry() sets canResume = false). The refusal branch sets
+        // it, and without this a successful retry left the orange Resume
+        // banner under the finished reply. Every other entry that starts a
+        // run (send, retryFromMessage, rerunFromToolBlock, resume,
+        // resumeQueueAfterCancel) already clears it.
+        _canResume.value = false
 
         // T145: claim _isStreaming synchronously — see retryFromMessage for rationale.
         AppLogger.info(TAG_STREAM, "retryLast _isStreaming=true (sync, sid=$activeSessionId)")
@@ -9744,6 +10210,7 @@ class ChatViewModel(
                 }
             }
 
+            decideUserAskExposureForRun(interactive = true)  // [T-port-user-ask]
             val baseSystemPrompt = buildSystemPrompt()
             val systemPrompt = if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
                 val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
@@ -9753,10 +10220,12 @@ class ChatViewModel(
 
             // _isStreaming was already set synchronously at the top.
             streamLaunched = true
+            // [T-new-limits] Children never take a session slot; captured once.
+            val holdsSlot = helperConfig == null
             streamJob = launch(Dispatchers.IO) {
                 AppLogger.info(TAG_STREAM, "retryLast streamJob ENTER sid=$activeSessionId")
                 try {
-                    SessionConcurrencyManager.acquireSlot(activeSessionId)
+                    if (holdsSlot) SessionConcurrencyManager.acquireSlot(activeSessionId)
                     AppLogger.debug(TAG_STREAM, "retryLast streamJob slot acquired")
                     SessionActivityTracker.setActive(
                     activeSessionId,
@@ -9801,8 +10270,9 @@ class ChatViewModel(
                         // we're in the finally block of the agent loop and
                         // the stream has already flushed its last delta.
                         publishOverlayReplyExcerpt(activeSessionId)
+                        markRunOutcomeForNotification(activeSessionId)
                         SessionActivityTracker.setInactive(activeSessionId)
-                        SessionConcurrencyManager.releaseSlot(activeSessionId)
+                        if (holdsSlot) SessionConcurrencyManager.releaseSlot(activeSessionId)
                         AppLogger.info(TAG_STREAM, "retryLast streamJob FINALLY exit")
                     }
                 } catch (e: CancellationException) {
@@ -10469,6 +10939,36 @@ class ChatViewModel(
         // loop's first turn. See [pendingScriptedTurn] below.
         prefill: List<com.openminis.app.scheduled.PrefilledToolCall> = emptyList(),
     ) {
+        // [T-android-stop-late-write] Bracket the loop with its turn token.
+        // Stop bumps the token (cancelStream -> liveTurn.cancel), and the end
+        // here clears it only while it is still this loop's own, so a resume
+        // that already started the next turn keeps its token.
+        val turnGen = liveTurn.begin()
+        try {
+            runAgentLoopBody(provider, systemPrompt, fallbackProviders, fallbackStrategy, prefill, turnGen)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            // [stop-diag] Logged and rethrown; behaviour unchanged.
+            AppLogger.info(TAG_STREAM, "[stop-diag] runAgentLoop EXIT reason=cancelled sid=$activeSessionId cause=${ce.message}")
+            throw ce
+        } catch (t: Throwable) {
+            AppLogger.warning(TAG_STREAM, "[stop-diag] runAgentLoop EXIT reason=error sid=$activeSessionId error=${t.javaClass.simpleName}: ${t.message?.take(200)}")
+            throw t
+        } finally {
+            liveTurn.end(turnGen)
+            // [T-user-ask-deferred-live-batch] A batch this run never stored
+            // (stopped, failed) no longer holds back its deferred asks.
+            com.openminis.app.agent.userask.UserAskCenter.releaseUnstoredDeferred(activeSessionId)
+        }
+    }
+
+    private suspend fun runAgentLoopBody(
+        provider: LLMProvider,
+        systemPrompt: String?,
+        fallbackProviders: List<FallbackCandidate>,
+        fallbackStrategy: com.openminis.app.data.model.FallbackStrategy,
+        prefill: List<com.openminis.app.scheduled.PrefilledToolCall>,
+        turnGen: Long,
+    ) {
         AppLogger.info(TAG_STREAM, "runAgentLoop ENTER provider=${provider.javaClass.simpleName} historySize=${agentHistory.size}")
         // [T-android-mem-probe-trust] Send-path context shape. The existing
         // `messages-shape` probe only runs on session LOAD, so the 2026-08-15
@@ -10528,6 +11028,7 @@ class ChatViewModel(
         // toolInputMap)` continues to slice only the current turn's blocks
         // (turnStartBlockIndex is captured at iteration start to 0 after reset).
         var assistantId = "assistant_${System.currentTimeMillis()}"
+        liveTurn.markAssistant(turnGen, assistantId)
         // [T-android-concurrent-tools] Synchronized because the tool-dispatch
         // loop now runs its calls concurrently on Dispatchers.IO, and each of
         // them updates ITS OWN element here (located by tool_use id, set by
@@ -10650,6 +11151,17 @@ class ChatViewModel(
         // failure streak starts from the full group.
         val triedEntryIds = mutableSetOf<String>()
         _activeEntryId.value?.let { triedEntryIds.add(it) }
+        // [T-b13-empty-fallback] Members that came back EMPTY in the current
+        // empty streak. Kept apart from triedEntryIds because an empty turn
+        // streams cleanly, and a clean stream resets that set: without this an
+        // A-empty / B-empty group would bounce A, B, A, B... Cleared by the
+        // first turn with content and by a user model switch.
+        val emptyStreakEntryIds = mutableSetOf<String>()
+        // [ISS-036, T-provider-live-check] Which entry / provider instance the
+        // turn-local `currentProvider` was built for, so every request can ask
+        // whether that provider still exists and is enabled. Kept as an
+        // identity because removing a provider deletes its entries too.
+        var currentIdentity = providerIdentity(_activeEntryId.value)
         // [T-android-context-overflow-selfheal] (GH#352) One self-heal per run.
         // The heal offloads the single biggest part; if the request still
         // overflows after that, retrying the same move would just strip the
@@ -10680,9 +11192,11 @@ class ChatViewModel(
         // Set false by every break path that *isn't* "the model wanted to
         // keep going past MAX_AGENT_TURNS". Without this flag the post-loop
         // tail can't tell the runaway path apart from a normal turn ending,
-        // which previously slapped a fake "200 turns hit" error on every
+        // which previously slapped a fake "MAX_AGENT_TURNS hit" error on every
         // ordinary completion.
         var loopExitedNormally = false
+        // [stop-diag] Why the turn loop ended; set right before each break.
+        var stopDiagExit = "turn-cap"
         // [T-android-auto-compact-inloop] How many times the in-loop guard has
         // compacted during THIS runAgentLoop. Bounds compact-thrash: once the
         // cap is hit, a still-over-threshold history stops the turn rather than
@@ -10703,6 +11217,9 @@ class ChatViewModel(
         // we surface a real error instead of a silent blank bubble. Mirrors iOS
         // AIChatViewModel.didInjectEmptyToolReminderThisRun.
         var didInjectEmptyToolReminder = false
+        // [T-android-dsml-leak] Resends spent on DeepSeek tool calls that
+        // leaked into the reasoning channel (see DsmlLeak). Per run.
+        var dsmlLeakRetries = 0
         // [T-android-scheduled-resume-nudge] Set when a scheduled fire was
         // inserted at a tool gap of THIS loop. If the model then answers it and
         // stops while the interrupted task is unfinished, one hidden resume
@@ -10721,6 +11238,8 @@ class ChatViewModel(
         var helperWrapUpInjected = false
         // [T-subagent-turn-countdown] Fired once, a few rounds before the cliff.
         var helperTurnWarningInjected = false
+        // [T-subagent-termination] The closing request was sent in this run (once).
+        var helperClosingNudgeSent = false
         // [T-scheduled-tool-prefill] One-shot: the next turn that reaches the
         // request point streams these calls instead of asking the provider,
         // then clears it. Local to this run, so it cannot leak into a later
@@ -10728,6 +11247,9 @@ class ChatViewModel(
         // prefill re-arms it (see the injectQueuedPromptsAsNewTurn call site).
         var pendingScriptedTurn: com.openminis.app.scheduled.ScriptedToolTurn? = scriptedTurnFor(prefill)
         for (turn in 0 until turnCap) {
+            // [stop-diag] Every iteration is one model request; turn>0 means the
+            // previous turn's tool results were judged worth sending on.
+            AppLogger.info(TAG_STREAM, "[stop-diag] turn=$turn START sid=$activeSessionId — requesting the model")
             // [T-android-switch-model-next-request] The user picked another
             // model while this turn ran. Apply it HERE, before the next
             // request: the request or tool call that was in flight when they
@@ -10765,9 +11287,11 @@ class ChatViewModel(
                     val from = currentProvider.model.displayName
                     currentProvider = chosen
                     classProviderAtSend = chosen
+                    currentIdentity = providerIdentity(_activeEntryId.value)
                     // A new model starts a new failure streak.
                     triedEntryIds.clear()
                     _activeEntryId.value?.let { triedEntryIds.add(it) }
+                    emptyStreakEntryIds.clear()
                     loopSystemPrompt = systemPromptFor(chosen, loopSystemPrompt)
                     AppLogger.info(
                         TAG_STREAM,
@@ -10775,6 +11299,9 @@ class ChatViewModel(
                     )
                 }
             }
+            // [T-user-ask-deferred-live-batch] Deferred results delivered
+            // mid-run, applied here on the loop's own thread.
+            applyPendingHistoryPatches()
             // Sanitize history before each API call (mirrors iOS pre-API validation)
             sanitizeAgentHistory()
             // [T-agent-wrapup-turn] A helper that reaches its last permitted
@@ -11017,6 +11544,7 @@ class ChatViewModel(
                     // the new bubble starts empty and buildTurnParts slices only
                     // the new turn's blocks.
                     assistantId = freshAssistantId
+                    liveTurn.markAssistant(turnGen, assistantId)
                     accumulatedText = ""
                     allToolBlocks.clear()
                     allToolInputs.clear()
@@ -11087,9 +11615,10 @@ class ChatViewModel(
                     _canResume.value = true
                     // Android's equivalent of iOS's `hitTurnLimit = false`: this
                     // is a deliberate stop, NOT the runaway-ceiling path, so the
-                    // post-loop tail must not slap a fake "hit 200 turns" error
+                    // post-loop tail must not slap a fake "hit MAX_AGENT_TURNS" error
                     // on it. finalizeAtTurnLimit is skipped; the notice above is
                     // the user-visible explanation.
+                    stopDiagExit = "context-full"
                     loopExitedNormally = true
                     break
                 }
@@ -11142,7 +11671,16 @@ class ChatViewModel(
             // T321: capture finish_reason from LLMStreamChunk.Finished so we can
             // log it at turn-end alongside the empty-turn warning.
             var turnFinishReason: String? = null
+            // [FIX-261018-12] stop_details of a refusal, for the error text.
+            var turnRefusalCategory: String? = null
+            var turnRefusalExplanation: String? = null
             var lastUsage: LLMUsage? = null
+            // [T-usage-step1] Usage of the attempt currently streaming, merged
+            // field by field (UsageChunkMerger). Reset when an attempt starts so
+            // a retried or fallen-back request never maxes against the previous
+            // attempt; lastUsage keeps that attempt's value until the new one
+            // reports, as before.
+            var attemptUsage: LLMUsage? = null
             // [T-android-token-usage-output-speed] Wall-clock milliseconds this
             // turn spent streaming, accumulated across every attempt (a
             // retried 5xx streams more than once). Persisted with the turn's
@@ -11150,7 +11688,12 @@ class ChatViewModel(
             // other figure in the Token Usage sheet — unlike iOS, which keeps
             // its equivalent in memory and loses it when the VM goes away.
             var turnStreamMs = 0L
-            val maxTokens = dynamicMaxTokens(provider, lastContextTokens)
+            // [T-android-maxtokens-stale-log] max_tokens is sized per request
+            // from THAT request's predicted input (dynamicMaxTokens(…,
+            // dispatchInputTokens) at the dispatch below), like iOS. A second,
+            // unused call here sized it from the PREVIOUS turn's reported input
+            // and logged that number — field log: "dynamicMaxTokens: 8730" while
+            // the request went out with 16384. Removed.
             val toolCalls = mutableListOf<Triple<String, String, JSONObject>>() // id, name, args
             // [T-android-gemini3-thoughtsig / #179] toolCallId -> Gemini 3.x
             // thoughtSignature for this turn's calls (null for other providers).
@@ -11202,8 +11745,56 @@ class ChatViewModel(
             // so we catch at collect level and unwrap.
             var collectDone = false
             var retryAttempt = 0  // per-turn auto-retry counter (resets on each new turn)
+            // [T-callback-queued-reminder] The reminder this turn's request
+            // carries, kept across its retries so every attempt sends the same
+            // text. See QueuedCallbackReminder.
+            var callbackReminder: QueuedCallbackReminder.Plan? = null
             while (!collectDone) {
+                // [ISS-036, T-provider-live-check] Before every request: is the
+                // provider this turn is about to use still there and enabled?
+                // A stream already open is never interrupted - this only runs
+                // when a new request is about to go out. No request is sent to
+                // a removed provider.
+                val liveProblem = currentIdentity?.let { id ->
+                    val inst = providerRepository.instance(id.instanceId)
+                    ProviderAvailability.problem(instanceExists = inst != null, instanceEnabled = inst?.isEnabled == true)
+                }
+                if (liveProblem != null) {
+                    val id = currentIdentity!!
+                    AppLogger.warning(
+                        TAG_STREAM,
+                        "[ProviderLiveCheck] ${id.modelName} (${id.instanceLabel}) $liveProblem — " +
+                            "group=${_selectedGroupId.value != null}",
+                    )
+                    // A conversation pinned to one model has nowhere to move to:
+                    // say which provider went away instead of sending a request
+                    // that can only fail. (Like iOS, the default-group fallback
+                    // a pinned session uses for quota errors does not apply.)
+                    if (_selectedGroupId.value == null) {
+                        throw com.openminis.app.data.model.LLMError.ProviderError(
+                            when (liveProblem) {
+                                ProviderAvailability.Problem.REMOVED ->
+                                    context.getString(R.string.provider_live_check_removed_message, id.instanceLabel, id.modelName)
+                                ProviderAvailability.Problem.DISABLED ->
+                                    context.getString(R.string.provider_live_check_disabled_message, id.instanceLabel, id.modelName)
+                            },
+                        )
+                    }
+                }
                 try {
+                    // [ISS-036] In a group, an unusable provider moves on through
+                    // the ordinary fallback below (tried-set, reason trail,
+                    // "Switched to" notice, binding update). Thrown inside the
+                    // try so it takes that path; ProviderError is not transient,
+                    // so the same-model retry ladder never re-sends it.
+                    if (liveProblem != null) {
+                        throw com.openminis.app.data.model.LLMError.ProviderError(
+                            context.getString(
+                                if (liveProblem == ProviderAvailability.Problem.REMOVED) R.string.provider_live_check_removed
+                                else R.string.provider_live_check_disabled,
+                            ),
+                        )
+                    }
                     // [T-android-enhanced-cache] Stamp the per-turn Enhanced
                     // Cache flag onto the active provider here — the single
                     // choke point every turn passes through, regardless of how
@@ -11285,26 +11876,45 @@ class ChatViewModel(
                         if (personaReminderIsDue(lastContextTokens)) {
                             appendPersonaReminderToHistory(lastContextTokens)
                         }
+                        // [T-ctx-builder] One pure entry builds the request: summary
+                        // injection + orphan repair (the outbound history), then the
+                        // request image budget and, outermost, the GH#352 payload
+                        // audit ([T-android-payload-size-audit]), so it sees exactly
+                        // what goes on the wire.
                         // [T-ctx-measure-outbound] Record our estimate of THIS request
                         // (pre-budget, like every measurement) so the provider's count
                         // for it calibrates the meter, and size max_tokens from it.
-                        val outboundHistory = effectiveAgentHistory()
-                        val dispatchInputTokens = recordContextDispatch(outboundHistory, currentProvider.model)
-                        AppLogger.info(
-                            TAG,
-                            "[CtxMeter] dispatch model=${currentModel?.id ?: "?"} estimate=$lastDispatchEstimate " +
-                                "ratio=${"%.3f".format(lastDispatchRatio)} predicted=$dispatchInputTokens " +
-                                "maxTokens=${dynamicMaxTokens(currentProvider, dispatchInputTokens)}",
-                        )
+                        var dispatchInputTokens = 0
+                        val requestContext = RequestContextBuilder.build(requestContextInput()) { outboundHistory ->
+                            dispatchInputTokens = recordContextDispatch(outboundHistory, currentProvider.model)
+                            AppLogger.info(
+                                TAG,
+                                "[CtxMeter] dispatch model=${currentModel?.id ?: "?"} estimate=$lastDispatchEstimate " +
+                                    "ratio=${"%.3f".format(lastDispatchRatio)} predicted=$dispatchInputTokens " +
+                                    "maxTokens=${dynamicMaxTokens(currentProvider, dispatchInputTokens)}",
+                            )
+                        }
+                        // [T-callback-queued-reminder] A finished sub agent
+                        // callback waiting in the queue is mentioned once, on
+                        // this request only: appended to the copy that goes to
+                        // the provider, never to agentHistory. Not on the
+                        // tool-less wrap-up turn, which is ending anyway.
+                        var requestMessages = requestContext.messages
+                        if (!helperWrapUpInjected) {
+                            val reminder = callbackReminder ?: QueuedCallbackReminder.plan(_promptQueue.value)
+                            val withReminder = reminder?.let { QueuedCallbackReminder.inject(requestMessages, it.text) }
+                            if (reminder != null && withReminder != null) {
+                                AppLogger.info(
+                                    TAG_STREAM,
+                                    "[CallbackReminder] turn=$turn request carries a reminder for ${reminder.promptIds.size} queued " +
+                                        "sub agent result(s)${if (callbackReminder != null) " (retry, same text)" else ""}",
+                                )
+                                callbackReminder = reminder
+                                requestMessages = withReminder
+                            }
+                        }
                         currentProvider.streamMessage(
-                            // [T-android-payload-size-audit] (GH#352) Byte-side
-                            // cross-check on the token estimate, outermost so it
-                            // sees exactly what goes on the wire.
-                            auditOutgoingPayload(
-                                applyRequestImageBudget(
-                                    outboundHistory,
-                                ),
-                            ),
+                            requestMessages,
                             loopSystemPrompt, dynamicMaxTokens(currentProvider, dispatchInputTokens),
                             tools = if (helperWrapUpInjected) emptyList() else agentTools,
                             // [T-switch-model-thinking-gate] Gate on the provider that
@@ -11315,10 +11925,21 @@ class ChatViewModel(
                             thinkingLevel = if (currentProvider.model.supportsReasoning == true) _thinkingLevel.value else ThinkingLevel.OFF,
                         )
                     }
+                    attemptUsage = null
                     turnChunks.collect { chunk ->
                 // [T-STALL-DIAG] Mark first byte back from the provider and log
                 // the time-to-first-chunk once per turn.
                 if (firstChunkSeen.compareAndSet(false, true)) {
+                    // [T-callback-queued-reminder] The provider is answering the
+                    // request that carried the reminder: those jobs are done
+                    // with. Marked here rather than at send so a request that
+                    // never got through does not use the reminder up.
+                    // update{} (compare-and-set): a callback being enqueued on
+                    // the main thread at this moment must not be overwritten.
+                    callbackReminder?.let { sent ->
+                        _promptQueue.update { QueuedCallbackReminder.markSent(it, sent) }
+                        AppLogger.info(TAG_STREAM, "[CallbackReminder] turn=$turn marked ${sent.promptIds.size} queued sub agent result(s) as reminded")
+                    }
                     // [T-switch-model-retry-counter-reset] The retried attempt is
                     // producing output, so the ladder is done. isBoundToAbandonedModel()
                     // reads these counters; left set until the stream COMPLETES, a
@@ -11638,7 +12259,11 @@ class ChatViewModel(
                         }
                     }
                     is LLMStreamChunk.Usage -> {
-                        lastUsage = chunk.usage
+                        // [T-usage-step1] Merge instead of replace: Anthropic's
+                        // message_delta carries only output_tokens, and replacing
+                        // dropped the input and cache from message_start.
+                        attemptUsage = com.openminis.app.usage.UsageChunkMerger.merge(attemptUsage, chunk.usage)
+                        lastUsage = attemptUsage
                         // Update context token count for next turn's dynamicMaxTokens()
                         // and publish to _lastTurnContextTokens so the ContextPolicy
                         // gate in [checkContextBeforeSend] can see the latest pressure
@@ -11695,6 +12320,8 @@ class ChatViewModel(
                     is LLMStreamChunk.Finished -> {
                         // T321: stash for empty-turn diagnostic logging below.
                         turnFinishReason = chunk.stopReason
+                        turnRefusalCategory = chunk.refusalCategory
+                        turnRefusalExplanation = chunk.refusalExplanation
                     }
                     is LLMStreamChunk.Started -> { /* no-op */ }
                     is LLMStreamChunk.MediaAttachment -> {
@@ -11816,9 +12443,29 @@ class ChatViewModel(
                         Log.w(TAG, "🔁 Transient error on ${currentProvider.model.displayName}, retry $retryAttempt/${AUTO_RETRY_DELAYS_SEC.size} in ${delaySec}s: $errDesc")
                         withContext(Dispatchers.Main) {
                             _autoRetryAttempt.value = retryAttempt
-                            // Show the error inline on the streaming assistant message during countdown.
-                            // Keeps isStreaming=true so the UI doesn't tear down the streaming state.
-                            setTransientInlineError("$errDesc — retrying ($retryAttempt/${AUTO_RETRY_DELAYS_SEC.size})…")
+                            // [T-android-retry-badge] No red "<error> — retrying (n/3)…"
+                            // bar any more: a retry is not a failure the user acts on,
+                            // and the bar vanished afterwards with no trace. The row
+                            // shows "<name> is thinking…" with a yellow "↻ n/3" badge
+                            // (autoRetryAttempt), whose sheet lists this generation's
+                            // retries. Only a final failure, after the ladder and any
+                            // fallback, reaches the error banner (unchanged).
+                            _retryLog.value = RetryLog.append(
+                                _retryLog.value,
+                                attempt = retryAttempt,
+                                maxAttempts = AUTO_RETRY_DELAYS_SEC.size,
+                                atMs = System.currentTimeMillis(),
+                                error = errDesc,
+                                model = currentProvider.model.displayName,
+                                endpoint = _providerName.value.ifBlank { null },
+                                delaySec = delaySec,
+                            )
+                            // Awaiting the retried response: keeps the typing row
+                            // (and its badge) on screen under any partial output.
+                            updateAssistantMessage(
+                                assistantId, accumulatedText + turnTextSb.toString(), true, allToolBlocks,
+                                isAwaitingModelResponse = true,
+                            )
                         }
                         try {
                             for (remaining in delaySec downTo 1) {
@@ -11858,8 +12505,16 @@ class ChatViewModel(
                             // streams into a fresh `turnTextSb` and re-publishes
                             // `accumulatedText + newTurnText`, so this transient
                             // value is overwritten cleanly (no duplication).
+                            // [T-retry-badge-awaiting] Still awaiting the retried
+                            // request: with text already on screen, the "… is
+                            // thinking" row (and its "↻ n/3" badge) shows only
+                            // while isAwaitingModelResponse is set. iOS 5538cc6b3
+                            // sets it at the same point; the next chunk clears it.
                             withContext(Dispatchers.Main) {
-                                updateAssistantMessage(assistantId, accumulatedText + turnTextSb.toString(), true, allToolBlocks)
+                                updateAssistantMessage(
+                                    assistantId, accumulatedText + turnTextSb.toString(), true, allToolBlocks,
+                                    isAwaitingModelResponse = true,
+                                )
                             }
                         }
                         // T307: SB-based per-turn accumulators reset.
@@ -11954,12 +12609,9 @@ class ChatViewModel(
                                     "largest history part and retrying. detail=" +
                                     (overflowErr?.detail?.take(200) ?: ""),
                             )
-                            withContext(Dispatchers.Main) {
-                                appendSystemInfo(
-                                    context.getString(R.string.context_overflow_selfheal_notice),
-                                    "compact",
-                                )
-                            }
+                            // [T-silence-auto-notices] No chat notice: the
+                            // conversation healed itself and continues; the
+                            // warning above is the record.
                             turnTextSb.setLength(0)
                             currentTextBlockSb = null
                             turnTextBlockIdx = -1
@@ -12018,6 +12670,19 @@ class ChatViewModel(
                                 }
                     }
                     val next = nextCandidate?.provider
+                    // [B13-diag] Logging only. A stream with no content and no
+                    // stop reason arrives here as this TransientError (provider
+                    // failOnSilentEmptyCompletion), after the same-model ladder.
+                    if (actual is com.openminis.app.data.model.LLMError.TransientError &&
+                        actual.message?.startsWith("Server returned an empty response") == true
+                    ) {
+                        AppLogger.warning(
+                            TAG_STREAM,
+                            "[B13-diag] silent empty stream after ${retryAttempt} same-model retries strategy=$loopFallbackStrategy " +
+                                "model=${currentProvider.model.displayName} shouldFallback=$shouldFallback " +
+                                "next=${next?.model?.displayName ?: "none"} queued=${remainingFallbacks.size} tried=${triedEntryIds.size}",
+                        )
+                    }
                     if (next != null && nextCandidate != null) {
                         val reason = when {
                             isRateLimit -> "Rate limited"
@@ -12039,6 +12704,7 @@ class ChatViewModel(
                         fallbackReasons.add("⚠️ ${currentProvider.model.displayName}: $reason")
                         Log.i(TAG, "🔀 $reason on ${currentProvider.model.displayName}, switching to ${next.model.displayName} (realModelChange=$isRealModelChange)")
                         currentProvider = next
+                        currentIdentity = providerIdentity(nextCandidate.entryId)
                         // [T-fallback-5xx-status] Fresh same-model budget for the
                         // member we just switched to. The counter is per-turn, so
                         // without this reset every member after the first got
@@ -12053,58 +12719,8 @@ class ChatViewModel(
                         // turn ran, keep the user's pick: only the turn-local
                         // provider moves to `next`, and the class-level write, the
                         // top-bar/entry updates and persistBinding are all skipped.
-                        val userSwitchedMidTurn = !fallbackMayRebindSession(
-                            this@ChatViewModel.currentProvider, classProviderAtSend,
-                        )
-                        if (userSwitchedMidTurn) {
-                            AppLogger.info(
-                                TAG_STREAM,
-                                "[SwitchModel] fallback to ${next.model.displayName} stays turn-local — " +
-                                    "user switched model mid-turn, binding kept",
-                            )
-                        } else {
-                            // Also update class-level provider so the next sendMessage() starts from here
-                            this@ChatViewModel.currentProvider = next
+                        if (adoptLoopFallbackBinding(nextCandidate, classProviderAtSend, isRealModelChange)) {
                             classProviderAtSend = next
-                            // Update top bar model info + active entry. (For a same-
-                            // model endpoint recovery these are no-ops on the visible
-                            // model name, but still keep activeEntryId / provider name
-                            // in sync with the instance we actually used.)
-                            _modelName.value = currentProvider.model.displayName
-                            // Update activeEntryId so model picker reflects the switch.
-                            // [T-android-fallback-entry-identity] Look the entry up by
-                            // its OWN id, carried on the candidate. The previous
-                            // `find { it.model.id == currentProvider.model.id }` was
-                            // ambiguous: two instances can expose the same model id, so
-                            // it returned whichever entry sits earlier in modelEntries.
-                            // Observed in the field — falling back onto
-                            // `deepseek-v4-flash` served by "DeekSeak" showed the
-                            // provider as "Bailian OpenAI", because Bailian also has a
-                            // `deepseek-v4-flash` entry and happened to be found first.
-                            // That also poisoned activeEntryId and the persisted
-                            // binding, so re-entering the session resumed on the WRONG
-                            // instance.
-                            val newEntry = providerRepository.config.value.modelEntries.find {
-                                it.id == nextCandidate.entryId
-                            }
-                            if (newEntry != null) {
-                                _activeEntryId.value = newEntry.id
-                                currentModel = newEntry.model
-                                val newInstance = providerRepository.instance(newEntry.providerInstanceId)
-                                if (newInstance != null) {
-                                    _providerName.value = newInstance.label.ifEmpty { newEntry.model.provider }
-                                }
-                            }
-                            // Flash ONLY on a genuine model switch — never on a
-                            // transparent same-model endpoint retry.
-                            if (isRealModelChange) _fallbackTrigger.value++
-                            // Persist the fallback model so re-entering the session starts from here
-                            val groupId = _selectedGroupId.value
-                            if (groupId != null && newEntry != null) {
-                                persistBinding("""{"type":"group","groupId":"$groupId","lastEntryId":"${newEntry.id}"}""")
-                            } else if (newEntry != null) {
-                                persistBinding("""{"type":"entry","entryId":"${newEntry.id}"}""")
-                            }
                         }
                         val infoText = fallbackReasons.joinToString("\n") + "\n🔄 Switched to ${currentProvider.model.displayName}"
                         allToolBlocks.removeAll { it.kind == "info" }
@@ -12169,6 +12785,26 @@ class ChatViewModel(
             // Accumulate text across turns
             accumulatedText += turnText
 
+            // [FIX-261018-12] A refused response can carry tool calls the model
+            // emitted before the classifier stopped it (field log, iOS
+            // 2026-10-18: shell + browser calls, then stop_reason=refusal). They
+            // are not run — the run is over — and their blocks leave the bubble;
+            // the turn then takes the no-tool path, whose refusal branch says
+            // so. Running them ended the run with no error at all.
+            if (com.openminis.app.provider.StopReasons.isRefusal(turnFinishReason) && toolCalls.isNotEmpty()) {
+                val refusedIds = toolCalls.map { it.first }.toSet()
+                AppLogger.warning(
+                    TAG_STREAM,
+                    "Refused response carried ${toolCalls.size} tool call(s) " +
+                        "[${toolCalls.joinToString(",") { it.second }}] — dropped, not executed",
+                )
+                allToolBlocks.removeAll { it.kind == "tool_use" && it.id in refusedIds }
+                toolCalls.clear()
+                withContext(Dispatchers.Main) {
+                    updateAssistantMessage(assistantId, accumulatedText, true, allToolBlocks)
+                }
+            }
+
             // Build assistant contentParts for history
             val assistantParts = mutableListOf<AgentContentPart>()
             if (turnText.isNotEmpty()) {
@@ -12198,6 +12834,11 @@ class ChatViewModel(
                 reasoningContent = turnReasoningContent,
             ))
 
+            // [T-b13-empty-fallback] A turn with content ends the empty streak.
+            if (toolCalls.isNotEmpty() || EmptyTurnRecovery.turnHasText(turnText, allToolBlocks, turnStartBlockIndex)) {
+                emptyStreakEntryIds.clear()
+            }
+
             // T321: empty-turn diagnostic — fires when GPT-5.5 (or any other
             // provider) returns a turn with no visible text AND no tool calls.
             // Log only; UI behavior unchanged. Pair with OpenAIProvider SSE
@@ -12214,6 +12855,68 @@ class ChatViewModel(
             // If no tool calls, we're done
             if (toolCalls.isEmpty()) {
                 AppLogger.info(TAG_STREAM, "runAgentLoop turn=$turn no tool calls → break (finishReason=$turnFinishReason)")
+                // [T-android-dsml-leak] DeepSeek wrote its tool call while still
+                // thinking: the markup and the argument body landed in
+                // reasoning_content, tool_calls is empty and the turn "stopped".
+                // That is a malformed tool call, not an answer and not an empty
+                // turn — resend the same request (up to DsmlLeak.MAX_RETRIES).
+                // The leaked turn is removed from agentHistory and its thinking
+                // blocks from the bubble first, so the markup is never replayed
+                // to the model or persisted.
+                val dsmlReasoning = turnReasoningContent ?: turnThinking.toString()
+                val dsmlMarker = DsmlLeak.marker(dsmlReasoning)
+                if (dsmlMarker != null && DsmlLeak.isLeak(
+                        turnHasText = EmptyTurnRecovery.turnHasText(turnText, allToolBlocks, turnStartBlockIndex),
+                        hasToolCalls = false,
+                        finishReason = turnFinishReason,
+                        reasoning = dsmlReasoning,
+                    )
+                ) {
+                    agentHistory.removeAt(agentHistory.size - 1)
+                    while (allToolBlocks.size > turnStartBlockIndex) allToolBlocks.removeAt(allToolBlocks.size - 1)
+                    val completionTokens = lastUsage?.outputTokens
+                    val reasoningTokens = lastUsage?.reasoningTokens
+                    val gap = if (completionTokens != null && reasoningTokens != null) completionTokens - reasoningTokens else null
+                    when (val step = DsmlLeak.next(dsmlLeakRetries)) {
+                        is DsmlLeak.Step.Retry -> {
+                            dsmlLeakRetries = step.attempt
+                            AppLogger.warning(
+                                TAG_STREAM,
+                                "[dsml-leak] turn=$turn retry=${step.attempt}/${DsmlLeak.MAX_RETRIES} marker=$dsmlMarker " +
+                                    "completion=$completionTokens reasoning=$reasoningTokens gap=$gap " +
+                                    "reasoningLen=${dsmlReasoning.length} finishReason=$turnFinishReason " +
+                                    "model=${provider.model.id} — resending the same request",
+                            )
+                            withContext(Dispatchers.Main) {
+                                updateAssistantMessage(assistantId, accumulatedText, true, allToolBlocks)
+                            }
+                            continue
+                        }
+                        DsmlLeak.Step.GiveUp -> {
+                            AppLogger.warning(
+                                TAG_STREAM,
+                                "[dsml-leak] turn=$turn retries exhausted (${DsmlLeak.MAX_RETRIES}) marker=$dsmlMarker " +
+                                    "completion=$completionTokens reasoning=$reasoningTokens gap=$gap " +
+                                    "model=${provider.model.id} — stopping with a notice, Resume offered",
+                            )
+                            withContext(Dispatchers.Main) {
+                                updateAssistantMessage(assistantId, accumulatedText, false, allToolBlocks)
+                            }
+                            val leakParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap)
+                            val leakMeta = allToolBlocks.filter { it.kind == "tool_use" }.associateBy { it.id }
+                            persistAssistantTurn(leakParts, lastUsage, null, leakMeta, uiAssistantId = assistantId, streamMs = turnStreamMs)
+                            withContext(Dispatchers.Main) {
+                                setInlineError(context.getString(R.string.chat_error_dsml_tool_call_leak))
+                            }
+                            markLiveInterruption()
+                            _canResume.value = true
+                            // Deliberate stop, not the runaway ceiling.
+                            stopDiagExit = "dsml-retry-exhausted"
+                            loopExitedNormally = true
+                            break
+                        }
+                    }
+                }
                 withContext(Dispatchers.Main) {
                     updateAssistantMessage(assistantId, accumulatedText, false, allToolBlocks)
                 }
@@ -12227,8 +12930,23 @@ class ChatViewModel(
                 // compaction; otherwise suggest retry/switch. setInlineError
                 // attaches + persists onto the (empty) assistant row so the hint
                 // survives a reload too.
-                val hasVisibleContent = accumulatedText.isNotBlank() ||
-                    allToolBlocks.any { it.kind == "tool_use" || (it.kind == "text" && it.content.isNotBlank()) }
+                // [T-subagent-termination] A sub agent whose turn ended with
+                // neither tool calls nor text has handed the parent nothing: an
+                // empty endTurn, a stream that closed without a stop reason, a
+                // max_tokens cut inside reasoning. Field case 2026-10-04 (iOS):
+                // child transcripts that stop right after a tool result. It
+                // gets ONE closing request with the tools withdrawn (sent below,
+                // after the empty-turn retry has had its go). THIS turn's text
+                // decides — narration written next to an earlier tool call is
+                // not an answer. The empty-turn gate below uses the same value.
+                val turnHasText = EmptyTurnRecovery.turnHasText(turnText, allToolBlocks, turnStartBlockIndex)
+                val closingRequestDue = com.openminis.app.agent.jobs.HelperRunner.shouldSendClosingRequest(
+                    isHelper = helperConfig != null,
+                    alreadySent = helperClosingNudgeSent,
+                    turnHasText = turnHasText,
+                    turn = turn,
+                    turnCap = turnCap,
+                ) && !com.openminis.app.provider.StopReasons.isRefusal(turnFinishReason)
 
                 // [T-android-silent-stream-drop] A turn's stopReason comes ONLY
                 // from the SSE terminal event, which always carries a concrete
@@ -12246,7 +12964,10 @@ class ChatViewModel(
                 // below (system-reminder retry, then the empty-response hint),
                 // which already covers it well — re-routing it here would lose
                 // that recovery.
-                if (turnFinishReason == null && hasVisibleContent) {
+                // [T-android-empty-turn-this-turn] "Partial" means THIS turn wrote
+                // something before the socket died. Text from an earlier turn of
+                // the same bubble does not make an empty turn partial.
+                if (turnFinishReason == null && turnHasText && !closingRequestDue) {
                     AppLogger.warning(
                         TAG_STREAM,
                         "stream closed without a finish reason after ${accumulatedText.length} chars — " +
@@ -12266,6 +12987,74 @@ class ChatViewModel(
                     _canResume.value = true
                     // Deliberate stop, not the runaway ceiling — keep the
                     // post-loop tail from adding a fake turn-limit error.
+                    stopDiagExit = "stream-dropped-partial"
+                    loopExitedNormally = true
+                    break
+                }
+
+                // [T-android-model-refusal] The model DECLINED the request
+                // (Anthropic stop_reason=refusal: HTTP 200, input billed, empty
+                // content; OpenAI content_filter). Port of iOS 54c8ea2a4. This
+                // used to end the run with nothing on screen — "refusal" is not
+                // an empty-turn reason, so no hint was set either — and Resume
+                // or Retry got declined again, reading as a dead stream (field
+                // report: an agent task on claude-sonnet-5-5). A refusal is
+                // deterministic, so it gets no empty-turn nudge and no retry:
+                // say so on the reply and let the user rephrase or switch model.
+                if (com.openminis.app.provider.StopReasons.isRefusal(turnFinishReason)) {
+                    AppLogger.warning(
+                        TAG_STREAM,
+                        "Agent loop ended with stop_reason=$turnFinishReason — model declined the request " +
+                            "(turn=$turn model=${provider.model.id} provider=${provider.name} textLen=${accumulatedText.length})",
+                    )
+                    // [FIX-261018-12] Name the provider's category and append its
+                    // explanation; no Resume — resuming re-sends the same context
+                    // and is declined again (field log: the "continue" after a
+                    // refusal was refused too).
+                    val refusalText = com.openminis.app.provider.StopReasons.refusalErrorText(
+                        categoryMessage = turnRefusalCategory?.let {
+                            context.getString(R.string.chat_error_model_refused_category, it)
+                        },
+                        genericMessage = context.getString(R.string.chat_error_model_refused),
+                        explanation = turnRefusalExplanation,
+                    )
+                    withContext(Dispatchers.Main) {
+                        setInlineError(refusalText)
+                    }
+                    _canResume.value = false
+                    // Deliberate stop, not the runaway ceiling — keep the
+                    // post-loop tail from adding a fake turn-limit error.
+                    stopDiagExit = "refusal"
+                    loopExitedNormally = true
+                    break
+                }
+
+                // [T-android-max-tokens-notice] The reply hit the output-token
+                // limit and asked for no tool. Port of iOS AgentLoop (the
+                // `stopReason == .maxTokens` branch of the no-tool exit). This
+                // used to end the run with nothing on screen: EmptyTurnRecovery
+                // does not count `length` as empty, so neither the nudge nor the
+                // empty-response hint fired. Field case: a thinking model spent
+                // its whole 16K budget on reasoning — no text, no reply, just a
+                // stop. Same notice when part of a reply was written. A sub agent
+                // that is owed its closing request keeps that path instead (both
+                // platforms send it for "a max_tokens cut inside reasoning").
+                if (com.openminis.app.provider.StopReasons.isMaxTokens(turnFinishReason) && !closingRequestDue) {
+                    AppLogger.warning(
+                        TAG_STREAM,
+                        "Agent loop ended at max_tokens with no tool calls " +
+                            "(stop_reason=$turnFinishReason turn=$turn textLen=${accumulatedText.length} " +
+                            "reasoningLen=${turnThinking.length} model=${provider.model.id})",
+                    )
+                    withContext(Dispatchers.Main) {
+                        setInlineError(context.getString(R.string.chat_error_max_tokens_truncated))
+                    }
+                    // A live entry into the resumable state, as for a dropped stream.
+                    markLiveInterruption()
+                    _canResume.value = true
+                    // Deliberate stop, not the runaway ceiling — keep the
+                    // post-loop tail from adding a fake turn-limit error.
+                    stopDiagExit = "max-tokens"
                     loopExitedNormally = true
                     break
                 }
@@ -12279,12 +13068,35 @@ class ChatViewModel(
                 // no call DOES ([T-android-tooluse-stop-no-calls]) — see
                 // EmptyTurnRecovery.shouldClassifyAsEmptyTurn for the
                 // reasoning-only / interleaved-thinking rationale (iOS parity).
+                // [T-android-empty-turn-this-turn] THIS turn's text decides, not
+                // the bubble's: see EmptyTurnRecovery.turnHasText.
+                // [T-user-ask-deferred] A deferred card was shown and the model was
+                // told to end its turn: the card is this turn's answer, so a silent
+                // end is not an empty turn (no reminder round, no member switch, no
+                // hint). iOS exempts only the final error (2164bc535); the reminder
+                // would tell the model to continue against "End your turn now".
+                val deferredAskShown = userAskDeferredThisRun && userAskAskedThisRun
                 val isEmptyTurn = EmptyTurnRecovery.shouldClassifyAsEmptyTurn(
-                    hasText = hasVisibleContent,
+                    hasText = turnHasText || deferredAskShown,
                     hasToolCall = false, // this block is inside `if (toolCalls.isEmpty())`
                     stopReason = turnFinishReason,
                 )
                 if (isEmptyTurn) {
+                    // [B13-diag] Logging only. Records what the fallback machinery
+                    // looked like when an empty turn arrived. Where the turn goes
+                    // next (same model, next member, hint) is decided below by
+                    // EmptyTurnFallback.route ([T-b13-empty-fallback]).
+                    // `currentProvider` is the member that actually answered; the
+                    // "empty turn detected" line above logs the loop's STARTING
+                    // provider, which differs after a fallback or a model switch.
+                    AppLogger.warning(
+                        TAG_STREAM,
+                        "[B13-diag] empty turn turn=$turn strategy=$loopFallbackStrategy " +
+                            "group=${_selectedGroupId.value?.take(8) ?: "none"} entry=${_activeEntryId.value?.take(8) ?: "?"} " +
+                            "model=${currentProvider.model.displayName} startModel=${provider.model.displayName} " +
+                            "reminderSpent=$didInjectEmptyToolReminder queued=${remainingFallbacks.size} tried=${triedEntryIds.size} " +
+                            "helper=${helperConfig != null} closingDue=$closingRequestDue finish=$turnFinishReason",
+                    )
                     // [T-android-empty-after-toolresult-reminder] Special case: the
                     // server returned an empty turn right after a tool result. The
                     // model owes a follow-up (next tool call or a final answer) but
@@ -12303,7 +13115,10 @@ class ChatViewModel(
                     // EmptyTurnRecovery for the rationale and the measured
                     // callback-tail failure rate. The loop owns the once-per-run
                     // guard and the mutation; the object owns the decision.
-                    when (val plan = EmptyTurnRecovery.plan(agentHistory, didInjectEmptyToolReminder)) {
+                    val plan = EmptyTurnRecovery.plan(agentHistory, didInjectEmptyToolReminder)
+                    // Inject the one-shot reminder per [plan]; false when there
+                    // is none to inject (GiveUp).
+                    fun injectEmptyTurnReminder(): Boolean = when (plan) {
                         is EmptyTurnRecovery.Plan.NudgeExistingPart -> {
                             didInjectEmptyToolReminder = true
                             AppLogger.warning(TAG_STREAM, "empty turn — nudging tail part (isToolResult=${plan.isToolResult}) and retrying one round (turn=$turn)")
@@ -12317,7 +13132,7 @@ class ChatViewModel(
                                 else -> part
                             }
                             agentHistory[plan.tailIndex] = tail.copy(contentParts = newParts)
-                            continue
+                            true
                         }
                         is EmptyTurnRecovery.Plan.AppendStandalone -> {
                             didInjectEmptyToolReminder = true
@@ -12330,29 +13145,148 @@ class ChatViewModel(
                                     contentParts = listOf(AgentContentPart.Text(EmptyTurnRecovery.REMINDER)),
                                 ),
                             )
-                            continue
+                            true
                         }
-                        is EmptyTurnRecovery.Plan.GiveUp -> {
-                            // No user turn to nudge, or the guard already fired
-                            // this run — fall through to the error hint below.
-                        }
+                        is EmptyTurnRecovery.Plan.GiveUp -> false
                     }
+                    // [T-b13-empty-fallback] In a model group an empty turn moves
+                    // to the next member (iOS B13): at once under Always, after
+                    // the same-model reminder round under the default strategy.
+                    // A member that came back empty in this streak, or failed
+                    // with an error, is never picked again, so the walk ends.
+                    val reminderAlreadySent = didInjectEmptyToolReminder
+                    _activeEntryId.value?.let { emptyStreakEntryIds.add(it) }
+                    val inGroup = _selectedGroupId.value != null
+                    var emptyRoute = EmptyTurnFallback.route(
+                        loopFallbackStrategy, inGroup, plan !is EmptyTurnRecovery.Plan.GiveUp, hasNextMember = true,
+                    )
+                    val emptyNext = if (EmptyTurnFallback.movesMember(emptyRoute)) {
+                        buildFallbackProviders(currentProvider).firstOrNull {
+                            it.entryId !in emptyStreakEntryIds && it.entryId !in triedEntryIds
+                        }
+                    } else null
+                    if (emptyNext == null && EmptyTurnFallback.movesMember(emptyRoute)) {
+                        emptyRoute = EmptyTurnFallback.route(
+                            loopFallbackStrategy, inGroup, plan !is EmptyTurnRecovery.Plan.GiveUp, hasNextMember = false,
+                        )
+                    }
+                    if (emptyRoute == EmptyTurnFallback.Route.SAME_MODEL_REMINDER && injectEmptyTurnReminder()) continue
+                    if (emptyNext != null && EmptyTurnFallback.movesMember(emptyRoute)) {
+                        if (emptyRoute == EmptyTurnFallback.Route.NEXT_MEMBER_WITH_REMINDER) {
+                            injectEmptyTurnReminder()
+                        } else {
+                            // The same request: drop the empty assistant turn so
+                            // the next member answers from the same tail.
+                            agentHistory.removeAt(agentHistory.size - 1)
+                        }
+                        val next = emptyNext.provider
+                        val reasoningOnly = !turnReasoningContent.isNullOrEmpty() || turnThinking.isNotEmpty()
+                        val reason = EmptyTurnFallback.trailReason(reasoningOnly, afterReminder = reminderAlreadySent)
+                        val isRealModelChange = next.model.id != currentProvider.model.id
+                        fallbackReasons.add("⚠️ ${currentProvider.model.displayName}: $reason")
+                        AppLogger.warning(
+                            TAG_STREAM,
+                            "🔀 empty turn on ${currentProvider.model.displayName}, switching to ${next.model.displayName} " +
+                                "(route=$emptyRoute strategy=$loopFallbackStrategy reasoningOnly=$reasoningOnly " +
+                                "spent=${emptyStreakEntryIds.size} turn=$turn)",
+                        )
+                        currentProvider = next
+                        currentIdentity = providerIdentity(emptyNext.entryId)
+                        loopSystemPrompt = systemPromptFor(next, loopSystemPrompt)
+                        triedEntryIds.add(emptyNext.entryId)
+                        remainingFallbacks.removeAll { it.entryId == emptyNext.entryId || it.entryId in emptyStreakEntryIds }
+                        if (adoptLoopFallbackBinding(emptyNext, classProviderAtSend, isRealModelChange)) {
+                            classProviderAtSend = next
+                        }
+                        val infoText = fallbackReasons.joinToString("\n") + "\n🔄 Switched to ${next.model.displayName}"
+                        allToolBlocks.removeAll { it.kind == "info" }
+                        allToolBlocks.add(0, AssistantBlock(
+                            id = "fallback_info_$turn",
+                            kind = "info",
+                            content = infoText,
+                            toolTitle = "Switched model",
+                            toolStatus = ToolBlockStatus.SUCCESS,
+                        ))
+                        withContext(Dispatchers.Main) {
+                            updateAssistantMessage(assistantId, accumulatedText, true, allToolBlocks)
+                        }
+                        continue
+                    }
+                    // No reminder left and nowhere to go — fall through to the
+                    // error hint below.
+                    // [B13-diag] Logging only.
+                    AppLogger.warning(
+                        TAG_STREAM,
+                        "[B13-diag] empty turn give-up turn=$turn strategy=$loopFallbackStrategy " +
+                            "model=${currentProvider.model.displayName} reminderSpent=$didInjectEmptyToolReminder " +
+                            "queued=${remainingFallbacks.size} spent=${emptyStreakEntryIds.size} closingDue=$closingRequestDue " +
+                            "inGroup=$inGroup — no member left",
+                    )
                     val window = effectiveContextWindowTokens()
                     val usedCtx = lastUsage?.latestContextTokens ?: 0
                     val contextNearFull = window != null && window > 0 && usedCtx > 0 &&
                         usedCtx.toDouble() / window.toDouble() > 0.70
-                    val hint = when {
-                        // Reminder already fired and the retry was ALSO empty — this
-                        // is a genuine stall, not a transient blank. Point the user
-                        // at retry/switch explicitly.
-                        didInjectEmptyToolReminder ->
-                            context.getString(R.string.error_empty_response_after_tool)
-                        contextNearFull ->
-                            context.getString(R.string.error_empty_response_context_large)
-                        else ->
-                            context.getString(R.string.error_empty_response_generic)
+                    // [T-subagent-termination] A sub agent still owed its closing
+                    // request skips the hint: the request below gets one more
+                    // turn, and the hint would stay on a bubble that then answers.
+                    if (!closingRequestDue) {
+                        val hint = when {
+                            // Reminder already fired and the retry was ALSO empty — this
+                            // is a genuine stall, not a transient blank. Point the user
+                            // at retry/switch explicitly.
+                            didInjectEmptyToolReminder ->
+                                context.getString(R.string.error_empty_response_after_tool)
+                            contextNearFull ->
+                                context.getString(R.string.error_empty_response_context_large)
+                            else ->
+                                context.getString(R.string.error_empty_response_generic)
+                        }
+                        withContext(Dispatchers.Main) { setInlineError(hint) }
+                        // [T-android-empty-turn-this-turn] The reminder retry was
+                        // spent (or not possible) and the model still said
+                        // nothing: the task is unfinished, so offer Resume.
+                        markLiveInterruption()
+                        _canResume.value = true
                     }
-                    withContext(Dispatchers.Main) { setInlineError(hint) }
+                }
+                // [T-subagent-termination] The one-shot closing request (see
+                // closingRequestDue above). Tools are withdrawn through the same
+                // flag as the budget wrap-up, so the only possible answer is the
+                // report. The empty assistant turn is dropped from the history
+                // (an empty assistant message is invalid on several providers)
+                // and the hidden nudge is persisted, so the child transcript
+                // shows the attempt instead of stopping at a tool result.
+                if (closingRequestDue) {
+                    helperClosingNudgeSent = true
+                    helperClosingAttempted = true
+                    helperWrapUpInjected = true
+                    val tail = agentHistory.lastOrNull()
+                    if (tail != null && tail.role == LLMMessage.Role.ASSISTANT && tail.content.isBlank() &&
+                        tail.contentParts.none { it is AgentContentPart.ToolUse || (it is AgentContentPart.Text && it.text.isNotBlank()) }
+                    ) {
+                        agentHistory.removeAt(agentHistory.size - 1)
+                    }
+                    val nudge = com.openminis.app.agent.jobs.HelperRunner.CLOSING_NUDGE_TEXT
+                    agentHistory.add(
+                        LLMMessage(
+                            role = LLMMessage.Role.USER,
+                            content = nudge,
+                            contentParts = listOf(AgentContentPart.Text(nudge)),
+                        ),
+                    )
+                    val nudgeSid = activeSessionId
+                    viewModelScope.launch(Dispatchers.IO) {
+                        chatRepository.appendMessage(nudgeSid, "user", """[{"type":"text","value":${escapeJson(nudge)}}]""")
+                    }
+                    withContext(Dispatchers.Main) {
+                        updateAssistantMessage(assistantId, accumulatedText, true, allToolBlocks)
+                    }
+                    _canResume.value = false
+                    AppLogger.warning(
+                        TAG_STREAM,
+                        "[subagent_term] empty turn end (stopReason=$turnFinishReason) — sent the one-shot closing request, tools withdrawn, turn=${turn + 1}/$turnCap",
+                    )
+                    continue
                 }
                 // [T-android-scheduled-resume-nudge] A scheduled fire was inserted
                 // at a tool gap of this loop, the model has answered it and
@@ -12424,6 +13358,7 @@ class ChatViewModel(
                 }
                 // Auto-title after first exchange
                 if (turn == 0) generateSessionTitleIfNeeded()
+                stopDiagExit = if (isEmptyTurn) "empty-turn" else "no-tool-calls"
                 loopExitedNormally = true
                 break
             }
@@ -12443,10 +13378,10 @@ class ChatViewModel(
                 val livePreviewParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap)
                 val liveMeta = allToolBlocks.filter { it.kind == "tool_use" }.associateBy { it.id }
                 if (livePreviewParts.isNotEmpty()) {
-                    chatRepository.updateSessionPreview(
-                        realSessionId.ifEmpty { sessionId },
-                        buildAssistantPartsJson(livePreviewParts, liveMeta),
-                    )
+                    val livePartsJson = buildAssistantPartsJson(livePreviewParts, liveMeta)
+                    chatRepository.updateSessionPreview(realSessionId.ifEmpty { sessionId }, livePartsJson)
+                    // [T-port-user-ask-recovery] The row a recovered question attaches to.
+                    userAskBatchSnapshot = livePartsJson to toolCalls.map { it.first }
                 }
             }
 
@@ -12477,9 +13412,32 @@ class ChatViewModel(
             // unbounded turn could start a dozen shells at once.
             val slots = kotlinx.coroutines.sync.Semaphore(MAX_CONCURRENT_TOOLS)
             val slotResults = arrayOfNulls<List<AgentContentPart>>(toolCalls.size)
+            // [T-tool-title-reminder] Tools whose schema declares tool_title
+            // (built once per batch; agentTools rebuilds its list on each read).
+            val titledTools = agentTools.filter { ToolTitleReminder.declaresTitle(it.parameters.keys) }
+                .map { it.name }.toSet()
+            // [T-batch-read-after-write] A read that comes after a write in the
+            // same batch waits for that write (iOS 1eb3e2bef). Every call used
+            // to start at once, so `shell_execute` (render q-1.png) +
+            // `read_image q-1.png` in one turn read the file before the shell
+            // had run and failed, or read the PREVIOUS version of a file being
+            // regenerated. Only reader-after-writer pairs are ordered. The wait
+            // happens before the reader takes a slot, so it never holds one a
+            // writer needs.
+            val batchNames = toolCalls.map { it.second }
+            val slotJobs = arrayOfNulls<kotlinx.coroutines.Job>(toolCalls.size)
             kotlinx.coroutines.coroutineScope {
                 toolCalls.mapIndexed { slotIndex, (id, name, args) ->
                     async {
+                        val earlierWriters = BatchToolOrder.writersBefore(slotIndex, batchNames)
+                        if (earlierWriters.isNotEmpty()) {
+                            val waitStart = System.currentTimeMillis()
+                            earlierWriters.forEach { slotJobs[it]?.join() }
+                            android.util.Log.i(
+                                "ToolChain[VM]",
+                                "[BatchOrder] $name [$slotIndex] waited ${System.currentTimeMillis() - waitStart}ms for writer(s) $earlierWriters in the same batch",
+                            )
+                        }
                         // Per-slot collector. `resultParts` was shared and
                         // appended to; with concurrent bodies that would race
                         // AND lose ordering, so each call fills its own list
@@ -12584,6 +13542,11 @@ class ChatViewModel(
                             toolInputChunkRings.remove(id)
                             return@withPermit
                         }
+                        // [T-port-nested-json-string] A nested-schema argument
+                        // sent as JSON-in-a-string is decoded to what the
+                        // schema declares before preflight and execution (the
+                        // model's own call stays in history as it was sent).
+                        val args = agentTools.firstOrNull { it.name == name }?.coerceNestedJsonStrings(args) ?: args
                         val argsStr = args.toString()
                         val paramsMap = parseToolParams(argsStr)
                         // Flip PENDING → RUNNING right before the execute dispatch so the UI
@@ -12688,8 +13651,52 @@ class ChatViewModel(
                             return@withPermit
                         }
 
+                        // [FIX-261025-05] A tool-only Stop marks only the calls
+                        // executing at that moment. One that was still waiting
+                        // for a slot or for an earlier writer in this batch
+                        // would start afterwards and run to completion, holding
+                        // the turn open. toolOnlyStopTurn stays set until this
+                        // batch's boundary, so it means "stopped during this
+                        // batch": do not start the call.
+                        if (toolOnlyStopTurn == turnGen) {
+                            AppLogger.info(TAG_STREAM, "[stop-tool] turn=$turn $name ${id.take(16)} not started: tools were stopped while it waited")
+                            val blockIdxStop = allToolBlocks.indexOfFirst { it.id == id }
+                            if (blockIdxStop >= 0) {
+                                allToolBlocks[blockIdxStop] = allToolBlocks[blockIdxStop].copy(
+                                    toolStatus = ToolBlockStatus.CANCELLED,
+                                    durationMs = System.currentTimeMillis() - allToolBlocks[blockIdxStop].startTimeMs,
+                                )
+                            }
+                            resultParts.add(AgentContentPart.ToolResult(
+                                id = id, name = name,
+                                content = ForegroundToolInterrupts.INTERRUPTED_RESULT,
+                                isError = true,
+                            ))
+                            withContext(Dispatchers.Main) {
+                                updateAssistantMessage(assistantId, accumulatedText, true, allToolBlocks)
+                            }
+                            return@withPermit
+                        }
+
                         android.util.Log.d("ToolChain[VM]", "[turn=$turn] executeTool START name=$name args=${argsStr.take(200)}")
-                        val result = executeTool(name, argsStr, id, allToolBlocks, assistantId, accumulatedText)
+                        // [T-stop-choice] Registered so "Stop Current Tool Only"
+                        // can end this call alone. A shell is not cancelled but
+                        // has its process group killed, so it returns with its
+                        // partial output; a waiting delegation moves to the
+                        // background (delegateDetach) and is not interrupted.
+                        val isDelegation = name == com.openminis.app.agent.jobs.HelperRunner.TOOL_NAME
+                        val toolRun = foregroundTools.run(
+                            id, name,
+                            cancellable = name != "shell_execute" && !isDelegation,
+                            onInterrupted = { ToolExecutionResult(ForegroundToolInterrupts.INTERRUPTED_RESULT, false) },
+                        ) { executeTool(name, argsStr, id, allToolBlocks, assistantId, accumulatedText) }
+                        val toolInterrupted = toolRun.interrupted && !isDelegation
+                        val result = if (toolInterrupted && toolRun.value.output != ForegroundToolInterrupts.INTERRUPTED_RESULT) {
+                            toolRun.value.copy(output = ForegroundToolInterrupts.withInterruptNote(toolRun.value.output), success = false)
+                        } else {
+                            toolRun.value
+                        }
+                        if (toolInterrupted) AppLogger.info(TAG_STREAM, "[stop-tool] turn=$turn $name ${id.take(16)} stopped by the user (tool only)")
                         android.util.Log.d("ToolChain[VM]", "[turn=$turn] executeTool END name=$name success=${result.success} title=${result.toolTitle} outputLen=${result.output.length} output=${result.output.take(200)}")
 
                         // Record post-execution. WARNING text is appended to the tool
@@ -12703,12 +13710,21 @@ class ChatViewModel(
                             errorMessage = errMsgForDetector,
                             toolCallId = id,
                         )
-                        val outputForLLM = if (postRecord.level == Level.WARNING && postRecord.message != null) {
+                        val outputWithLoopWarning = if (postRecord.level == Level.WARNING && postRecord.message != null) {
                             AppLogger.debug("ChatViewModel",
                                 "appending loop-warning to tool result name=$name key=${postRecord.warningKey}")
                             "${result.output}\n\n${postRecord.message}"
                         } else {
                             result.output
+                        }
+                        // [T-tool-title-reminder] Same channel as the loop warning:
+                        // the detector counts titled calls with no tool_title and
+                        // hands back the soft reminder on the 1st, 11th, 21st… of them.
+                        val outputForLLM = if (toolLoopDetector.recordToolTitle(args, name in titledTools) != null) {
+                            Log.i(TAG, "[ToolTitleReminder] $name came back without tool_title — soft reminder appended")
+                            ToolTitleReminder.appending(outputWithLoopWarning)
+                        } else {
+                            outputWithLoopWarning
                         }
 
                         val blockIdx = allToolBlocks.indexOfFirst { it.id == id }
@@ -12736,6 +13752,7 @@ class ChatViewModel(
                             // silence is the reported bug. Show it with the same weight
                             // as the blocked path. Mirrors iOS ConcurrentTools.
                             val finalStatus = when {
+                                toolInterrupted -> ToolBlockStatus.CANCELLED
                                 // [T-p2-background-helper] A background delegation returned
                                 // `status: running`: the block stays RUNNING so the tool bar
                                 // treats it as active; the completion hook flips it later.
@@ -12758,6 +13775,7 @@ class ChatViewModel(
                                 ToolBlockStatus.SUCCESS -> com.openminis.app.service.ToolOutcome.Success
                                 ToolBlockStatus.TIMEOUT -> com.openminis.app.service.ToolOutcome.Timeout
                                 ToolBlockStatus.FAILED -> com.openminis.app.service.ToolOutcome.Error
+                                ToolBlockStatus.CANCELLED -> com.openminis.app.service.ToolOutcome.Cancelled
                                 else -> com.openminis.app.service.ToolOutcome.Unknown
                             }
                             SessionActivityTracker.clearToolRunning(toolOutcome)
@@ -12787,21 +13805,13 @@ class ChatViewModel(
                             outputForLLM
                         }
 
-                        resultParts.add(AgentContentPart.ToolResult(
-                            id = id,
-                            name = name,
-                            content = outputForLLMWithNote,
-                            isError = !result.success,
-                            imageData = result.imageData,
-                            imageMimeType = result.imageMimeType,
-                            imageLinuxPath = result.imageLinuxPath,
-                        ))
+                        resultParts.add(ToolResultWrap.part(id, name, outputForLLMWithNote, result))
                             } finally {
                                 SessionActivityTracker.toolFinished()
                             }
                         }
                         slotResults[slotIndex] = resultParts
-                    }
+                    }.also { slotJobs[slotIndex] = it }
                 }.awaitAll()
             }
             // Flatten in tool_use order, never completion order.
@@ -12832,15 +13842,15 @@ class ChatViewModel(
             }
 
             // Persist tool results as user-role message (mirrors iOS)
-            val toolResultDbId = persistToolResultMessage(resultParts)
+            // [T-tool-duration-persist] Each call's measured time rides with its result.
+            val toolResultDbId = persistToolResultMessage(resultParts, blockMeta.mapValues { it.value.durationMs })
+            // [T-port-user-ask-recovery] Their questions are delivered: drop the records.
+            com.openminis.app.agent.userask.UserAskCenter.markDelivered(
+                resultParts.filterIsInstance<AgentContentPart.ToolResult>().map { it.id },
+            )
 
             // Add tool results to history
-            agentHistory.add(LLMMessage(
-                role = LLMMessage.Role.USER,
-                content = "",
-                contentParts = resultParts,
-                dbMessageId = toolResultDbId,
-            ))
+            agentHistory.add(ToolResultWrap.historyMessage(resultParts, toolResultDbId))
 
             // Auto-title after first exchange (mirrors iOS generateSessionTitleIfNeeded)
             if (turn == 0) {
@@ -12859,6 +13869,15 @@ class ChatViewModel(
             // nothing more is sent, and delegation notices still queued would
             // only restart the turn, so they go too. A user's own queued
             // message and scheduled fires are kept.
+            // [stop-diag] The post-tool decision, logged whether or not it stops.
+            val stopDiagMuted = com.openminis.app.agent.jobs.AgentJobRegistry.mutedSnapshot().contains(activeSessionId)
+            AppLogger.info(
+                TAG_STREAM,
+                "[stop-diag] post-tools turn=$turn sid=$activeSessionId muted=$stopDiagMuted " +
+                    "mutedSet=${com.openminis.app.agent.jobs.AgentJobRegistry.mutedSnapshot()} tools=${toolCalls.map { it.second }} " +
+                    "activeChildJobs=${com.openminis.app.agent.jobs.AgentJobRegistry.activeChildCount(activeSessionId)} " +
+                    "decision=${if (stopDiagMuted) "stop (delegation-muted)" else "continue -> next model request"}",
+            )
             if (com.openminis.app.agent.jobs.AgentJobRegistry.isDelegationMuted(activeSessionId)) {
                 val stale = _promptQueue.value.filter {
                     it.origin == QueuedPromptOrigin.PROGRAMMATIC && !it.isScheduledFire &&
@@ -12876,6 +13895,7 @@ class ChatViewModel(
                         isAwaitingModelResponse = false,
                     )
                 }
+                stopDiagExit = "delegation-muted"
                 loopExitedNormally = true
                 break
             }
@@ -12895,16 +13915,12 @@ class ChatViewModel(
             // makes a brand-new API call whose response targets the
             // queued prompt directly.
             //
-            // Why not just append-and-continue: the agentHistory tail is
-            // user(tool_result). Anthropic's mergeConsecutiveSameRole would
-            // fold a directly-appended user(queued_text) into that
-            // tool_result, so the model would read the queued prompt as
-            // in-loop context for the previous turn (#579 / iOS regression).
-            // Inject a minimal assistant bridge first so the sequence is
-            //   …user(tool_result) → assistant(bridge) → user(queued) →
-            //   …assistant(responds-to-queued).
-            // The bridge lives in agentHistory only (NOT persisted) —
-            // it's purely a wire-format spacer for the API call.
+            // The agentHistory tail is user(tool_result), so the queued
+            // message follows it as a second user row (Anthropic merges the
+            // two, tool_result first). [T-bridge-to-reminder] It ends with a
+            // <system-reminder> saying the user interrupted a task, so the
+            // model does not read the message as in-loop context (#579) —
+            // this replaced an assistant bridge row the model learned to copy.
             // [T-p2-gentle-injection] Only a USER follow-up may cut the plan
             // short here. PROGRAMMATIC prompts (scheduled jobs, helper results,
             // RPC/CLI sends) stay queued until the loop converges and are
@@ -12925,6 +13941,30 @@ class ChatViewModel(
             // resumes. Other programmatic prompts still wait for the drain.
             // QueuedPromptBatching.nextInsertBatch holds the rules.
             val insertBatch = QueuedPromptBatching.nextInsertBatch(_promptQueue.value)
+            // [T-stop-choice] The user stopped this turn's tools only. With a
+            // message of theirs waiting it goes in below as the next round;
+            // with none the turn ends here instead of asking the model again,
+            // which would only retry the tool just stopped. Sub agents and
+            // scheduled tasks are untouched either way.
+            val toolStopHere = toolOnlyStopTurn == turnGen
+            if (toolStopHere) toolOnlyStopTurn = null
+            if (StopScopePolicy.endsTurnAtBoundary(toolStopHere, insertPending = insertBatch.isNotEmpty())) {
+                AppLogger.info(
+                    TAG_STREAM,
+                    "[stop-tool] turn=$turn tools stopped by the user and nothing queued to insert — " +
+                        "ending the turn (queue=${_promptQueue.value.size}, activeChildJobs=" +
+                        "${com.openminis.app.agent.jobs.AgentJobRegistry.activeChildCount(activeSessionId)})",
+                )
+                withContext(Dispatchers.Main) {
+                    updateAssistantMessage(
+                        assistantId, accumulatedText, false, allToolBlocks,
+                        isAwaitingModelResponse = false,
+                    )
+                }
+                stopDiagExit = "tool-only-stop"
+                loopExitedNormally = true
+                break
+            }
             if (insertBatch.isEmpty() && _promptQueue.value.isNotEmpty()) {
                 AppLogger.info(
                     TAG_STREAM,
@@ -12965,6 +14005,7 @@ class ChatViewModel(
                     // iteration top, so clearing means new turn's blocks
                     // span [0..size).
                     assistantId = handled.newAssistantId
+                    liveTurn.markAssistant(turnGen, assistantId)
                     scriptedTurnFor(handled.prefill)?.let { pendingScriptedTurn = it }
                     accumulatedText = ""
                     allToolBlocks.clear()
@@ -12986,7 +14027,13 @@ class ChatViewModel(
         //
         // (b) is the only case that needs the inline-error/Resume hand-holding;
         // (a) must NOT be touched or every normal completion gets a fake "hit
-        // 200 turns" sticker (the bug user hit at v1.4.0-dev tip).
+        // MAX_AGENT_TURNS" sticker (the bug user hit at v1.4.0-dev tip).
+        // [stop-diag] One labelled line per loop end.
+        AppLogger.info(
+            TAG_STREAM,
+            "[stop-diag] runAgentLoop EXIT reason=${if (loopExitedNormally) stopDiagExit else "turn-cap"} " +
+                "sid=$activeSessionId muted=${com.openminis.app.agent.jobs.AgentJobRegistry.mutedSnapshot().contains(activeSessionId)}",
+        )
         if (!loopExitedNormally) {
             AppLogger.warning(
                 TAG_STREAM,
@@ -13170,6 +14217,54 @@ class ChatViewModel(
                     )
                 }
             "memory_get" -> executeMemoryGetTool(argsJson)
+            // [T-port-user-ask] Card in the chat, then wait for the user.
+            // [T-user-ask-exposure-guard] A run that does not offer the tool (the
+            // setting is off, a helper / sub agent, a scheduled or other headless
+            // run) refuses it like iOS: otherwise a model copying an earlier call
+            // from history showed a card nobody would see and blocked until the
+            // timeout, or forever with an indefinite wait.
+            com.openminis.app.agent.userask.UserAskPromptText.TOOL_NAME -> if (!userAskExposedThisRun) {
+                ToolExecutionResult(com.openminis.app.agent.userask.UserAskPromptText.NOT_AVAILABLE, false, toolTitle = "")
+            } else if (userAskDeferredThisRun) {
+                // [T-user-ask-deferred] Nobody waits in this run: card up, return at once.
+                userAskAskedThisRun = true
+                com.openminis.app.agent.userask.UserAskToolRunner.executeDeferred(
+                    argsJson = argsJson,
+                    toolCallId = toolId,
+                    sessionId = activeSessionId,
+                    sessionTitle = overlaySessionTitle(),
+                    beforeShow = { ask ->
+                        ensureUserAskRecovery()
+                        val snap = userAskBatchSnapshot
+                        com.openminis.app.agent.userask.UserAskRecoveryCoordinator.saveNew(
+                            com.openminis.app.agent.userask.UserAskRecord(
+                                ask = ask,
+                                assistantPartsJson = snap?.first,
+                                siblingToolUseIds = snap?.second?.filter { it != toolId } ?: emptyList(),
+                            ),
+                        )
+                    },
+                )
+            } else
+                com.openminis.app.agent.userask.UserAskToolRunner.execute(
+                    argsJson = argsJson,
+                    toolCallId = toolId,
+                    sessionId = activeSessionId,
+                    sessionTitle = overlaySessionTitle(),
+                    timeoutMinutes = com.openminis.app.agent.userask.UserAskSettings.timeoutMinutes(context),
+                    beforeShow = { ask ->
+                        // [T-port-user-ask-recovery] On disk before the card shows.
+                        ensureUserAskRecovery()
+                        val snap = userAskBatchSnapshot
+                        com.openminis.app.agent.userask.UserAskRecoveryCoordinator.saveNew(
+                            com.openminis.app.agent.userask.UserAskRecord(
+                                ask = ask,
+                                assistantPartsJson = snap?.first,
+                                siblingToolUseIds = snap?.second?.filter { it != toolId } ?: emptyList(),
+                            ),
+                        )
+                    },
+                )
             else -> ToolExecutionResult("Unknown tool: $name", false)
         }
     }
@@ -13218,6 +14313,10 @@ class ChatViewModel(
         currentText: String,
     ): ToolExecutionResult {
         val hr = com.openminis.app.agent.jobs.HelperRunner
+        // [T-stop-choice] A "Stop Current Tool Only" from here on bumps this -
+        // also while the call still waits for a sub agent slot - and the wait
+        // below then moves the job to the background.
+        val detachSeen = delegateDetach.value
         val args = hr.parseArgs(argsJson)
         val title = args.title.ifEmpty { "agent" }
         fun reject(reason: String, detail: String): ToolExecutionResult {
@@ -13286,7 +14385,9 @@ class ChatViewModel(
         // either. Refusing was the old behaviour and it was worse: a model that
         // fanned out five tasks saw two come back "rejected" while three ran,
         // which is precisely the case the queue exists for.
-        if (overTurnAllowance || !registry.canStartChildJob) {
+        // [T-new-limits] The cap is per parent conversation: only THIS
+        // conversation's own running sub agents count.
+        if (overTurnAllowance || !registry.canStartChildJob(parentSid)) {
             // Only a live view model can re-enter a queued delegation, so
             // register this one as its parent's starter. Removed in onCleared.
             registry.registerQueuedStarter(parentSid) { item ->
@@ -13303,9 +14404,10 @@ class ChatViewModel(
             if (!queued) {
                 return reject(
                     "helper_limit",
-                    "${com.openminis.app.agent.jobs.AgentJobRegistry.MAX_CONCURRENT_CHILD_JOBS} sub agents are " +
-                        "already running and the queue is full. Wait for some to finish, then delegate this " +
-                        "task again — it was NOT queued.",
+                    "${com.openminis.app.agent.jobs.AgentJobRegistry.maxConcurrentChildJobsPerParent} sub agents are " +
+                        "already running in this conversation and its queue is full " +
+                        "(${com.openminis.app.agent.jobs.AgentJobRegistry.MAX_QUEUED_DELEGATIONS_PER_PARENT} waiting). " +
+                        "Wait for some to finish, then delegate this task again — it was NOT queued.",
                 )
             }
             val detail = if (overTurnAllowance) {
@@ -13313,12 +14415,13 @@ class ChatViewModel(
                     "start automatically as slots free; its result arrives as a new message like any other. " +
                     "Do not re-delegate it."
             } else {
-                "All ${com.openminis.app.agent.jobs.AgentJobRegistry.MAX_CONCURRENT_CHILD_JOBS} slots are busy. " +
+                "All ${com.openminis.app.agent.jobs.AgentJobRegistry.maxConcurrentChildJobsPerParent} sub agent " +
+                    "slots of this conversation are busy. " +
                     "This task is QUEUED and will start automatically when one frees; its result arrives as a " +
                     "new message like any other. Do not re-delegate it."
             }
             val json = hr.queuedJson(
-                queuedBehind = registry.runningChildJobCount + registry.queuedCount(parentSid) - 1,
+                queuedBehind = registry.runningChildJobCount(parentSid) + registry.queuedCount(parentSid) - 1,
                 detail = detail,
             )
             withContext(Dispatchers.Main) {
@@ -13328,7 +14431,7 @@ class ChatViewModel(
                     updateAssistantMessage(assistantId, currentText, true, toolBlocks)
                 }
             }
-            AppLogger.info(TAG, "[subagent_task] QUEUED tool=${toolId.take(12)} behind ${registry.runningChildJobCount} running")
+            AppLogger.info(TAG, "[subagent_task] QUEUED tool=${toolId.take(12)} behind ${registry.runningChildJobCount(parentSid)} running in ${parentSid.take(8)}")
             return ToolExecutionResult(json, true, toolTitle = title)
         }
         val parentRow = chatRepository.getSession(parentSid)
@@ -13481,6 +14584,9 @@ class ChatViewModel(
         registry.markRunning(job.id, child.id) {
             if (childVm.isStreaming.value) childVm.cancelStream()
         }
+        // [T-subagent-termination] `running` until an ending path replaces it;
+        // still `running` later with no live run reads as `interrupted`.
+        com.openminis.app.agent.jobs.SubAgentTerminationStore.shared.begin(child.id, job.id, parentSid)
         AppLogger.info(TAG, "[delegate_task] START job=${job.id.take(8)} child=${child.id.take(8)} parent=${parentSid.take(8)} tier=${resolution.tierUsed.wire} model=${resolution.modelLabel} budget=${args.minutes}m wait=${args.wait} progress=${args.progressLevel}")
 
         // ── Background mode: return now, report back later ───────────────
@@ -13517,19 +14623,35 @@ class ChatViewModel(
                 }
                 // [T-p2-background-default] A USER follow-up while waiting → move
                 // to background so the parent can answer now.
-                if (_promptQueue.value.any { it.origin == QueuedPromptOrigin.USER }) {
-                    AppLogger.info(TAG, "[delegate_task] user follow-up queued while waiting — converting job ${job.id.take(8)} to background")
+                // [T-stop-choice] So does "Stop Current Tool Only": the user
+                // stopped the wait, not the sub agent, which reports back later.
+                val userFollowUp = _promptQueue.value.any { it.origin == QueuedPromptOrigin.USER }
+                if (userFollowUp || delegateDetach.value != detachSeen) {
+                    AppLogger.info(
+                        TAG,
+                        "[delegate_task] ${if (userFollowUp) "user follow-up queued" else "user stopped the current tool"} " +
+                            "while waiting — converting job ${job.id.take(8)} to background",
+                    )
                     registry.setThen(job.id, com.openminis.app.agent.jobs.AgentJobThen.FollowUpParent(null))
                     return startBackgroundHelper(job.id, childVm, child.id, toolId, resolution, args, title, startedAt, converted = true, subAgentWireName = subAgentWireName)
                 }
                 val (tool, activity) = childCurrentTool()
                 writeBlock(hr.progressJson(child.id, title, tool, activity, now - startedAt))
-                kotlinx.coroutines.delay(1_000L)
+                // A tick, cut short by a tool-only stop so the move is prompt.
+                withTimeoutOrNull(1_000L) { delegateDetach.first { it != detachSeen } }
             }
         } catch (e: CancellationException) {
             withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {
                 if (childVm.isStreaming.value) childVm.cancelStream()
                 registry.finish(job.id, com.openminis.app.agent.jobs.AgentJobState.CANCELLED, null)
+                // [T-subagent-termination] The parent's turn was stopped while
+                // waiting: the child ends `cancelled`, not `interrupted`.
+                recordChildTermination(
+                    childVm, child.id, job.id, parentSid, loopStatus = "cancelled",
+                    budgetExpired = childVm.helperWrapUpRequested,
+                    errorText = null, resultText = "",
+                    delivery = com.openminis.app.agent.jobs.SubAgentTermination.Delivery.INLINE,
+                )
                 clearDelegateOverride(toolId)
             }
             throw e
@@ -13551,9 +14673,19 @@ class ChatViewModel(
                 else -> "completed"
             }
         }
+        // [T-subagent-termination] Name the ending and store it on the child.
+        val termination = recordChildTermination(
+            childVm, child.id, job.id, parentSid,
+            loopStatus = finalStatus,
+            budgetExpired = wrapUpAskedAt != null || childVm.helperWrapUpRequested,
+            errorText = childError,
+            resultText = facts.lastText,
+            delivery = com.openminis.app.agent.jobs.SubAgentTermination.Delivery.INLINE,
+        )
         // [T-android-no-deliverable] Same rule on the wait-mode path: the child
-        // ran to completion but produced no deliverable.
-        finalStatus = hr.resolvedStatus(finalStatus, facts.lastText)
+        // ran to completion but produced no deliverable. [T-subagent-termination]
+        // A clean exit whose last turn was not an answer is not one either.
+        finalStatus = hr.reportedStatus(finalStatus, facts.lastText, termination)
         val summary = hr.runSummaryLine(facts.toolNames, facts.turns, facts.input, facts.output, facts.cacheRead)
         registry.setSummaryLine(job.id, summary)
         registry.finish(
@@ -13586,10 +14718,53 @@ class ChatViewModel(
                     resolvedModelId = resolution.resolvedModelId,
                     resolvedModelName = resolution.resolvedModelName,
                     thinkingLevel = seededThinking,
+                    termination = termination,
         )
         clearDelegateOverride(toolId)
         AppLogger.info(TAG, "[delegate_task] END job=${job.id.take(8)} status=$finalStatus turns=${facts.turns} elapsed=${elapsed / 1000}s result=${facts.lastText.length}ch")
         return ToolExecutionResult(json, finalStatus == "completed", toolTitle = title)
+    }
+
+    /**
+     * [T-subagent-termination] Classify a finished helper run, store it on the
+     * child session (SubAgentTerminationStore) and return it for the parent
+     * payload. Reads the child's in-memory history and bubbles, like iOS
+     * `recordHelperTermination`. Null only if recording itself failed; callers
+     * then report exactly as before this record existed.
+     */
+    private fun recordChildTermination(
+        childVm: ChatViewModel,
+        childId: String,
+        jobId: String,
+        parentSessionId: String?,
+        loopStatus: String,
+        budgetExpired: Boolean,
+        errorText: String?,
+        resultText: String,
+        delivery: com.openminis.app.agent.jobs.SubAgentTermination.Delivery,
+    ): com.openminis.app.agent.jobs.SubAgentTermination? = runCatching {
+        val hr = com.openminis.app.agent.jobs.HelperRunner
+        val tool = hr.lastToolSnapshot(childVm.messages.value)
+        val t = hr.terminationOf(
+            childSessionId = childId, jobId = jobId, parentSessionId = parentSessionId,
+            loopStatus = loopStatus, budgetExpired = budgetExpired, errorText = errorText,
+            history = childVm.agentHistorySnapshot(), resultText = resultText,
+            lastTool = tool, closingAttempted = childVm.helperClosingAttempted, delivery = delivery,
+        )
+        com.openminis.app.agent.jobs.SubAgentTerminationStore.shared.end(t)
+        AppLogger.info(
+            TAG,
+            "[subagent_term] child=${childId.take(8)} job=${jobId.take(8)} reason=${t.reason.wire} " +
+                "lastTool=${tool?.name ?: "-"}/${tool?.status ?: "-"} partial=${t.partialOutputAvailable} " +
+                "closing=${t.closingAttempted} delivery=${delivery.wire}",
+        )
+        t
+    }.getOrElse {
+        // Never let the record break the ending it describes: the completion
+        // hooks run inside AgentJobRegistry.finish's runCatching, and a throw
+        // here would skip the final payload write that follows.
+        AppLogger.warning(TAG, "[subagent_term] could not record child=${childId.take(8)}: ${it.message}")
+        null
     }
 
     /**
@@ -13649,6 +14824,17 @@ class ChatViewModel(
         // closes the job. Runs BEFORE `then` posts the callback.
         registry.setCompletionHook(jobId) { finished ->
             mirror.cancel()
+            // [T-subagent-termination] Recorded synchronously, before `finish()`
+            // runs the callback, so the delivery state starts at `pending` and
+            // the callback text can use the same termination note.
+            val termination = recordChildTermination(
+                childVm, childId, finished.id, finished.target.parentSessionIdOrNull,
+                loopStatus = hr.statusWord(finished.state),
+                budgetExpired = childVm.helperWrapUpRequested,
+                errorText = childVm.messages.value.lastOrNull { it.role == "assistant" }?.error,
+                resultText = finished.resultText ?: "",
+                delivery = com.openminis.app.agent.jobs.SubAgentTermination.Delivery.PENDING,
+            )
             viewModelScope.launch(Dispatchers.IO) {
                 val facts = hr.childRunFacts(chatRepository.dao.loadMessages(childId))
                 val summary = hr.runSummaryLine(facts.toolNames, facts.turns, facts.input, facts.output, facts.cacheRead)
@@ -13656,7 +14842,7 @@ class ChatViewModel(
                 val result = finished.resultText ?: ""
                 // [T-android-no-deliverable] A clean finish with no text is
                 // "nothing to hand over", not success.
-                val status = hr.resolvedStatus(hr.statusWord(finished.state), result)
+                val status = hr.reportedStatus(hr.statusWord(finished.state), result, termination)
                 // [T-android-subagent-error-surface] Same reason as the
                 // wait-mode path: a FAILED background run must say WHY, not
                 // just that it failed. Read here rather than captured earlier
@@ -13682,6 +14868,7 @@ class ChatViewModel(
                     // row rather than threaded in: this runs long after the
                     // delegation returned, and the row is where the level lives.
                     thinkingLevel = chatRepository.getSession(childId)?.thinkingOverride,
+                    termination = termination,
                 )
                 val blockStatus = when (finished.state) {
                     com.openminis.app.agent.jobs.AgentJobState.DONE -> ToolBlockStatus.SUCCESS
@@ -14086,6 +15273,7 @@ class ChatViewModel(
             mimeType = mime,
             seed = kotlin.math.abs(argsJson.hashCode()),
             customPrompt = customPrompt,
+            sessionId = activeSessionId,
             // [T-vision-group-attribution / GH#182] iOS rewrites the tool block's
             // live content here so the card names the model as it works. Android
             // has no equivalent channel — no tool streams partial output to its
@@ -14140,6 +15328,28 @@ class ChatViewModel(
     /** Sentinel returned by the bash wrapper when bash is missing at run time,
      *  distinct from a script that legitimately exits 127 (T-bash-on-demand M5). */
     private val BASH_MISSING_SENTINEL = 119
+
+    /**
+     * [FIX-261025-05] The result of a shell call stopped before its command
+     * started: the "⏳ Waiting" countdown text is cleared and the model is
+     * told nothing ran. The caller (foregroundTools.run) marks the call
+     * interrupted, so the pill ends CANCELLED.
+     */
+    private fun stoppedBeforeStart(
+        toolBlocks: MutableList<AssistantBlock>,
+        toolId: String,
+        toolTitle: String,
+        phase: String,
+    ): ToolExecutionResult {
+        val idx = toolBlocks.indexOfFirst { it.id == toolId }
+        if (idx >= 0) toolBlocks[idx] = toolBlocks[idx].copy(content = "")
+        AppLogger.info(TAG_STREAM, "[stop-tool] shell ${toolId.take(16)} stopped $phase - command not run")
+        return ToolExecutionResult(
+            ExecutionCoordinator.NOT_STARTED_OUTPUT + "\n\n" + ForegroundToolInterrupts.INTERRUPTED_RESULT,
+            false,
+            toolTitle = toolTitle,
+        )
+    }
 
     /** Wrap a script to run under bash via a guest-side self-written temp file
      *  (base64, single line, self-cleaning), guarding on `command -v bash` so a
@@ -14203,6 +15413,15 @@ class ChatViewModel(
             // allowing other concurrent tasks to use it during the wait period.
             if (delaySec > 0) {
                 for (remaining in delaySec downTo 1) {
+                    // [FIX-261025-05] "Stop Current Tool Only" / the tool pill's
+                    // Stop do not cancel a shell call; they kill its process
+                    // group. During the countdown there is no process yet, so
+                    // the countdown ran out and the command ran anyway (tester
+                    // report: "a shell waiting on a countdown can't be
+                    // interrupted"). Check the interrupt mark every second.
+                    if (foregroundTools.isInterrupted(toolId)) {
+                        return stoppedBeforeStart(toolBlocks, toolId, toolTitle, "during its ${delaySec}s delay")
+                    }
                     val idx = toolBlocks.indexOfFirst { it.id == toolId }
                     if (idx >= 0) {
                         val mm = remaining / 60
@@ -14226,6 +15445,18 @@ class ChatViewModel(
             // resolves to the persisted id once `ensureSession()` has run, so
             // every shell runs in a directory that survives VM recreation.
             val dispatchSessionId = activeSessionId
+            // [FIX-261025-05] Taken once, here, and handed to every execute()
+            // below, so a Stop during the bash install still keeps the main
+            // command from starting (each execute() would otherwise take a
+            // fresh value after the Stop and run). The check right after closes
+            // the gap since the countdown's last check.
+            val stopEpoch = ExecutionCoordinator.stopEpoch(dispatchSessionId)
+            if (foregroundTools.isInterrupted(toolId)) {
+                return stoppedBeforeStart(toolBlocks, toolId, toolTitle, "before it started")
+            }
+            // [T-android-stop-late-write] This command's turn; its output lines
+            // are written only while that turn is live.
+            val turnGen = liveTurn.liveGeneration()
             android.util.Log.w("ShellExecDiag",
                 "executeShell dispatch=$dispatchSessionId rawSessionId=$sessionId realSessionId=$realSessionId isDraft=$isDraft cmd=${command.take(120).replace('\n', ' ')}")
 
@@ -14242,7 +15473,7 @@ class ChatViewModel(
             var bashScript: String? = null   // set when we bash-wrapped; enables M5 self-heal retry
             if (bashism.needsBash) {
                 val executor = OnDemandBash.Executor { c, t ->
-                    ExecutionCoordinator.execute(sessionId = dispatchSessionId, command = c, timeout = t, fsSessionId = fsSessionId).exitCode
+                    ExecutionCoordinator.execute(sessionId = dispatchSessionId, command = c, timeout = t, fsSessionId = fsSessionId, stopEpoch = stopEpoch).exitCode
                 }
                 when (val outcome = OnDemandBash.ensureBash(context, executor)) {
                     is OnDemandBash.Outcome.Available -> {
@@ -14262,8 +15493,14 @@ class ChatViewModel(
                 }
             }
 
+            // [FIX-261025-05] Stopped during the bash install: do not start
+            // the command (its execute() would also refuse, by the epoch).
+            if (foregroundTools.isInterrupted(toolId) || ExecutionCoordinator.stoppedSince(dispatchSessionId, stopEpoch)) {
+                return stoppedBeforeStart(toolBlocks, toolId, toolTitle, "while preparing bash")
+            }
             var result = ExecutionCoordinator.execute(
                 sessionId = dispatchSessionId,
+                stopEpoch = stopEpoch,
                 fsSessionId = fsSessionId,
                 command = command,
                 timeout = timeoutSec * 1000L,
@@ -14278,6 +15515,15 @@ class ChatViewModel(
                     for (raw in capturedUrls) MinisOpenUrlBroker.offer(raw)
                     if (cleanedLine.isEmpty() && rawLine.isNotEmpty()) return@lc
 
+                    // [T-android-stop-late-write] A line that arrives after
+                    // Stop belongs to a turn that is over. SIGKILL always makes
+                    // proot print "terminated with signal 9", and re-publishing
+                    // the turn-local snapshot for it (status RUNNING) is what
+                    // left the pill stuck on a red Stop square. Drop it.
+                    if (turnGen != null && !liveTurn.isLive(turnGen)) {
+                        noteStopLateLine(toolId, cleanedLine, "reader")
+                        return@lc
+                    }
                     val idx = toolBlocks.indexOfFirst { it.id == toolId }
                     if (idx >= 0) {
                         val current = toolBlocks[idx].content
@@ -14286,6 +15532,12 @@ class ChatViewModel(
                         val trimmed = updated.lines().takeLast(50).joinToString("\n")
                         toolBlocks[idx] = toolBlocks[idx].copy(content = trimmed)
                         viewModelScope.launch(Dispatchers.Main) {
+                            // Re-checked on Main: Stop may have run between
+                            // the read above and this hop.
+                            if (turnGen != null && !liveTurn.isLive(turnGen)) {
+                                noteStopLateLine(toolId, cleanedLine, "main")
+                                return@launch
+                            }
                             updateAssistantMessage(assistantId, currentText, true, toolBlocks)
                         }
                     }
@@ -14302,12 +15554,13 @@ class ChatViewModel(
                     result.exitCode == (BASH_MISSING_SENTINEL shl 8)) && bashScript != null) {
                 OnDemandBash.markDisappeared()
                 val executor = OnDemandBash.Executor { c, t ->
-                    ExecutionCoordinator.execute(sessionId = dispatchSessionId, command = c, timeout = t, fsSessionId = fsSessionId).exitCode
+                    ExecutionCoordinator.execute(sessionId = dispatchSessionId, command = c, timeout = t, fsSessionId = fsSessionId, stopEpoch = stopEpoch).exitCode
                 }
                 val healed = OnDemandBash.ensureBash(context, executor)
                 command = if (healed is OnDemandBash.Outcome.Available) wrapForBash(bashScript!!) else bashScript!!
                 result = ExecutionCoordinator.execute(
-                    sessionId = dispatchSessionId, command = command, timeout = timeoutSec * 1000L, fsSessionId = fsSessionId)
+                    sessionId = dispatchSessionId, command = command, timeout = timeoutSec * 1000L, fsSessionId = fsSessionId,
+                    stopEpoch = stopEpoch)
             }
 
             // Also scrub markers from the aggregated one-shot output and
@@ -14388,54 +15641,12 @@ class ChatViewModel(
                 JSONObject(argsJson).optString("tool_title", "browser_use")
             } catch (_: Exception) { "browser_use" }
 
-            var output = result.text
-            var persistentImagePath: String? = result.imageFilePath
-            var inferenceBytes: ByteArray? = null
-
-            // Persist browser screenshots to /var/minis/browser/<session>/ so the
-            // agent can reference them via minis:// in subsequent tool calls
-            // (mirrors iOS AIChatViewModel case "browser_use").
-            val base64 = result.base64Image
-            var linuxImagePath: String? = null
-            if (base64 != null) {
-                val raw = try {
-                    android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-                } catch (_: Exception) { null }
-                if (raw != null) {
-                    // Anthropic supports up to 8000×8000 / 5MB; we standardize at 2000
-                    // long edge across attachments / browser / read_image.
-                    inferenceBytes = resizeJpegToMaxEdge(raw, 2000) ?: raw
-                    val filename = "screenshot_${System.currentTimeMillis() / 1000}.jpg"
-                    val persistPath = persistBrowserArtifact(filename, raw)
-                    if (persistPath != null) {
-                        persistentImagePath = persistPath
-                        linuxImagePath = "/var/minis/browser/$filename"
-                        linuxPathToMinisURL(linuxImagePath)?.let {
-                            output = "$output\nminis_url: $it"
-                        }
-                    }
-                }
-            }
-
-            // Persist fetched files (fetch action) and append minis_url
-            val fetchData = result.fetchedFileData
-            val fetchName = result.fetchedFileName
-            if (fetchData != null && fetchName != null) {
-                persistBrowserArtifact(fetchName, fetchData)
-                linuxPathToMinisURL("/var/minis/browser/$fetchName")?.let {
-                    output = "$output\nminis_url: $it"
-                }
-            }
-
-            ToolExecutionResult(
-                output = output,
-                success = result.success,
-                imageData = inferenceBytes,
-                imageMimeType = if (inferenceBytes != null) "image/jpeg" else null,
+            BrowserArtifacts.toolResult(
+                result = result,
                 toolTitle = toolTitle,
-                pageURL = result.pageURL,
-                imageFilePath = persistentImagePath,
-                imageLinuxPath = linuxImagePath,
+                decodeBase64 = { android.util.Base64.decode(it, android.util.Base64.DEFAULT) },
+                clockMs = System::currentTimeMillis,
+                persist = ::persistBrowserArtifact,
             )
         } catch (e: Exception) {
             ToolExecutionResult("Error: ${e.message}", false)
@@ -14448,53 +15659,21 @@ class ChatViewModel(
      * read it back via file_read / file_write / minis:// URLs.
      * Returns the host absolute path on success, null otherwise.
      */
-    private fun persistBrowserArtifact(filename: String, data: ByteArray): String? {
-        val sid = activeSessionId.takeIf { it.isNotEmpty() } ?: return null
-        return try {
-            val dir = java.io.File(context.filesDir, "minis-sessions/$sid/browser").apply { mkdirs() }
-            val file = java.io.File(dir, filename)
-            file.writeBytes(data)
-            file.absolutePath
-        } catch (e: Exception) {
-            android.util.Log.w("ChatViewModel", "persistBrowserArtifact failed: ${e.message}")
-            null
-        }
-    }
+    private fun persistBrowserArtifact(filename: String, data: ByteArray): String? =
+        BrowserArtifacts.persist(activeSessionId, { context.filesDir }, filename, data)
 
     /**
      * Convert a Linux path under /var/minis/ to a percent-encoded minis:// URL.
      * Mirrors iOS AIChatViewModel.linuxPathToMinisURL.
      */
-    private fun linuxPathToMinisURL(path: String): String? {
-        val prefix = "/var/minis/"
-        if (!path.startsWith(prefix)) return null
-        val rest = path.removePrefix(prefix)
-        val slash = rest.indexOf('/')
-        if (slash < 0) return null
-        val namespace = rest.substring(0, slash)
-        val filename = rest.substring(slash + 1)
-        val encoded = java.net.URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
-        return "minis://$namespace/$encoded"
-    }
+    private fun linuxPathToMinisURL(path: String): String? = BrowserArtifacts.linuxPathToMinisURL(path)
 
     /**
      * Resize a JPEG so its longest edge is at most `maxEdge` px. Returns null
      * if already within bounds. Mirrors iOS AIChatViewModel.resizedImageData.
      */
-    private fun resizeJpegToMaxEdge(data: ByteArray, maxEdge: Int): ByteArray? {
-        val bmp = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size) ?: return null
-        val longest = maxOf(bmp.width, bmp.height)
-        if (longest <= maxEdge) { bmp.recycle(); return null }
-        val scale = maxEdge.toFloat() / longest
-        val w = (bmp.width * scale).toInt()
-        val h = (bmp.height * scale).toInt()
-        val resized = android.graphics.Bitmap.createScaledBitmap(bmp, w, h, true)
-        bmp.recycle()
-        val out = java.io.ByteArrayOutputStream()
-        resized.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
-        resized.recycle()
-        return out.toByteArray()
-    }
+    private fun resizeJpegToMaxEdge(data: ByteArray, maxEdge: Int): ByteArray? =
+        ImageBudget.resizeJpegToMaxEdge(data, maxEdge)
 
     private fun executeMemoryWriteTool(argsJson: String): ToolExecutionResult {
         val repo = memoryRepository ?: return ToolExecutionResult("Error: Memory not available", false)
@@ -14624,6 +15803,19 @@ class ChatViewModel(
         // clear the side-channel entry so post-turn reads (history rebuild,
         // persist, agent loop) see the canonical truth.
         if (isStreaming) {
+            // [T-android-stop-late-write] The overlay belongs to the running
+            // turn's current bubble only. Any other streaming write (a turn
+            // that was stopped or already ended, a sealed bubble, a background
+            // sub agent's progress after its parent turn finished) would create
+            // an entry no stream-end path drains, and mergeStreamingOverlay
+            // would paint it - RUNNING and all - over the canonical message for
+            // as long as the chat stays open. writeDelegateBlock still patches
+            // the canonical list for the sub-agent case.
+            if (!liveTurn.acceptsStreamingWrite(id)) {
+                noteStopLateOverlay(id, toolBlocks)
+                return
+            }
+            com.openminis.app.diagnostics.JankDiag.onStreamChunk(content.length)
             val toolBlocksImmutable = toolBlocks.toList()
 
             // [T-android-stream-flush-dualpath] Dual-path flush at the
@@ -14667,6 +15859,10 @@ class ChatViewModel(
                 unflushed >= NEWLINE_FLUSH_MIN_CHARS
 
             fun publish(text: String, blocks: List<AssistantBlock>, awaiting: Boolean) {
+                // The trailing job publishes after a delay; the turn may have
+                // been stopped in between.
+                if (!liveTurn.acceptsStreamingWrite(id)) return
+                com.openminis.app.diagnostics.JankDiag.onStreamPublish()
                 _streamingById.value = _streamingById.value + (
                     id to StreamingDelta(
                         content = text,
@@ -14791,7 +15987,9 @@ class ChatViewModel(
             updated[idx] = current[idx].copy(
                 content = delta.content,
                 isStreaming = false,
-                toolBlocks = delta.toolBlocks,
+                // [T-android-stop-late-write] Never let the overlay undo a
+                // status the canonical message already holds as finished.
+                toolBlocks = InFlightToolHeal.mergeOverlayBlocks(current[idx].toolBlocks, delta.toolBlocks),
                 isAwaitingModelResponse = delta.isAwaitingModelResponse,
             )
             _messages.value = updated
@@ -14818,7 +16016,9 @@ class ChatViewModel(
             current[idx] = current[idx].copy(
                 content = delta.content,
                 isStreaming = false,
-                toolBlocks = delta.toolBlocks,
+                // [T-android-stop-late-write] A later cancel used to copy a
+                // stale overlay's RUNNING back over the CANCELLED history here.
+                toolBlocks = InFlightToolHeal.mergeOverlayBlocks(current[idx].toolBlocks, delta.toolBlocks),
                 isAwaitingModelResponse = delta.isAwaitingModelResponse,
             )
             changed = true
@@ -14934,7 +16134,7 @@ class ChatViewModel(
         if (parts.isEmpty()) return null
         val partsJson = buildAssistantPartsJson(parts, toolBlockMeta)
         val tokenJson = usage?.let {
-            """{"inputTokens":${it.inputTokens},"outputTokens":${it.outputTokens},"cacheCreationTokens":${it.cacheCreationInputTokens ?: 0},"cacheReadTokens":${it.cacheReadInputTokens ?: 0},"latestContextTokens":${it.latestContextTokens},"streamMs":$streamMs${calibrationJsonFields()}}"""
+            """{"inputTokens":${it.inputTokens},"outputTokens":${it.outputTokens},"cacheCreationTokens":${it.cacheCreationInputTokens ?: 0},"cacheReadTokens":${it.cacheReadInputTokens ?: 0},"latestContextTokens":${it.latestContextTokens},"streamMs":$streamMs${com.openminis.app.usage.StoredUsageJson.extraFields(it)}${calibrationJsonFields()}}"""
         }
         val entity = chatRepository.appendMessage(
             realSessionId.ifEmpty { sessionId }, "assistant", partsJson, tokenJson,
@@ -15028,7 +16228,7 @@ class ChatViewModel(
             append("]")
         }
         val tokenJson = usage?.let {
-            """{"inputTokens":${it.inputTokens},"outputTokens":${it.outputTokens},"cacheCreationTokens":${it.cacheCreationInputTokens ?: 0},"cacheReadTokens":${it.cacheReadInputTokens ?: 0},"latestContextTokens":${it.latestContextTokens}${calibrationJsonFields()}}"""
+            """{"inputTokens":${it.inputTokens},"outputTokens":${it.outputTokens},"cacheCreationTokens":${it.cacheCreationInputTokens ?: 0},"cacheReadTokens":${it.cacheReadInputTokens ?: 0},"latestContextTokens":${it.latestContextTokens}${com.openminis.app.usage.StoredUsageJson.extraFields(it)}${calibrationJsonFields()}}"""
         }
         chatRepository.appendMessage(
             realSessionId.ifEmpty { sessionId }, "assistant", partsJson, tokenJson,
@@ -15037,22 +16237,15 @@ class ChatViewModel(
         )
     }
 
-    /** Persist tool results as a user-role message (mirrors iOS behavior). */
-    private suspend fun persistToolResultMessage(parts: List<AgentContentPart>): String? {
-        val results = parts.filterIsInstance<AgentContentPart.ToolResult>()
-        if (results.isEmpty()) return null
-        val partsJson = buildString {
-            append("[")
-            results.forEachIndexed { index, result ->
-                if (index > 0) append(",")
-                val snapshotText = escapeJson(result.content.lines().takeLast(30).joinToString("\n"))
-                append("""{"type":"toolResult","value":{"toolUseId":${escapeJson(result.id)},"name":${escapeJson(result.name)},"output":${escapeJson(result.content)},"success":${!result.isError},"snapshot":{"type":"text","text":$snapshotText}}}""")
-            }
-            append("]")
+    /**
+     * Persist tool results as a user-role message (mirrors iOS behavior).
+     * [durationsMs] by tool_use id: written as iOS's `snapshot.duration`
+     * (seconds) so the pill and fold times survive a reload.
+     */
+    private suspend fun persistToolResultMessage(parts: List<AgentContentPart>, durationsMs: Map<String, Long> = emptyMap()): String? =
+        ToolResultWrap.persist(parts, durationsMs, { realSessionId.ifEmpty { sessionId } }) { sid, role, partsJson ->
+            chatRepository.appendMessage(sid, role, partsJson).id
         }
-        val entity = chatRepository.appendMessage(realSessionId.ifEmpty { sessionId }, "user", partsJson)
-        return entity.id
-    }
 
     private fun buildSystemPrompt(): String? {
         // Cache-friendly layout: keep `base` byte-stable by stripping out anything
@@ -15162,7 +16355,15 @@ Memory system (currently DISABLED):
             " For delegating a whole task that needs tools and multiple rounds, use the subagent_task tool instead."
         } else ""
         val browserPromptBullet = if (browserToolEnabled) """- browser_use: Web browsing (navigate, screenshot, click, type, get_text, scroll, scroll_and_collect, get_readable, get_backbone, fetch, etc.). Starts with a desktop Chrome user agent. Use screenshot to see the page.
-  当 browser_use 触达 Google 登录 / OAuth 页（accounts.google.com、signin.google.com、myaccount.google.com、oauth2.googleapis.com 等）或网页返回 "disallowed_useragent" / 403 包含 "browser is not secure" 字样时，**不要重试或尝试登录** — Google 永久禁止 in-app WebView 完成登录，重试只会浪费 turn。改为告诉用户："此页面需要在系统 Chrome 完成登录" 并给出可点击的 Markdown link [在 Chrome 中打开](https://accounts.google.com/...)。点该 link 时 app 会跳出 Custom Tab；用户在 Chrome 完成操作后，请他**把所需结果（邮件正文 / 文档摘要 / 表格数据）粘贴回 chat**，你再继续帮他处理。这是 Android 平台限制，不是 bug。${toolListMemoryBullets}""" else ""
+  当 browser_use 触达 Google 登录 / OAuth 页（accounts.google.com、signin.google.com、myaccount.google.com、oauth2.googleapis.com 等）或网页返回 "disallowed_useragent" / 403 包含 "browser is not secure" 字样时，**不要重试或尝试登录** — Google 永久禁止 in-app WebView 完成登录，重试只会浪费 turn。改为告诉用户："此页面需要在系统 Chrome 完成登录" 并给出可点击的 Markdown link [在 Chrome 中打开](https://accounts.google.com/...)。点该 link 时 app 会跳出 Custom Tab；用户在 Chrome 完成操作后，请他**把所需结果（邮件正文 / 文档摘要 / 表格数据）粘贴回 chat**，你再继续帮他处理。这是 Android 平台限制，不是 bug。""" else ""
+        // [T-port-user-ask] The only user_ask text in the system prompt, and
+        // only when the tool is in this run (iOS 92e19f6ae). Everything else
+        // travels with the tool definition itself.
+        val userAskPromptLine = when {
+            !userAskExposedThisRun -> ""
+            browserPromptBullet.isEmpty() -> com.openminis.app.agent.userask.UserAskPromptText.TOOL_LIST_LINE
+            else -> "\n" + com.openminis.app.agent.userask.UserAskPromptText.TOOL_LIST_LINE
+        }
         val minisUrlNote = if (browserToolEnabled) """IMPORTANT: minis:// URLs are app-internal — they are NOT web URLs. Do NOT pass minis:// action URLs (open_terminal, views, settings) to browser_use — those are app deep links, use Markdown links in chat instead. However, minis:// resource URLs CAN be opened in browser_use with navigate. All directories under /var/minis/ are accessible: workspace, attachments, offloads, shared, etc. The built-in browser fully supports minis:// — HTML pages and all sub-resources (JS, CSS, images, fonts, etc.) referenced via minis:// absolute URLs or relative paths resolve correctly within the current session. When building multi-file web projects, use file_write to create files in the same directory (e.g. /var/minis/workspace/myapp/), then reference sub-resources with relative paths in HTML (e.g. <link href="style.css">, <script src="app.js">, <img src="logo.png">). The browser resolves relative paths against the minis:// base URL automatically. Cross-directory references also work with absolute minis:// URLs (e.g. <img src="minis://attachments/photo.png"> from a workspace HTML page). Navigate to the entry HTML to preview, e.g. minis://workspace/myapp/index.html.""" else """IMPORTANT: minis:// URLs are app-internal — they are NOT web URLs. Do NOT treat minis:// action URLs (open_terminal, views, settings) as web links — those are app deep links, use Markdown links in chat instead."""
         // [T-prompt-file-search-rg] The "File search" bullet below is the single
         // place for finding files and searching their contents, and steers the
@@ -15194,7 +16395,7 @@ Memory system (currently DISABLED):
 - file_read: Read file contents (faster than cat).
 - file_write: Create new files or overwrite existing files (faster than echo/tee).
 - file_edit: Edit existing files with exact string replacement (old_string → new_string). Preferred over file_write for modifications — always file_read first.
-${browserPromptBullet}${toolListMemoryBullets}"""
+${browserPromptBullet}${userAskPromptLine}${toolListMemoryBullets}"""
         val base = identitySection + spliceToolBullets(prose, toolBullets) +
             // [T-system-prompt-prose] App-owned dynamic notes that the static
             // prose cannot carry (they depend on the memory toggle, the browser
@@ -15359,43 +16560,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         part: LLMMessage.ImagePart,
         path: String?,
         note: String?,
-    ) {
-        if (path != null) add(AgentContentPart.Text("[attached image: $path]"))
-        add(AgentContentPart.ImageData(part.data, part.mimeType, linuxPath = path, noVisionPlaceholder = visionPlaceholderFor(path)))
-        if (note != null) add(AgentContentPart.Text(note))
-    }
-
-    /**
-     * Bundle of everything derived from a user-message's input attachments:
-     * the resized in-memory image bytes for the LLM, file:// URIs of the
-     * persisted copies (for stable rendering across app restarts), the
-     * filenames in original attachment order (images first, then non-image
-     * files — matches the rendering convention in UserAttachmentList), and
-     * the mediaRef JSON parts that need to be embedded in parts_json so the
-     * attachments survive a session reload (T128).
-     */
-    private data class PreparedAttachments(
-        val imageParts: List<LLMMessage.ImagePart>,
-        val imageUris: List<Uri>,
-        val attachmentNames: List<String>,
-        val mediaRefPartsJson: List<String>,
-        // T132: iOS-parity additions so the model sees the attachment as
-        // a real file in the agent's sandbox (read_image / shell_execute can
-        // open these paths).
-        //   imageUploadPaths: one /var/minis/attachments/uploads/<safe> per
-        //     inlined image, in the same order as `imageParts`.
-        //   attachedFilesXml:  null when no attachments, otherwise the
-        //     <user-attached-files> XML block iOS appends to the user turn.
-        val imageUploadPaths: List<String>,
-        val attachedFilesXml: String?,
-        // T150: file:// URIs of persisted non-image attachments, in the same
-        // order as the non-image suffix of `attachmentNames`. Carried into
-        // ChatMessage so the user-bubble file chip can route a tap directly
-        // to FilePreviewScreen without re-resolving by filename.
-        val nonImageUris: List<Uri>,
-        /** [T-android-image-downscale-parity] Parallel to [imageParts]; see downscaleNote. */
-        val imageModelNotes: List<String?> = emptyList(),
-    )
+    ) = ChatAttachmentIngest.addModelImage(this, part, path, note, ::visionPlaceholderFor)
 
     /**
      * Resize each image attachment, copy the bytes into MediaStore (private
@@ -15410,281 +16575,36 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
     private fun prepareUserAttachments(
         attachments: List<InputAttachment>,
         sessionId: String,
-    ): PreparedAttachments {
-        val imageParts = mutableListOf<LLMMessage.ImagePart>()
-        val imageUris = mutableListOf<Uri>()
-        val imageNames = mutableListOf<String>()
-        val nonImageNames = mutableListOf<String>()
-        val nonImageUris = mutableListOf<Uri>()
-        // T150: separate buffers so the persisted mediaRefPartsJson is
-        // image-first, matching the on-screen UserAttachmentList ordering
-        // and `attachmentNames = imageNames + nonImageNames`. On restore,
-        // `loadSessionMessages` walks parts_json in array order — keeping
-        // the persisted order image-first means restoredAttachmentNames
-        // and restoredAttachmentUris also come out image-first/non-image-suffix.
-        val imageMediaRefPartsJson = mutableListOf<String>()
-        val nonImageMediaRefPartsJson = mutableListOf<String>()
-        val imageUploadPaths = mutableListOf<String>()
-        // [T-android-image-downscale-parity] One entry per imageParts entry: the
-        // "downscaled from W×H" note, or null when the image was sent as-is.
-        val imageModelNotes = mutableListOf<String?>()
-        // T132: also write the resized bytes into the session's iSH-bound
-        // attachments dir (filesDir/minis-sessions/<sid>/attachments/uploads/),
-        // which is mounted at /var/minis/attachments/ inside iSH. This makes
-        // the same image accessible to the agent via shell tools (read_image
-        // / cat / file) and matches the iOS uploads-directory convention.
-        val uploadsHostDir = java.io.File(
-            context.filesDir,
-            "minis-sessions/$sessionId/attachments/uploads",
-        ).apply { mkdirs() }
-        // Metadata captured per attachment for the <user-attached-files> XML.
-        data class UploadMeta(val linuxPath: String, val size: Long, val modifiedIso: String)
-        val metas = mutableListOf<UploadMeta>()
-        val nowMs = System.currentTimeMillis()
-        val isoFormatter = java.text.SimpleDateFormat(
-            "yyyy-MM-dd'T'HH:mm:ss'Z'",
-            java.util.Locale.US,
-        ).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
-        val nowStr = isoFormatter.format(java.util.Date(nowMs))
-
-        for (attachment in attachments) {
-            if (attachment.isImage) {
-                // T209: read the original image bytes once and reuse them
-                // for storage + uploads dir; only the LLM inference payload
-                // gets the resized copy. Pre-T209 the resized JPEG was used
-                // for all three, so chat history fullscreen view and agent
-                // shell tools (read_image / cat) saw a 1024px JPEG instead
-                // of the user's original picture. Matches iOS canonical
-                // (AIChatViewModel.swift L1595-1617).
-                val rawBytes = try {
-                    context.contentResolver.openInputStream(attachment.uri)?.use { it.readBytes() }
-                } catch (e: Exception) {
-                    Log.w(TAG, "image read failed for ${attachment.fileName}: ${e.message}")
-                    null
-                } ?: continue
-                val ref = try {
-                    mediaStore.saveMedia(
-                        data = rawBytes,
-                        mimeType = attachment.mimeType,
-                        sessionId = sessionId,
-                        originalFileName = attachment.fileName,
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to persist image attachment ${attachment.fileName}", e)
-                    continue
-                }
-                // Resize only for the LLM payload — token-efficient and a
-                // close-enough sketch of the picture for the model. Falls
-                // back to raw bytes if the source is already small or the
-                // decode/compress step fails.
-                // [T-android-image-downscale-parity] The same function rebuilds
-                // this copy from the saved original on reload (toLLMMessage), so
-                // every turn sends the same ≤2000 px image, as iOS does.
-                val downscaled = ImageBudget.downscaleForModel(rawBytes)
-                val inferenceBytes = downscaled?.bytes ?: rawBytes
-
-                // Mirror ORIGINAL bytes into the iSH uploads dir under a
-                // unique safe name so agent shell tools see the full-res
-                // image. Don't fail the send if this write fails —
-                // image_url in the request still carries (resized) bytes;
-                // the model just won't be able to ask the agent to re-read
-                // the same file from shell.
-                //
-                // Done BEFORE ImagePart construction so the linuxPath is
-                // attached to the part — request-level image budgeting
-                // uses it to emit a re-fetchable text placeholder when
-                // the cumulative payload would exceed the per-request cap.
-                val safeName = uniqueUploadFileName(uploadsHostDir, attachment.fileName)
-                val dest = java.io.File(uploadsHostDir, safeName)
-                val uploadOk = try { dest.writeBytes(rawBytes); true } catch (e: Exception) {
-                    Log.w(TAG, "uploads write failed for ${attachment.fileName}: ${e.message}")
-                    false
-                }
-                val linuxPath = if (uploadOk) "/var/minis/attachments/uploads/$safeName" else null
-                if (linuxPath != null) {
-                    imageUploadPaths.add(linuxPath)
-                    metas.add(UploadMeta(linuxPath = linuxPath, size = rawBytes.size.toLong(), modifiedIso = nowStr))
-                }
-
-                // [T-android-image-upload-format] Label the part with what
-                // inferenceBytes ARE, not what the attachment was. downscaleForModel
-                // re-encodes anything over 2000 px (a HEIC photo comes out JPEG),
-                // and the old code kept "image/heic" on those JPEG bytes — which
-                // DeepSeek rejects on the label alone. The provider boundary
-                // re-derives the MIME too; this keeps the in-memory part honest
-                // for every other consumer (Vision Group, model-use, audits).
-                val inferenceMime = ImageBudget.sniffFormat(inferenceBytes).mimeType ?: attachment.mimeType
-                imageParts.add(LLMMessage.ImagePart(inferenceBytes, inferenceMime, linuxPath = linuxPath))
-                imageModelNotes.add(downscaled?.let { ImageBudget.downscaleNote(it, linuxPath) })
-                val savedFile = java.io.File(mediaStore.mediaBaseDir, ref.relativePath)
-                imageUris.add(Uri.fromFile(savedFile))
-                imageNames.add(attachment.fileName)
-                imageMediaRefPartsJson.add(buildMediaRefPartJson(ref, linuxPath = linuxPath))
-                continue
-            }
-
-            // T150: non-image attachment — stream-copy to disk (no
-            // resize), persist a mediaRef so the chip survives session
-            // reload (T151), and put a copy in the iSH uploads dir so
-            // the agent can `cat` it via shell tools. iOS parity: the
-            // file content is NOT inlined into the LLM payload — it
-            // only appears in <user-attached-files> XML metadata, the
-            // model fetches content on demand.
-            //
-            // CRITICAL: we deliberately do NOT `readBytes()` the
-            // attachment here. A 400MB APK shared in by the user would
-            // OOM on a low-RAM device (heap growth limit ~500MB on
-            // Pixel 4a); the file's not even going into the LLM
-            // payload, so loading the full byte array is pointless.
-            // Stream-copy to the uploads dest first, then hand that
-            // file to MediaStore.saveMediaStreamed so a second
-            // streaming pass produces the durable mediaRef.
-            nonImageNames.add(attachment.fileName)
-            val safeName = uniqueUploadFileName(uploadsHostDir, attachment.fileName)
-            val dest = java.io.File(uploadsHostDir, safeName)
-            val uploadOk = try {
-                context.contentResolver.openInputStream(attachment.uri)?.use { input ->
-                    dest.outputStream().use { output -> input.copyTo(output) }
-                } != null
-            } catch (e: Exception) {
-                Log.w(TAG, "non-image upload write failed for ${attachment.fileName}: ${e.message}")
-                runCatching { dest.delete() }
-                false
-            }
-            if (!uploadOk) continue
-
-            val ref = try {
-                dest.inputStream().use { input ->
-                    mediaStore.saveMediaStreamed(
-                        source = input,
-                        mimeType = attachment.mimeType,
-                        sessionId = sessionId,
-                        originalFileName = attachment.fileName,
-                    )
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to persist non-image attachment ${attachment.fileName}", e)
-                null
-            }
-            if (ref != null) {
-                nonImageMediaRefPartsJson.add(buildMediaRefPartJson(ref))
-                nonImageUris.add(Uri.fromFile(java.io.File(mediaStore.mediaBaseDir, ref.relativePath)))
-            }
-
-            val linuxPath = "/var/minis/attachments/uploads/$safeName"
-            metas.add(UploadMeta(linuxPath = linuxPath, size = dest.length(), modifiedIso = nowStr))
-        }
-
-        // T-imgsize: byte-level budget enforcement. The downscaleForModel pass
-        // above caps *resolution* at 2000px but does nothing for the JPEG byte
-        // size when the source is a 12-megapixel photo — Anthropic 413s once
-        // cumulative inline image payload crosses ~30MB. ImageBudget walks
-        // every image part, re-encodes oversize ones via the quality ladder,
-        // and drops the tail when cumulative bytes would exceed 20MB. Result
-        // is surfaced to the UI through _imageBudgetEvent so the Snackbar can
-        // tell the user we touched their attachments.
-        if (imageParts.isNotEmpty()) {
-            val budgetResult = ImageBudget.applyMessageBudget(imageParts.map { it.data })
-            // budgetResult.keptBytes.size <= imageParts.size; tail-drop the
-            // parallel image-only lists symmetrically. Re-encoded bytes always
-            // come out as JPEG so flip the mimeType on any part whose bytes
-            // changed size (cheap proxy — never a false positive that hurts
-            // semantics because the byte stream itself is the JPEG header).
-            val newImageParts = budgetResult.keptBytes.mapIndexed { idx, kept ->
-                val orig = imageParts[idx]
-                if (kept === orig.data) orig
-                else LLMMessage.ImagePart(kept, "image/jpeg", linuxPath = orig.linuxPath)
-            }
-            val newSize = newImageParts.size
-            imageParts.clear()
-            imageParts.addAll(newImageParts)
-            while (imageUris.size > newSize) imageUris.removeAt(imageUris.size - 1)
-            while (imageNames.size > newSize) imageNames.removeAt(imageNames.size - 1)
-            while (imageMediaRefPartsJson.size > newSize) imageMediaRefPartsJson.removeAt(imageMediaRefPartsJson.size - 1)
-            while (imageUploadPaths.size > newSize) imageUploadPaths.removeAt(imageUploadPaths.size - 1)
-            while (imageModelNotes.size > newSize) imageModelNotes.removeAt(imageModelNotes.size - 1)
-            if (budgetResult.mutated) {
+    ): PreparedAttachments =
+        ChatAttachmentIngest.prepare(
+            attachments = attachments,
+            sessionId = sessionId,
+            filesDir = context.filesDir,
+            mediaStore = mediaStore,
+            openStream = { context.contentResolver.openInputStream(it.uri) },
+            clockMs = System::currentTimeMillis,
+            onBudgetMutated = { budgetResult ->
                 AppLogger.info(
                     TAG,
                     "[ImageBudget] compose: in=${budgetResult.keptBytes.size + budgetResult.droppedCount} kept=${budgetResult.keptBytes.size} compressed=${budgetResult.compressedCount} dropped=${budgetResult.droppedCount} totalBytes=${budgetResult.totalBytes}",
                 )
                 _imageBudgetEvent.tryEmit(budgetResult)
-            }
-        }
-
-        // Build the <user-attached-files> XML block (iOS parity). One <file>
-        // per attachment (image and non-image) that successfully landed in
-        // the iSH uploads dir — gives the model a metadata-only inventory
-        // it can resolve via shell tools when content is needed.
-        val xml = if (metas.isEmpty()) null else buildString {
-            append("<user-attached-files>\n")
-            for (m in metas) {
-                val urlPath = m.linuxPath.removePrefix("/var/minis/")
-                append("  <file path=\"")
-                append(m.linuxPath)
-                append("\" url=\"minis://")
-                append(urlPath)
-                append("\" size=\"")
-                append(m.size)
-                append("\" modified=\"")
-                append(m.modifiedIso)
-                append("\" />\n")
-            }
-            append("</user-attached-files>")
-        }
-
-        // Order matches UserAttachmentList convention: images first, then files.
-        return PreparedAttachments(
-            imageParts = imageParts,
-            imageUris = imageUris,
-            attachmentNames = imageNames + nonImageNames,
-            mediaRefPartsJson = imageMediaRefPartsJson + nonImageMediaRefPartsJson,
-            imageUploadPaths = imageUploadPaths,
-            imageModelNotes = imageModelNotes,
-            attachedFilesXml = xml,
-            nonImageUris = nonImageUris,
+            },
+            fileUri = Uri::fromFile,
         )
-    }
 
     /**
      * Compute a unique-on-disk filename inside [dir] for [original]. Strips
      * path separators, falls back to "image.jpg" if the input is empty, and
      * appends `_N` before the extension when the target already exists.
      */
-    private fun uniqueUploadFileName(dir: java.io.File, original: String): String {
-        val raw = original.substringAfterLast('/').substringAfterLast('\\').ifBlank { "image.jpg" }
-        // Sanitize control / path-hostile chars without going overboard;
-        // safe POSIX path chars are kept.
-        val sanitized = raw.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        if (!java.io.File(dir, sanitized).exists()) return sanitized
-        val dot = sanitized.lastIndexOf('.')
-        val base = if (dot > 0) sanitized.substring(0, dot) else sanitized
-        val ext = if (dot > 0) sanitized.substring(dot) else ""
-        var n = 1
-        while (true) {
-            val candidate = "${base}_$n$ext"
-            if (!java.io.File(dir, candidate).exists()) return candidate
-            n++
-        }
-    }
+    private fun uniqueUploadFileName(dir: java.io.File, original: String): String =
+        ChatAttachmentIngest.uniqueUploadFileName(dir, original)
 
     private fun buildMediaRefPartJson(
         ref: com.openminis.app.data.model.MediaRef,
         linuxPath: String? = null,
-    ): String {
-        val value = JSONObject()
-            .put("id", ref.id)
-            .put("relativePath", ref.relativePath)
-            .put("mimeType", ref.mimeType)
-        if (ref.originalFileName != null) value.put("originalFileName", ref.originalFileName)
-        // Carry the iSH-visible uploads path through persistence so that
-        // restored history can reconstruct AgentContentPart.ImageData with
-        // its original linuxPath. Restored images that miss this field
-        // (older rows written before this column existed) get linuxPath=null
-        // and fall back to spillover at budget-elide time.
-        if (linuxPath != null) value.put("linuxPath", linuxPath)
-        return JSONObject().put("type", "mediaRef").put("value", value).toString()
-    }
+    ): String = ChatPartsJson.buildMediaRefPartJson(ref, linuxPath)
 
     /**
      * Build the parts_json array for a user message: a `text` part (omitted
@@ -15692,28 +16612,6 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
      * `mediaRef` part per persisted image. Mirrors the existing single-part
      * shape when there are no attachments.
      */
-    /**
-     * [T-android-paste-mediaref] What a message's `[Pasted#N]` markers turned
-     * into once each was written to disk.
-     *
-     * @param partsJson the message's parts, in order, with each marker replaced
-     *   by a `text/plain` mediaRef part and the surrounding prose kept as
-     *   separate text parts.
-     * @param modelText the same body with every marker expanded back to its full
-     *   text — what the model must see on THIS turn. (Later turns rebuild it
-     *   from disk via toLLMMessage.)
-     * @param uiNames / [uiUris] the pasted blocks as attachment-style entries so
-     *   the sent bubble shows a file card, exactly like a picked document.
-     * @param consumedIds buffer entries actually referenced, for the caller to
-     *   clear once the send is committed.
-     */
-    private data class PastedParts(
-        val partsJson: List<String>,
-        val modelText: String,
-        val uiNames: List<String>,
-        val uiUris: List<Uri>,
-        val consumedIds: Set<Int>,
-    )
 
     /**
      * [T-android-paste-mediaref] Write each `[Pasted#N]` in [text] to its own
@@ -15728,91 +16626,15 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
      * Returns null when [text] contains no live marker, letting every caller
      * keep its existing straight-line path untouched.
      */
-    private fun buildPastedParts(text: String, sessionId: String): PastedParts? {
-        val (chunks, consumed) = splitPastePlaceholders(text, _pastedTexts.value)
-        if (consumed.isEmpty()) return null
-        val byId = _pastedTexts.value.associateBy { it.id }
-
-        val parts = mutableListOf<String>()
-        val model = StringBuilder()
-        val names = mutableListOf<String>()
-        val uris = mutableListOf<Uri>()
-        for (chunk in chunks) {
-            when (chunk) {
-                is PasteChunk.Text -> {
-                    parts.add("""{"type":"text","value":${escapeJson(chunk.value)}}""")
-                    model.append(chunk.value)
-                }
-                is PasteChunk.Pasted -> {
-                    val entry = byId[chunk.id] ?: continue
-                    val ref = try {
-                        mediaStore.saveMedia(
-                            data = entry.text.toByteArray(Charsets.UTF_8),
-                            mimeType = PastedMedia.MIME,
-                            sessionId = sessionId,
-                            originalFileName = PastedMedia.fileNameFor(chunk.id),
-                        )
-                    } catch (e: Exception) {
-                        // Disk full / unwritable: fall back to inlining this one
-                        // block as text. The message is then shaped like the old
-                        // behaviour — big, but complete. Losing the paste
-                        // silently would be far worse than a heavy bubble.
-                        AppLogger.warning(
-                            TAG,
-                            "[Paste] saveMedia failed for #${chunk.id}, inlining: ${e.message}",
-                        )
-                        parts.add("""{"type":"text","value":${escapeJson(entry.text)}}""")
-                        model.append(entry.text)
-                        continue
-                    }
-                    parts.add(buildMediaRefPartJson(ref))
-                    model.append(entry.text)
-                    names.add(ref.originalFileName ?: PastedMedia.fileNameFor(chunk.id))
-                    uris.add(Uri.fromFile(java.io.File(mediaStore.mediaBaseDir, ref.relativePath)))
-                }
-            }
-        }
-        AppLogger.info(
-            TAG,
-            "[Paste] ${consumed.size} placeholder(s) -> mediaRef: " +
-                "${text.length} chars in bubble, ${model.length} chars to model",
-        )
-        return PastedParts(parts, model.toString(), names, uris, consumed)
-    }
+    private fun buildPastedParts(text: String, sessionId: String): PastedParts? =
+        ChatAttachmentIngest.pastedParts(text, { _pastedTexts.value }, sessionId, mediaStore, Uri::fromFile)
 
     private fun buildUserPartsJson(
         text: String,
         mediaRefPartsJson: List<String>,
-        // [T-android-retry-attachment-loss] The <user-attached-files> XML
-        // inventory (non-image file paths/sizes the model uses to `cat` the
-        // file). iOS persists this same XML as a trailing text part so it
-        // round-trips through retry / rerun / session-reload unchanged — the
-        // model keeps seeing the /var/minis/attachments/uploads/... paths.
-        // Android previously only added it to the in-memory agentHistory and
-        // never persisted it, so a retry silently dropped the file inventory.
-        // Persist it here as a text part (iOS parity); toLLMMessage restores
-        // it via the plain "text" case with zero special-casing.
         attachedFilesXml: String? = null,
-        /**
-         * [T-android-paste-mediaref] Pre-split body parts from
-         * [buildPastedParts], used INSTEAD of the single `text` part when the
-         * message contained `[Pasted#N]` markers. Already an interleaved
-         * text/mediaRef sequence, so it is spliced in at the position the plain
-         * text part would have occupied — order is what keeps the pasted block
-         * where the user put it, between the words around it.
-         */
         bodyPartsJson: List<String>? = null,
-    ): String {
-        val parts = mutableListOf<String>()
-        if (bodyPartsJson != null) {
-            parts.addAll(bodyPartsJson)
-        } else if (text.isNotEmpty() || mediaRefPartsJson.isEmpty()) {
-            parts.add("""{"type":"text","value":${escapeJson(text)}}""")
-        }
-        parts.addAll(mediaRefPartsJson)
-        attachedFilesXml?.let { parts.add("""{"type":"text","value":${escapeJson(it)}}""") }
-        return parts.joinToString(prefix = "[", postfix = "]", separator = ",")
-    }
+    ): String = ChatPartsJson.buildUserPartsJson(text, mediaRefPartsJson, attachedFilesXml, bodyPartsJson)
 
     /** LLM-based title + category generation, mirrors iOS generateSessionTitleIfNeeded(). */
     private var titleGenerationAttempts = 0
@@ -15921,6 +16743,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                 // Port of iOS callSubModelForTitle's folderSegment.
                 val autoGroupOn = com.openminis.app.ui.settings
                     .autoGroupingEnabled(context)
+                var groupTitleExamples = false
                 val groupContext: List<String> = if (!autoGroupOn) emptyList() else {
                     // [T-android-auto-grouping-injection] Bound the group list.
                     // Group names are free-form user input with no length or
@@ -15949,18 +16772,29 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                         .eachCount()
                         .filterValues { it > 1 }
                         .keys
-                    rendered
+                    val offered = rendered
                         .filterNot { (_, n) -> n.lowercase() in ambiguous }
                         .take(GROUP_CONTEXT_MAX)
-                        .map { (f, n) ->
-                            // "name — one-sentence description" when the group
-                            // has one; the description exists precisely to
-                            // sharpen this membership judgment.
-                            val d = f.description?.takeIf { it.isNotBlank() }
-                                ?.let { promptSafe(it, GROUP_DESC_MAX) }
-                                ?.takeIf { it.isNotEmpty() }
-                            if (d != null) "\"$n\" — $d" else "\"$n\""
-                        }
+                    val plainLines = offered.map { (f, n) ->
+                        // "name — one-sentence description" when the group
+                        // has one; the description exists precisely to
+                        // sharpen this membership judgment.
+                        val d = f.description?.takeIf { it.isNotBlank() }
+                            ?.let { promptSafe(it, GROUP_DESC_MAX) }
+                            ?.takeIf { it.isNotEmpty() }
+                        if (d != null) "\"$n\" — $d" else "\"$n\""
+                    }
+                    // [T-autogroup-folder-titles] Up to three recent chat titles
+                    // per group, so the model sees what a group holds (iOS
+                    // 72350576a). One query, only when there is a group to offer.
+                    if (offered.isEmpty()) plainLines else {
+                        val recent = chatRepository.recentSessionTitlesByFolder()
+                        val (lines, withTitles) = FolderOfferFormat.lines(offered.map { it.first.id }, plainLines, recent)
+                        groupTitleExamples = withTitles > 0
+                        // Counts only: the titles are the user's chats and stay out of the log.
+                        AppLogger.info("TitleGen", "[TitleGen] Folder offer: folders=${offered.size} withTitles=$withTitles")
+                        lines
+                    }
                 }
                 val prompt = buildString {
                     append("Based on the following conversation, generate a short title (max 6 words) that captures the topic. ")
@@ -15973,7 +16807,9 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                         // only drives a row icon).
                         append("The user organizes chats into groups. Existing groups: [")
                         append(groupContext.joinToString("; "))
-                        append("]. If this conversation clearly belongs to one of these groups, ")
+                        append("]. ")
+                        if (groupTitleExamples) append(FolderOfferFormat.EXAMPLES_NOTE)
+                        append("If this conversation clearly belongs to one of these groups, ")
                         append("set \"folder\" to that exact group name. ")
                         append("If it does not clearly match any group, or you are unsure, set \"folder\" to null. ")
                         append("Never invent a new group name.\n\n")
@@ -16088,6 +16924,15 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                 if (parsed != null) {
                     val (title, category, folderName) = parsed
                     val sid = realSessionId.ifEmpty { sessionId }
+                    // [T-android-chat-title-follows-store] The request took a
+                    // while. If the session got a title meanwhile (renamed or
+                    // regenerated from the list), this late auto title must
+                    // not replace it. Read from the store, not from memory.
+                    val storedNow = runCatching { chatRepository.getSession(sid)?.title }.getOrNull()
+                    if (!SessionTitleRules.autoTitleMayReplace(storedNow, UNTITLED_SESSION_TITLE)) {
+                        AppLogger.info("TitleGen", "outcome=dropped reason=title-set-meanwhile stored='${storedNow?.take(200)}'")
+                        return@launch
+                    }
                     chatRepository.updateSessionTitleAndCategory(sid, title, category)
                     withContext(Dispatchers.Main) {
                         _sessionTitle.value = title
@@ -16318,8 +17163,168 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         SessionActivityTracker.publishLastReply(sessionId, text)
     }
 
-    fun cancelStream() {
-        AppLogger.info(TAG_STREAM, "cancelStream invoked _isStreaming=false (sid=$activeSessionId)")
+    /** This chat's ids: the draft id before the first persist, the real one after. */
+    private fun ownSessionIds(): Set<String> =
+        setOf(activeSessionId, sessionId, realSessionId).filterTo(LinkedHashSet()) { it.isNotEmpty() }
+
+    /**
+     * [T-scheduled-active-session-android] The USER's Stop for this chat - the
+     * composer's red button and nothing else. Turns off every scheduled task
+     * this chat created (iOS `cancelScheduled(createdBy:)`: disabled, row and
+     * history kept), then stops the loop and sub agents if any are running.
+     *
+     * Kept apart from [cancelStream] on purpose: that one is also how internal
+     * paths stop a turn (switching model, New Chat from the menu, the tool
+     * pill's per-tool stop, a parent stopping its sub agent), and none of those
+     * may take the user's timers down. Who calls decides; there is no flag.
+     */
+    /**
+     * [T-stop-confirm] The live chat turn's token, or null when no turn of this
+     * chat's own loop is running. The composer's stop confirmation compares it
+     * at open and at confirm, so a Stop tapped after the turn ended never
+     * stops the next one ([StopConfirmPolicy.confirmStillApplies]).
+     */
+    fun liveTurnToken(): Long? = liveTurn.liveGeneration()
+
+    fun stopByUser() {
+        val manager = com.openminis.app.scheduled.ScheduledTaskManager(context)
+        val ids = ownSessionIds()
+        // [T-stop-choice] Named before they go, for the model's note below.
+        val cancelledLabels = manager.list().filter { it.enabled && it.creatorSessionId in ids }.map { it.label }
+        for (id in ownSessionIds()) manager.disableAllCreatedBy(id, "user stopped the conversation")
+        val registry = com.openminis.app.agent.jobs.AgentJobRegistry
+        if (_isStreaming.value || ownSessionIds().any { registry.hasAgentWork(it) }) cancelStream()
+        StopScopePolicy.scheduledCancelledNotice(cancelledLabels)?.let { noteForNextTurn(it, "scheduled-cancelled") }
+    }
+
+    /**
+     * [T-stop-choice] Stop All turned off this chat's scheduled tasks: tell the
+     * model, as iOS does (`cancelScheduled(createdBy:)` is not silent there),
+     * so it does not keep waiting for a fire that will never come. Unlike iOS
+     * the note does not start a turn - the user just asked for quiet - it is a
+     * hidden `<system-reminder>` user row the next turn reads (rows starting
+     * with one never get a bubble). Stored after the cancel cleanup's own
+     * writes so the tool_use / tool_result pairing keeps its order.
+     */
+    private fun noteForNextTurn(note: String, reason: String) {
+        agentHistory.add(
+            LLMMessage(role = LLMMessage.Role.USER, content = note, contentParts = listOf(AgentContentPart.Text(note))),
+        )
+        val sid = activeSessionId
+        val after = cleanupPersistJob
+        viewModelScope.launch(Dispatchers.IO) {
+            after?.join()
+            runCatching {
+                chatRepository.appendMessage(sid, "user", """[{"type":"text","value":${escapeJson(note)}}]""")
+            }.onFailure { AppLogger.warning(TAG_STREAM, "[stop-choice] note ($reason) not stored: ${it.message}") }
+        }
+        AppLogger.info(TAG_STREAM, "[stop-choice] note for the next turn ($reason) sid=$sid")
+    }
+
+    /**
+     * [T-stop-choice] What the composer's Stop would reach right now: the
+     * dialog's counts, and whether to ask at all ([StopSummary.hasBackground]).
+     */
+    fun stopSummary(): StopSummary {
+        val ids = ownSessionIds()
+        val registry = com.openminis.app.agent.jobs.AgentJobRegistry
+        val now = System.currentTimeMillis()
+        return StopSummary(
+            runningTools = foregroundTools.runningNames(),
+            subAgentsRunning = ids.sumOf { registry.runningChildJobCount(it) },
+            subAgentsQueued = ids.sumOf { registry.queuedCount(it) },
+            scheduledTasks = com.openminis.app.scheduled.ScheduledTaskManager(context).list().count { t ->
+                t.creatorSessionId in ids && com.openminis.app.scheduled.ScheduledSessionHold.isLive(t, now)
+            },
+        )
+    }
+
+    /**
+     * [T-stop-choice] "Stop Current Tool Only": end what the turn is doing in
+     * the foreground and nothing else. Sub agents keep running and keep their
+     * right to report back (no mute, no cancelAll), scheduled tasks stay on,
+     * and background shell processes survive (only each foreground command's
+     * process group is killed).
+     *
+     * With tool calls executing they are cut short and the loop goes on to its
+     * post-tool boundary: a queued user message goes in as the next round,
+     * otherwise the turn ends there. A delegation the loop is waiting on moves
+     * to the background. With no tool executing the turn ends now, the same
+     * way [cancelStream] ends it, background kept.
+     */
+    fun stopCurrentToolOnly() {
+        val running = foregroundTools.runningNames()
+        val mode = StopScopePolicy.toolOnlyStop(toolsRunning = running.isNotEmpty())
+        AppLogger.info(
+            TAG_STREAM,
+            "[stop-tool] stopCurrentToolOnly mode=$mode tools=$running queue=${_promptQueue.value.size} " +
+                "_isStreaming=${_isStreaming.value} (sid=$activeSessionId)",
+        )
+        when (mode) {
+            ToolOnlyStop.INTERRUPT_TOOLS -> interruptForegroundTools(ids = null)
+            ToolOnlyStop.END_TURN -> cancelStream(keepBackground = true)
+        }
+    }
+
+    /** [T-stop-choice] Cut [ids] (every executing call when null) short; see [stopCurrentToolOnly]. */
+    private fun interruptForegroundTools(ids: Collection<String>?) {
+        toolOnlyStopTurn = liveTurn.liveGeneration()
+        // Null = every executing call; otherwise only what the named calls need.
+        val names = ids?.mapNotNull { foregroundTools.nameOf(it) }?.toSet()
+        fun targets(tool: String) = names == null || tool in names
+        if (targets(com.openminis.app.agent.userask.UserAskPromptText.TOOL_NAME)) {
+            com.openminis.app.agent.userask.UserAskCenter.dismissPending(
+                activeSessionId, com.openminis.app.agent.userask.UserAskDismissReason.STOPPED,
+            )
+        }
+        // Kill the commands BEFORE cancelling the calls: a cancelled call
+        // drops its shell callback, after which the command could not be
+        // found to kill.
+        if (names == null || names.any { it !in SHELL_FREE_TOOLS }) {
+            ExecutionCoordinator.interruptForegroundCommands(activeSessionId)
+            if (isDraft && realSessionId.isNotEmpty() && activeSessionId != sessionId) {
+                ExecutionCoordinator.interruptForegroundCommands(sessionId)
+            }
+        }
+        if (targets(com.openminis.app.agent.jobs.HelperRunner.TOOL_NAME)) {
+            delegateDetach.value = delegateDetach.value + 1
+        }
+        foregroundTools.interrupt(ids)
+    }
+
+    /**
+     * [T-stop-choice] The calls a tool pill's Stop ends with [blockId]. Shell
+     * commands are killed per session, not per call (a call does not know its
+     * pool slot), so stopping anything that may run one also ends the shell
+     * calls running beside it - and they are marked stopped rather than left
+     * to report a bare exit 137.
+     */
+    private fun idsStoppedWith(blockId: String): List<String> {
+        if (foregroundTools.nameOf(blockId) in SHELL_FREE_TOOLS) return listOf(blockId)
+        return (listOf(blockId) + foregroundTools.idsNamed("shell_execute")).distinct()
+    }
+
+    /**
+     * @param keepBackground [T-stop-choice] "Stop Current Tool Only" (and New
+     *   Chat's "stop the current turn"): end this turn but leave its sub agents
+     *   running and able to report back, and kill only the foreground commands
+     *   of the shell pool so background processes survive.
+     */
+    fun cancelStream(keepBackground: Boolean = false) {
+        com.openminis.app.diagnostics.JankDiag.onCancelStreamStart()
+        // [T-android-stop-late-write] Log the real flag. This used to print a
+        // literal "_isStreaming=false" whatever the state, which made a field
+        // log of thirty taps on a stuck pill look like thirty stops of a
+        // stream that was not running - when they were exactly that.
+        val wasStreaming = _isStreaming.value
+        // End the live turn FIRST: from here on a shell line or a delayed
+        // publish for it is dropped instead of re-creating an overlay entry.
+        val stoppedBubble = liveTurn.cancel()
+        AppLogger.info(
+            TAG_STREAM,
+            "cancelStream invoked _isStreaming=$wasStreaming liveBubble=${stoppedBubble ?: "-"} " +
+                "keepBackground=$keepBackground (sid=$activeSessionId)",
+        )
         // [T-android-context-usage-hint] Suppress this turn's usage line — see
         // [lastTurnWasCancelled]. Set before `_isStreaming = false` below, so
         // the edge collector observes the flag already raised.
@@ -16334,9 +17339,16 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         // already finished cannot re-wake this turn), then drop the queue
         // before cancelling, because each cancel drains the queue and would
         // otherwise start the very delegations being stopped.
-        com.openminis.app.agent.jobs.AgentJobRegistry.muteDelegationResults(activeSessionId)
-        com.openminis.app.agent.jobs.AgentJobRegistry.dropQueuedDelegations(activeSessionId, "user-stopped")
-        com.openminis.app.agent.jobs.AgentJobRegistry.cancelAll(activeSessionId, "user-stopped")
+        // [T-port-user-ask] Stop ends a question's wait now: the card shows
+        // "Stopped" and the tool call returns at once.
+        com.openminis.app.agent.userask.UserAskCenter.dismissPending(
+            activeSessionId, com.openminis.app.agent.userask.UserAskDismissReason.STOPPED,
+        )
+        if (!keepBackground) {
+            com.openminis.app.agent.jobs.AgentJobRegistry.muteDelegationResults(activeSessionId)
+            com.openminis.app.agent.jobs.AgentJobRegistry.dropQueuedDelegations(activeSessionId, "user-stopped")
+            com.openminis.app.agent.jobs.AgentJobRegistry.cancelAll(activeSessionId, "user-stopped")
+        }
         streamJob?.cancel()
         _isStreaming.value = false
         // T-streaming-side-channel: flush any in-flight delta back into the
@@ -16356,6 +17368,8 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         // state (⊘) instead of carrying over the prior tool's outcome.
         publishOverlayReplyExcerpt(activeSessionId)
         SessionActivityTracker.clearToolRunning(com.openminis.app.service.ToolOutcome.Cancelled)
+        // [T-bgnotif-outcome] A stopped run is paused, not completed.
+        SessionActivityTracker.markStreamInterrupted(activeSessionId)
         SessionActivityTracker.setInactive(activeSessionId)
         if (isDraft && realSessionId.isNotEmpty() && activeSessionId != sessionId) {
             SessionActivityTracker.setInactive(sessionId)
@@ -16363,10 +17377,26 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         // Stop whichever shell the agent loop is actually dispatching against.
         // Before `ensureSession()` that is the draft id; after, the real id.
         // Stopping the wrong one leaves a runaway yt-dlp/ffmpeg alive.
-        ExecutionCoordinator.stopCurrentCommand(activeSessionId)
+        if (keepBackground) {
+            ExecutionCoordinator.interruptForegroundCommands(activeSessionId)
+        } else {
+            ExecutionCoordinator.stopCurrentCommand(activeSessionId)
+        }
         if (isDraft && realSessionId.isNotEmpty() && activeSessionId != sessionId) {
             // Mid-turn rename: sweep any lingering draft shell too.
-            ExecutionCoordinator.stopCurrentCommand(sessionId)
+            if (keepBackground) {
+                ExecutionCoordinator.interruptForegroundCommands(sessionId)
+            } else {
+                ExecutionCoordinator.stopCurrentCommand(sessionId)
+            }
+        }
+        // [T-android-stop-late-write] After the kill: nothing may hold an
+        // overlay entry any more. The guard already refuses new ones; this
+        // drains anything a write slipped in between the flush above and the
+        // kill, so the cleanup below sees canonical state only.
+        if (_streamingById.value.isNotEmpty()) {
+            AppLogger.warning(TAG_STREAM, "[StopLate] cancelStream: draining ${_streamingById.value.size} overlay entr(ies) left after the kill")
+            flushAllStreamingDeltas()
         }
         // [T-android-stop-retry-countdown] Stop during an auto-retry countdown:
         // the countdown wrote "<error> — retrying (n/3)…" onto the row and only
@@ -16388,6 +17418,177 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         if (pending.isNotEmpty()) {
             AppLogger.info(TAG_STREAM, "cancel — ${pending.size} queued prompt(s) remain, restarting drain")
             resumeQueueAfterCancel()
+        }
+        com.openminis.app.diagnostics.JankDiag.onCancelStreamEnd()
+    }
+
+    /**
+     * [T-android-stop-late-write] A tool's own Stop square (the message-list
+     * pill and the floating tool bar).
+     *
+     * Both used to call [cancelStream], which is session-wide: a pill left
+     * stuck on RUNNING by an earlier turn stopped whatever reply was live when
+     * it was tapped (field report 2026-10-02: Stop on the old pill cut off the
+     * reply after Continue), and each tap's flush copied the stale RUNNING back
+     * into history. Now the block decides:
+     *  - a block in flight in the running turn stops that turn, as before;
+     *  - anything else is a leftover: only that block becomes CANCELLED, and
+     *    the current stream, its shell and its queue are not touched.
+     */
+    fun stopTool(blockId: String) {
+        val liveId = liveTurn.liveAssistantId()
+        val streaming = _isStreaming.value
+        // The running turn's blocks: its overlay, else its canonical bubble.
+        // A turn whose bubble is not known yet (the instant between begin and
+        // its first id) is represented by the last assistant message, so a
+        // genuinely live pill still stops it.
+        val liveBlocks = when {
+            liveId != null -> _streamingById.value[liveId]?.toolBlocks
+                ?: _messages.value.lastOrNull { it.id == liveId }?.toolBlocks.orEmpty()
+            streaming -> _messages.value.lastOrNull { it.role == "assistant" }?.let { m ->
+                _streamingById.value[m.id]?.toolBlocks ?: m.toolBlocks
+            }.orEmpty()
+            else -> emptyList()
+        }
+        val shown = _streamingById.value.values.firstNotNullOfOrNull { d -> d.toolBlocks.firstOrNull { it.id == blockId } }
+            ?: _messages.value.firstNotNullOfOrNull { m -> m.toolBlocks.firstOrNull { it.id == blockId } }
+        val action = InFlightToolHeal.stopAction(blockId, streaming, liveBlocks, shown?.toolStatus)
+        AppLogger.info(
+            TAG_STREAM,
+            "[StopLate] stopTool block=${blockId.take(16)} status=${shown?.toolStatus} " +
+                "_isStreaming=$streaming liveBubble=${liveId ?: "-"} -> $action (sid=$activeSessionId)",
+        )
+        when (action) {
+            // [T-stop-choice] Only this tool: an executing call is cut short and
+            // the turn goes on to its boundary. One not executing yet (still
+            // being written by the model, or waiting for a slot) takes the
+            // tool-only stop of the whole turn. Sub agents are never stopped
+            // from here.
+            InFlightToolHeal.StopAction.STOP_TURN -> if (foregroundTools.isRunning(blockId)) {
+                interruptForegroundTools(idsStoppedWith(blockId))
+            } else {
+                stopCurrentToolOnly()
+            }
+            InFlightToolHeal.StopAction.CANCEL_STALE_BLOCK -> cancelStaleBlock(blockId)
+            InFlightToolHeal.StopAction.NONE -> Unit
+        }
+    }
+
+    /**
+     * [T-android-stop-late-write] Cancel one leftover block without touching the
+     * running turn: patch it wherever it is shown, drain overlay entries no turn
+     * owns, and store the cancel when that is safe ([persistCancelledIfUnanswered]).
+     */
+    private fun cancelStaleBlock(blockId: String) {
+        val liveId = liveTurn.liveAssistantId()
+        val owner = _messages.value.lastOrNull { m -> m.role == "assistant" && m.toolBlocks.any { it.id == blockId } }
+        _messages.value = _messages.value.map { m ->
+            if (m.role != "assistant" || m.id == liveId) m else {
+                val fixed = InFlightToolHeal.cancelBlock(m.toolBlocks, blockId)
+                if (fixed === m.toolBlocks) m else m.copy(toolBlocks = fixed)
+            }
+        }
+        // An orphan overlay entry may be what showed the block as running.
+        // Folding it in keeps the CANCELLED just written (mergeOverlayBlocks).
+        for (id in _streamingById.value.keys.filter { it != liveId }) flushStreamingDelta(id)
+        if (owner != null && owner.id != liveId) {
+            owner.toolBlocks.firstOrNull { it.id == blockId && it.kind == "tool_use" }?.let {
+                persistCancelledIfUnanswered(listOf(it.id to it.toolName), "stop-tool")
+            }
+        }
+    }
+
+    /**
+     * [T-android-stop-late-write] Heal tool blocks that claim to be in flight in
+     * a bubble no running turn is writing, and drain overlay entries no running
+     * turn owns. Called from Stop's cleanup (earlier bubbles; the last one is
+     * still Case 1's), on session load and when the chat screen opens - a view
+     * model is reused from [ChatViewModelStore], so an already-stuck chat must
+     * heal when it is reopened, not only after a cold start.
+     *
+     * @param keep bubbles to leave alone besides the live turn's.
+     * @return the number of blocks healed.
+     */
+    internal fun healStaleInFlightTools(reason: String, keep: Set<String> = emptySet()): Int {
+        val liveId = liveTurn.liveAssistantId()
+        // A turn is starting and its bubble is not known yet: nothing can be
+        // told apart from it, so wait for the next chance.
+        if (_isStreaming.value && liveId == null) return 0
+        // Another view model (headless runner, scheduled fire) is driving this
+        // chat: its blocks are not ours to judge.
+        if (!_isStreaming.value && SessionActivityTracker.isActive(activeSessionId)) return 0
+        val orphans = _streamingById.value.keys.filter { it != liveId }
+        for (id in orphans) flushStreamingDelta(id)
+        val healed = InFlightToolHeal.sweep(_messages.value, keep + setOfNotNull(liveId)) { b ->
+            com.openminis.app.agent.jobs.HelperRunner.isSubAgentToolName(b.toolName)
+        }
+        if (healed.blockCount > 0) _messages.value = healed.messages
+        if (orphans.isNotEmpty() || healed.blockCount > 0) {
+            AppLogger.warning(
+                TAG_STREAM,
+                "[StopLate] heal($reason): drained ${orphans.size} orphan overlay entr(ies), " +
+                    "${healed.blockCount} in-flight block(s) -> CANCELLED " +
+                    "[${healed.toolUses.joinToString(",") { it.second.take(16) }}] (sid=$activeSessionId)",
+            )
+        }
+        if (healed.toolUses.isNotEmpty()) {
+            persistCancelledIfUnanswered(healed.toolUses.map { it.second to it.third }, reason)
+        }
+        return healed.blockCount
+    }
+
+    /**
+     * [T-android-stop-late-write] Store a CANCELLED tool_result for healed
+     * tool calls that have none - only where appending one keeps the pairing
+     * order (its tool_use is the session's last stored row).
+     *
+     * The stored history is already terminal for every other case: rebuilding
+     * from the DB never yields an in-flight status (no result reads as
+     * finished, the first Stop stored a CANCELLED result). Appending a result
+     * after later rows would put it out of place, and the provider rejects a
+     * tool_result that does not follow its tool_use.
+     */
+    private fun persistCancelledIfUnanswered(toolUses: List<Pair<String, String>>, reason: String) {
+        if (toolUses.isEmpty()) return
+        val sid = realSessionId.ifEmpty { sessionId }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val rows = chatRepository.loadMessages(sid).map { it.partsJson }
+                val ok = InFlightToolHeal.appendableCancelResults(rows, toolUses.map { it.first })
+                val parts = toolUses.filter { it.first in ok }.map { (id, name) ->
+                    AgentContentPart.ToolResult(id = id, name = name, content = CANCELLED_MARKER, isError = true)
+                }
+                if (parts.isNotEmpty()) persistToolResultMessage(parts)
+                AppLogger.info(
+                    TAG_STREAM,
+                    "[StopLate] persist($reason): stored ${parts.size} cancelled result(s), " +
+                        "${toolUses.size - parts.size} already answered or not appendable (sid=$sid)",
+                )
+            }.onFailure { AppLogger.warning(TAG_STREAM, "[StopLate] persist($reason) failed: ${it.message}") }
+        }
+    }
+
+    /** [T-android-stop-late-write] A shell line that arrived after its turn was stopped. */
+    private fun noteStopLateLine(toolId: String, line: String, where: String) {
+        val n = stopLateDrops.merge("line:$toolId", 1, Int::plus) ?: 1
+        if (n <= 5 || n % 100 == 0) {
+            AppLogger.info(
+                TAG_STREAM,
+                "[StopLate] dropped line #$n for ${toolId.take(16)} after stop ($where): ${line.take(160)}",
+            )
+        }
+    }
+
+    /** [T-android-stop-late-write] A streaming write for a bubble no running turn owns. */
+    private fun noteStopLateOverlay(id: String, blocks: List<AssistantBlock>) {
+        val n = stopLateDrops.merge("overlay:$id", 1, Int::plus) ?: 1
+        if (n == 1 || n % 50 == 0) {
+            val inFlight = blocks.count { InFlightToolHeal.isInFlight(it.toolStatus) }
+            AppLogger.info(
+                TAG_STREAM,
+                "[StopLate] dropped overlay write #$n for $id (live=${liveTurn.liveAssistantId() ?: "-"}, " +
+                    "inFlightBlocks=$inFlight)",
+            )
         }
     }
 
@@ -16458,6 +17659,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                 }
             }
 
+            decideUserAskExposureForRun(interactive = _promptQueue.value.any { it.origin == QueuedPromptOrigin.USER })  // [T-port-user-ask]
             val baseSystemPrompt = buildSystemPrompt()
             val systemPrompt = if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
                 val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
@@ -16473,10 +17675,12 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
             _canResume.value = false
             _error.value = null
 
+            // [T-new-limits] Children never take a session slot; captured once.
+            val holdsSlot = helperConfig == null
             streamJob = launch(Dispatchers.IO) {
                 AppLogger.info(TAG_STREAM, "resumeQueueAfterCancel streamJob ENTER sid=$activeSessionId")
                 try {
-                    SessionConcurrencyManager.acquireSlot(activeSessionId)
+                    if (holdsSlot) SessionConcurrencyManager.acquireSlot(activeSessionId)
                     AppLogger.debug(TAG_STREAM, "resumeQueueAfterCancel streamJob slot acquired")
                     SessionActivityTracker.setActive(
                     activeSessionId,
@@ -16518,8 +17722,9 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                         // we're in the finally block of the agent loop and
                         // the stream has already flushed its last delta.
                         publishOverlayReplyExcerpt(activeSessionId)
+                        markRunOutcomeForNotification(activeSessionId)
                         SessionActivityTracker.setInactive(activeSessionId)
-                        SessionConcurrencyManager.releaseSlot(activeSessionId)
+                        if (holdsSlot) SessionConcurrencyManager.releaseSlot(activeSessionId)
                         AppLogger.info(TAG_STREAM, "resumeQueueAfterCancel streamJob FINALLY exit")
                     }
                 } catch (e: CancellationException) {
@@ -16553,6 +17758,14 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
      * Always sets [_canResume] = true when there is something to resume from.
      */
     private fun handleUserCancelledCleanup() {
+        // [T-android-stop-late-write] Every bubble, not just the last: after a
+        // Continue the stuck block sits in an EARLIER message, which this
+        // cleanup never looked at. The last bubble stays with Case 1 below,
+        // which also stores its cancelled results.
+        healStaleInFlightTools(
+            "cancel",
+            keep = setOfNotNull(_messages.value.lastOrNull { it.role == "assistant" }?.id),
+        )
         val msgs = _messages.value.toMutableList()
         val lastIdx = msgs.indexOfLast { it.role == "assistant" }
         if (lastIdx < 0) return
@@ -16593,7 +17806,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                     isError = true,
                 )
             }
-            viewModelScope.launch(Dispatchers.IO) {
+            cleanupPersistJob = viewModelScope.launch(Dispatchers.IO) {
                 persistToolResultMessage(parts)
             }
             // [T-android-group-pause-badge-restamp] A LIVE interruption just
@@ -16652,7 +17865,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                     contentParts = parts,
                 )
             )
-            viewModelScope.launch(Dispatchers.IO) {
+            cleanupPersistJob = viewModelScope.launch(Dispatchers.IO) {
                 val partsJson = buildAssistantPartsJson(parts)
                 chatRepository.appendMessage(activeSessionId, "assistant", partsJson)
             }
@@ -16709,6 +17922,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         if (_isStreaming.value || !_canResume.value) return
         // [T-android-mute-reset-on-drain] Resume is new work, as on iOS.
         com.openminis.app.agent.jobs.AgentJobRegistry.clearDelegationMute(activeSessionId)
+        rebuildProviderIfEdited()
         val provider = currentProvider ?: run {
             _error.value = "No provider configured"
             return
@@ -16752,6 +17966,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         }
 
         viewModelScope.launch {
+            decideUserAskExposureForRun(interactive = true)  // [T-port-user-ask]
             val baseSystemPrompt = buildSystemPrompt()
             val systemPrompt =
                 if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
@@ -16762,10 +17977,12 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
 
             AppLogger.info(TAG_STREAM, "resume _isStreaming=true (sid=$activeSessionId)")
             _isStreaming.value = true
+            // [T-new-limits] Children never take a session slot; captured once.
+            val holdsSlot = helperConfig == null
             streamJob = launch(Dispatchers.IO) {
                 AppLogger.info(TAG_STREAM, "resume streamJob ENTER sid=$activeSessionId")
                 try {
-                    SessionConcurrencyManager.acquireSlot(activeSessionId)
+                    if (holdsSlot) SessionConcurrencyManager.acquireSlot(activeSessionId)
                     AppLogger.debug(TAG_STREAM, "resume streamJob slot acquired")
                     SessionActivityTracker.setActive(
                     activeSessionId,
@@ -16809,8 +18026,9 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                         // we're in the finally block of the agent loop and
                         // the stream has already flushed its last delta.
                         publishOverlayReplyExcerpt(activeSessionId)
+                        markRunOutcomeForNotification(activeSessionId)
                         SessionActivityTracker.setInactive(activeSessionId)
-                        SessionConcurrencyManager.releaseSlot(activeSessionId)
+                        if (holdsSlot) SessionConcurrencyManager.releaseSlot(activeSessionId)
                         AppLogger.info(TAG_STREAM, "resume streamJob FINALLY exit")
                     }
                 } catch (e: CancellationException) {
@@ -16898,24 +18116,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         _error.value = null
     }
 
-    private fun escapeJson(text: String): String {
-        val sb = StringBuilder("\"")
-        for (c in text) {
-            when (c) {
-                '"' -> sb.append("\\\"")
-                '\\' -> sb.append("\\\\")
-                '\n' -> sb.append("\\n")
-                '\r' -> sb.append("\\r")
-                '\t' -> sb.append("\\t")
-                else -> {
-                    if (c.code < 0x20) sb.append("\\u%04x".format(c.code))
-                    else sb.append(c)
-                }
-            }
-        }
-        sb.append("\"")
-        return sb.toString()
-    }
+    private fun escapeJson(text: String): String = ChatPartsJson.escapeJson(text)
 
     /**
      * Convert a flat list of MessageEntity into ChatMessages, merging toolResult
@@ -16976,6 +18177,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                             toolResultMap[toolUseId] = ToolResultData(
                                 output = value.optString("output", ""),
                                 success = value.optBoolean("success", true),
+                                durationMs = ToolDurationWire.restoreMs(value),
                             )
                         }
                     }
@@ -17073,7 +18275,9 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                                 toolName = value.optString("name", ""),
                                 toolTitle = value.optString("description", ""),
                                 toolArgs = toolInput,
-                                content = result?.output?.lines()?.takeLast(80)?.joinToString("\n") ?: "",
+                                // [T-tool-title-reminder] Model-facing note, not card text.
+                                content = result?.output?.let { ToolTitleReminder.stripForDisplay(it) }
+                                    ?.lines()?.takeLast(80)?.joinToString("\n") ?: "",
                                 toolStatus = when {
                                     result == null -> ToolBlockStatus.SUCCESS
                                     !result.success && (
@@ -17085,6 +18289,8 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
                                 },
                                 browserURL = pageURL,
                                 imageFilePath = imgPath,
+                                // [T-tool-duration-persist] The pill's and the fold's time (iOS T-tool-duration-restore).
+                                durationMs = result?.durationMs ?: 0L,
                                 // [T-android-gemini3-thoughtsig / #179] Restore the
                                 // persisted signature onto the rebuilt block.
                                 thoughtSignature = value.optString("thoughtSignature", "").ifEmpty { null },
@@ -17241,165 +18447,10 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         }
     }
 
-    private data class ToolResultData(val output: String, val success: Boolean)
+    private data class ToolResultData(val output: String, val success: Boolean, val durationMs: Long = 0L)
 
-    private fun MessageEntity.toLLMMessage(): LLMMessage {
-        val r = if (role == "user") LLMMessage.Role.USER else LLMMessage.Role.ASSISTANT
-        val contentParts = mutableListOf<AgentContentPart>()
-        val imageParts = mutableListOf<LLMMessage.ImagePart>()
-        var textContent = ""
-
-        try {
-            val array = org.json.JSONArray(partsJson)
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                when (obj.optString("type")) {
-                    "text" -> {
-                        val value = obj.optString("value", "")
-                        // [T-android-retry-attachment-loss] The persisted
-                        // <user-attached-files> XML must reach the model via a
-                        // contentPart (provider prefers contentParts), but it
-                        // must NOT fold into `content`. On a FRESH send the
-                        // `content` field is the clean caption (`trimmed`) and
-                        // the XML lives only in contentParts; keep restored
-                        // messages byte-identical so `.content` consumers
-                        // (summary, title fallback, edit) see the same string
-                        // as a fresh turn and don't get the XML twice.
-                        if (value.contains("<user-attached-files>")) {
-                            contentParts.add(AgentContentPart.Text(value))
-                        } else {
-                            textContent += value
-                            contentParts.add(AgentContentPart.Text(value))
-                        }
-                    }
-                    "toolUse" -> {
-                        val v = obj.getJSONObject("value")
-                        val inputStr = v.optString("input", "{}")
-                        val inputJson = try {
-                            JSONObject(inputStr)
-                        } catch (_: Exception) {
-                            JSONObject()
-                        }
-                        contentParts.add(AgentContentPart.ToolUse(
-                            id = v.optString("toolUseId", ""),
-                            name = v.optString("name", ""),
-                            input = inputJson,
-                            // [T-android-gemini3-thoughtsig / #179] Restore the
-                            // persisted Gemini 3.x signature so a reloaded session
-                            // replays it (else the next gemini-3 turn 400s).
-                            thoughtSignature = v.optString("thoughtSignature", "").ifEmpty { null },
-                        ))
-                    }
-                    "toolResult" -> {
-                        val v = obj.getJSONObject("value")
-                        contentParts.add(AgentContentPart.ToolResult(
-                            id = v.optString("toolUseId", ""),
-                            name = v.optString("name", ""),
-                            content = v.optString("output", ""),
-                            isError = !v.optBoolean("success", true),
-                        ))
-                    }
-                    "mediaRef" -> {
-                        // T128: load persisted user-message images so the model
-                        // sees them on subsequent turns after a session reload.
-                        // T150: skip non-image mediaRefs here — their bytes
-                        // shouldn't be re-inlined into the LLM payload (parity
-                        // with the on-send path, which only inlines images).
-                        // The original turn's <user-attached-files> XML stayed
-                        // in the persisted text part, and the file is still
-                        // on disk under attachments/uploads, so the agent can
-                        // re-fetch via shell tools.
-                        val v = obj.optJSONObject("value") ?: continue
-                        val rel = v.optString("relativePath", "")
-                        if (rel.isEmpty()) continue
-                        val mime = v.optString("mimeType", "image/jpeg")
-                        // [T-android-paste-mediaref] A pasted block is stored as
-                        // a mediaRef but is CONTENT, not an attachment: read it
-                        // back off disk and inline it here, restoring exactly
-                        // the text the original send put in the prompt.
-                        //
-                        // This branch is what makes every history-replay path
-                        // correct at once — session reload, retry, rerun,
-                        // edit-resend and compaction all rebuild through this
-                        // one converter, so none of them needs its own handling.
-                        //
-                        // An unreadable file degrades to skipping the part
-                        // rather than aborting the message: losing one pasted
-                        // block is recoverable, failing to build the request is
-                        // not.
-                        if (PastedMedia.isPastedRef(mime, v.optString("originalFileName", null))) {
-                            val pf = java.io.File(mediaStore.mediaBaseDir, rel)
-                            val body = try {
-                                if (pf.exists()) pf.readText(Charsets.UTF_8) else null
-                            } catch (e: Exception) {
-                                AppLogger.warning(TAG, "[Paste] restore failed for $rel: ${e.message}")
-                                null
-                            }
-                            // [T-android-paste-missing-file] An unreadable
-                            // pasted file degrades to an explicit marker, never
-                            // to silence.
-                            //
-                            // The file can genuinely disappear — the user clears
-                            // app storage, a sync pass prunes it as an orphan,
-                            // the disk fills mid-write. Dropping the part on the
-                            // floor would leave the model reading a sentence
-                            // with a hole in the middle and no way to know
-                            // content was ever there, so it would answer
-                            // confidently about text it never saw. Saying so
-                            // lets it ask, and leaves a searchable trace when a
-                            // user reports a strange reply.
-                            val resolved = body ?: PastedMedia.MISSING_PLACEHOLDER
-                            if (body == null) {
-                                AppLogger.warning(
-                                    TAG,
-                                    "[Paste] missing pasted file for $rel — substituting placeholder",
-                                )
-                            }
-                            textContent += resolved
-                            contentParts.add(AgentContentPart.Text(resolved))
-                            continue
-                        }
-                        if (!mime.startsWith("image/")) continue
-                        val file = java.io.File(mediaStore.mediaBaseDir, rel)
-                        if (!file.exists()) continue
-                        val original = try { file.readBytes() } catch (_: Exception) { continue }
-                        val restoredPath = v.optString("linuxPath", "").ifEmpty { null }
-                        // [T-android-image-downscale-parity] The saved file is the
-                        // user's full-size original (T209 keeps it for the bubble and
-                        // the shell). The model must get the same ≤2000 px copy the
-                        // first send used — replaying the original made DeepSeek 400
-                        // "unsupported image" on every turn after a restart for a
-                        // 1264×23545 long screenshot. The note is rebuilt here, never
-                        // persisted, so it cannot double up and old sessions get it.
-                        val downscaled = ImageBudget.downscaleForModel(file, original)
-                        val bytes = downscaled?.bytes ?: original
-                        val sendMime = downscaled?.mimeType ?: mime
-                        // [T-android-vision-group / GH#182] Seed the read_image
-                        // hint on restored images too, so a non-vision main model
-                        // with a Vision Group configured gets steered to read_image
-                        // on subsequent turns after a session reload (not the bare
-                        // "can't see it" literal).
-                        val restoredPlaceholder = visionPlaceholderFor(restoredPath)
-                        imageParts.add(LLMMessage.ImagePart(bytes, sendMime, linuxPath = restoredPath, noVisionPlaceholder = restoredPlaceholder))
-                        contentParts.add(AgentContentPart.ImageData(bytes, sendMime, linuxPath = restoredPath, noVisionPlaceholder = restoredPlaceholder))
-                        downscaled?.let { contentParts.add(AgentContentPart.Text(ImageBudget.downscaleNote(it, restoredPath))) }
-                    }
-                }
-            }
-        } catch (_: Exception) {
-            textContent = partsJson
-            contentParts.add(AgentContentPart.Text(partsJson))
-        }
-
-        return LLMMessage(
-            role = r,
-            content = textContent,
-            imageParts = imageParts,
-            contentParts = contentParts,
-            dbMessageId = id,
-            reasoningContent = reasoningContent,
-        )
-    }
+    private fun MessageEntity.toLLMMessage(): LLMMessage =
+        ChatHistoryRebuild.toLLMMessage(this, mediaStore.mediaBaseDir, ::visionPlaceholderFor)
 
     /**
      * Extract a string value for `key` from *partial* (possibly truncated) JSON
@@ -17459,6 +18510,7 @@ ${browserPromptBullet}${toolListMemoryBullets}"""
         "read_image" -> "Read Image"
         "memory_write" -> "Write Memory"
         "memory_get" -> "Read Memory"
+        com.openminis.app.agent.userask.UserAskPromptText.TOOL_NAME -> "Question for you"
         "web_search" -> "Search Web"
         else -> toolName
             .split('_')
@@ -17513,4 +18565,1721 @@ internal fun warmUpBudget(window: Int?, compactThreshold: Int?, ratio: Double, f
     if (fixedTokens <= 0) return null
     val line = if (threshold > 0) threshold else w
     return (line / ratio).toInt() - fixedTokens
+}
+
+/** [T-speed-tier] Which speed tiers the active model offers. */
+internal data class SpeedEligibility(val fast: Boolean, val ultrafast: Boolean)
+
+/**
+ * [T-image-real-tests] The JSON written for a persisted message's parts.
+ * Moved verbatim from ChatViewModel (escapeJson, buildUserPartsJson,
+ * buildMediaRefPartJson, and the parts JSON of persistToolResultMessage),
+ * which now delegate here.
+ */
+internal object ChatPartsJson {
+    fun escapeJson(text: String): String {
+        val sb = StringBuilder("\"")
+        for (c in text) {
+            when (c) {
+                '"' -> sb.append("\\\"")
+                '\\' -> sb.append("\\\\")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> {
+                    if (c.code < 0x20) sb.append("\\u%04x".format(c.code))
+                    else sb.append(c)
+                }
+            }
+        }
+        sb.append("\"")
+        return sb.toString()
+    }
+
+    fun buildUserPartsJson(
+        text: String,
+        mediaRefPartsJson: List<String>,
+        // [T-android-retry-attachment-loss] The <user-attached-files> XML
+        // inventory (non-image file paths/sizes the model uses to `cat` the
+        // file). iOS persists this same XML as a trailing text part so it
+        // round-trips through retry / rerun / session-reload unchanged — the
+        // model keeps seeing the /var/minis/attachments/uploads/... paths.
+        // Android previously only added it to the in-memory agentHistory and
+        // never persisted it, so a retry silently dropped the file inventory.
+        // Persist it here as a text part (iOS parity); toLLMMessage restores
+        // it via the plain "text" case with zero special-casing.
+        attachedFilesXml: String? = null,
+        /**
+         * [T-android-paste-mediaref] Pre-split body parts from
+         * [buildPastedParts], used INSTEAD of the single `text` part when the
+         * message contained `[Pasted#N]` markers. Already an interleaved
+         * text/mediaRef sequence, so it is spliced in at the position the plain
+         * text part would have occupied — order is what keeps the pasted block
+         * where the user put it, between the words around it.
+         */
+        bodyPartsJson: List<String>? = null,
+    ): String {
+        val parts = mutableListOf<String>()
+        if (bodyPartsJson != null) {
+            parts.addAll(bodyPartsJson)
+        } else if (text.isNotEmpty() || mediaRefPartsJson.isEmpty()) {
+            parts.add("""{"type":"text","value":${escapeJson(text)}}""")
+        }
+        parts.addAll(mediaRefPartsJson)
+        attachedFilesXml?.let { parts.add("""{"type":"text","value":${escapeJson(it)}}""") }
+        return parts.joinToString(prefix = "[", postfix = "]", separator = ",")
+    }
+
+    fun buildMediaRefPartJson(
+        ref: com.openminis.app.data.model.MediaRef,
+        linuxPath: String? = null,
+    ): String {
+        val value = JSONObject()
+            .put("id", ref.id)
+            .put("relativePath", ref.relativePath)
+            .put("mimeType", ref.mimeType)
+        if (ref.originalFileName != null) value.put("originalFileName", ref.originalFileName)
+        // Carry the iSH-visible uploads path through persistence so that
+        // restored history can reconstruct AgentContentPart.ImageData with
+        // its original linuxPath. Restored images that miss this field
+        // (older rows written before this column existed) get linuxPath=null
+        // and fall back to spillover at budget-elide time.
+        if (linuxPath != null) value.put("linuxPath", linuxPath)
+        return JSONObject().put("type", "mediaRef").put("value", value).toString()
+    }
+
+    fun toolResultPartsJson(
+        results: List<AgentContentPart.ToolResult>,
+        durationsMs: Map<String, Long>,
+    ): String {
+        val partsJson = buildString {
+            append("[")
+            results.forEachIndexed { index, result ->
+                if (index > 0) append(",")
+                val snapshotText = escapeJson(result.content.lines().takeLast(30).joinToString("\n"))
+                append("""{"type":"toolResult","value":{"toolUseId":${escapeJson(result.id)},"name":${escapeJson(result.name)},"output":${escapeJson(result.content)},"success":${!result.isError},"snapshot":{"type":"text","text":$snapshotText${ToolDurationWire.snapshotField(durationsMs[result.id])}}}}""")
+            }
+            append("]")
+        }
+        return partsJson
+    }
+}
+
+/**
+ * [T-image-real-tests] Rebuilds one persisted message (parts_json) into the
+ * LLMMessage the agent loop sends: text, toolUse, toolResult, pasted blocks and
+ * mediaRef images. Moved verbatim from ChatViewModel.toLLMMessage, which now
+ * delegates here; [mediaBaseDir] and [visionPlaceholderFor] are the two
+ * ChatViewModel members it read.
+ */
+internal object ChatHistoryRebuild {
+    private const val TAG = ChatViewModel.TAG
+
+    fun toLLMMessage(
+        entity: MessageEntity,
+        mediaBaseDir: java.io.File,
+        visionPlaceholderFor: (String?) -> String?,
+    ): LLMMessage {
+        with(entity) {
+            val r = if (role == "user") LLMMessage.Role.USER else LLMMessage.Role.ASSISTANT
+            val contentParts = mutableListOf<AgentContentPart>()
+            val imageParts = mutableListOf<LLMMessage.ImagePart>()
+            var textContent = ""
+
+            try {
+                val array = org.json.JSONArray(partsJson)
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    when (obj.optString("type")) {
+                        "text" -> {
+                            val value = obj.optString("value", "")
+                            // [T-android-retry-attachment-loss] The persisted
+                            // <user-attached-files> XML must reach the model via a
+                            // contentPart (provider prefers contentParts), but it
+                            // must NOT fold into `content`. On a FRESH send the
+                            // `content` field is the clean caption (`trimmed`) and
+                            // the XML lives only in contentParts; keep restored
+                            // messages byte-identical so `.content` consumers
+                            // (summary, title fallback, edit) see the same string
+                            // as a fresh turn and don't get the XML twice.
+                            if (value.contains("<user-attached-files>")) {
+                                contentParts.add(AgentContentPart.Text(value))
+                            } else {
+                                textContent += value
+                                contentParts.add(AgentContentPart.Text(value))
+                            }
+                        }
+                        "toolUse" -> {
+                            val v = obj.getJSONObject("value")
+                            val inputStr = v.optString("input", "{}")
+                            val inputJson = try {
+                                JSONObject(inputStr)
+                            } catch (_: Exception) {
+                                JSONObject()
+                            }
+                            contentParts.add(AgentContentPart.ToolUse(
+                                id = v.optString("toolUseId", ""),
+                                name = v.optString("name", ""),
+                                input = inputJson,
+                                // [T-android-gemini3-thoughtsig / #179] Restore the
+                                // persisted Gemini 3.x signature so a reloaded session
+                                // replays it (else the next gemini-3 turn 400s).
+                                thoughtSignature = v.optString("thoughtSignature", "").ifEmpty { null },
+                            ))
+                        }
+                        "toolResult" -> {
+                            val v = obj.getJSONObject("value")
+                            contentParts.add(AgentContentPart.ToolResult(
+                                id = v.optString("toolUseId", ""),
+                                name = v.optString("name", ""),
+                                content = v.optString("output", ""),
+                                isError = !v.optBoolean("success", true),
+                            ))
+                        }
+                        "mediaRef" -> {
+                            // T128: load persisted user-message images so the model
+                            // sees them on subsequent turns after a session reload.
+                            // T150: skip non-image mediaRefs here — their bytes
+                            // shouldn't be re-inlined into the LLM payload (parity
+                            // with the on-send path, which only inlines images).
+                            // The original turn's <user-attached-files> XML stayed
+                            // in the persisted text part, and the file is still
+                            // on disk under attachments/uploads, so the agent can
+                            // re-fetch via shell tools.
+                            val v = obj.optJSONObject("value") ?: continue
+                            val rel = v.optString("relativePath", "")
+                            if (rel.isEmpty()) continue
+                            val mime = v.optString("mimeType", "image/jpeg")
+                            // [T-android-paste-mediaref] A pasted block is stored as
+                            // a mediaRef but is CONTENT, not an attachment: read it
+                            // back off disk and inline it here, restoring exactly
+                            // the text the original send put in the prompt.
+                            //
+                            // This branch is what makes every history-replay path
+                            // correct at once — session reload, retry, rerun,
+                            // edit-resend and compaction all rebuild through this
+                            // one converter, so none of them needs its own handling.
+                            //
+                            // An unreadable file degrades to skipping the part
+                            // rather than aborting the message: losing one pasted
+                            // block is recoverable, failing to build the request is
+                            // not.
+                            if (PastedMedia.isPastedRef(mime, v.optString("originalFileName", null))) {
+                                val pf = java.io.File(mediaBaseDir, rel)
+                                val body = try {
+                                    if (pf.exists()) pf.readText(Charsets.UTF_8) else null
+                                } catch (e: Exception) {
+                                    AppLogger.warning(TAG, "[Paste] restore failed for $rel: ${e.message}")
+                                    null
+                                }
+                                // [T-android-paste-missing-file] An unreadable
+                                // pasted file degrades to an explicit marker, never
+                                // to silence.
+                                //
+                                // The file can genuinely disappear — the user clears
+                                // app storage, a sync pass prunes it as an orphan,
+                                // the disk fills mid-write. Dropping the part on the
+                                // floor would leave the model reading a sentence
+                                // with a hole in the middle and no way to know
+                                // content was ever there, so it would answer
+                                // confidently about text it never saw. Saying so
+                                // lets it ask, and leaves a searchable trace when a
+                                // user reports a strange reply.
+                                val resolved = body ?: PastedMedia.MISSING_PLACEHOLDER
+                                if (body == null) {
+                                    AppLogger.warning(
+                                        TAG,
+                                        "[Paste] missing pasted file for $rel — substituting placeholder",
+                                    )
+                                }
+                                textContent += resolved
+                                contentParts.add(AgentContentPart.Text(resolved))
+                                continue
+                            }
+                            if (!mime.startsWith("image/")) continue
+                            val file = java.io.File(mediaBaseDir, rel)
+                            if (!file.exists()) continue
+                            val original = try { file.readBytes() } catch (_: Exception) { continue }
+                            val restoredPath = v.optString("linuxPath", "").ifEmpty { null }
+                            // [T-android-image-downscale-parity] The saved file is the
+                            // user's full-size original (T209 keeps it for the bubble and
+                            // the shell). The model must get the same ≤2000 px copy the
+                            // first send used — replaying the original made DeepSeek 400
+                            // "unsupported image" on every turn after a restart for a
+                            // 1264×23545 long screenshot. The note is rebuilt here, never
+                            // persisted, so it cannot double up and old sessions get it.
+                            val downscaled = ImageBudget.downscaleForModel(file, original)
+                            val bytes = downscaled?.bytes ?: original
+                            val sendMime = downscaled?.mimeType ?: mime
+                            // [T-android-vision-group / GH#182] Seed the read_image
+                            // hint on restored images too, so a non-vision main model
+                            // with a Vision Group configured gets steered to read_image
+                            // on subsequent turns after a session reload (not the bare
+                            // "can't see it" literal).
+                            val restoredPlaceholder = visionPlaceholderFor(restoredPath)
+                            imageParts.add(LLMMessage.ImagePart(bytes, sendMime, linuxPath = restoredPath, noVisionPlaceholder = restoredPlaceholder))
+                            contentParts.add(AgentContentPart.ImageData(bytes, sendMime, linuxPath = restoredPath, noVisionPlaceholder = restoredPlaceholder))
+                            downscaled?.let { contentParts.add(AgentContentPart.Text(ImageBudget.downscaleNote(it, restoredPath))) }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                textContent = partsJson
+                contentParts.add(AgentContentPart.Text(partsJson))
+            }
+
+            return LLMMessage(
+                role = r,
+                content = textContent,
+                imageParts = imageParts,
+                contentParts = contentParts,
+                dbMessageId = id,
+                reasoningContent = reasoningContent,
+            )
+        }
+    }
+}
+
+/**
+ * [T-android-paste-mediaref] What a message's `[Pasted#N]` markers turned
+ * into once each was written to disk.
+ *
+ * @param partsJson the message's parts, in order, with each marker replaced
+ *   by a `text/plain` mediaRef part and the surrounding prose kept as
+ *   separate text parts.
+ * @param modelText the same body with every marker expanded back to its full
+ *   text — what the model must see on THIS turn. (Later turns rebuild it
+ *   from disk via toLLMMessage.)
+ * @param uiNames / [uiUris] the pasted blocks as attachment-style entries so
+ *   the sent bubble shows a file card, exactly like a picked document.
+ * @param consumedIds buffer entries actually referenced, for the caller to
+ *   clear once the send is committed.
+ */
+internal data class PastedParts(
+    val partsJson: List<String>,
+    val modelText: String,
+    val uiNames: List<String>,
+    val uiUris: List<Uri>,
+    val consumedIds: Set<Int>,
+)
+
+/**
+ * Bundle of everything derived from a user-message's input attachments:
+ * the resized in-memory image bytes for the LLM, file:// URIs of the
+ * persisted copies (for stable rendering across app restarts), the
+ * filenames in original attachment order (images first, then non-image
+ * files — matches the rendering convention in UserAttachmentList), and
+ * the mediaRef JSON parts that need to be embedded in parts_json so the
+ * attachments survive a session reload (T128).
+ */
+internal data class PreparedAttachments(
+    val imageParts: List<LLMMessage.ImagePart>,
+    val imageUris: List<Uri>,
+    val attachmentNames: List<String>,
+    val mediaRefPartsJson: List<String>,
+    // T132: iOS-parity additions so the model sees the attachment as
+    // a real file in the agent's sandbox (read_image / shell_execute can
+    // open these paths).
+    //   imageUploadPaths: one /var/minis/attachments/uploads/<safe> per
+    //     inlined image, in the same order as `imageParts`.
+    //   attachedFilesXml:  null when no attachments, otherwise the
+    //     <user-attached-files> XML block iOS appends to the user turn.
+    val imageUploadPaths: List<String>,
+    val attachedFilesXml: String?,
+    // T150: file:// URIs of persisted non-image attachments, in the same
+    // order as the non-image suffix of `attachmentNames`. Carried into
+    // ChatMessage so the user-bubble file chip can route a tap directly
+    // to FilePreviewScreen without re-resolving by filename.
+    val nonImageUris: List<Uri>,
+    /** [T-android-image-downscale-parity] Parallel to [imageParts]; see downscaleNote. */
+    val imageModelNotes: List<String?> = emptyList(),
+)
+
+/**
+ * [T-image-real-tests] User image attachments on the way into the history:
+ * the per-image ingest of prepareUserAttachments, the model-facing shape of one
+ * attached image, and the live user turn sendMessage appends. Moved verbatim
+ * from ChatViewModel, which now delegates here.
+ */
+internal object ChatAttachmentIngest {
+    private const val TAG = ChatViewModel.TAG
+
+    fun uniqueUploadFileName(dir: java.io.File, original: String): String {
+        val raw = original.substringAfterLast('/').substringAfterLast('\\').ifBlank { "image.jpg" }
+        // Sanitize control / path-hostile chars without going overboard;
+        // safe POSIX path chars are kept.
+        val sanitized = raw.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        if (!java.io.File(dir, sanitized).exists()) return sanitized
+        val dot = sanitized.lastIndexOf('.')
+        val base = if (dot > 0) sanitized.substring(0, dot) else sanitized
+        val ext = if (dot > 0) sanitized.substring(dot) else ""
+        var n = 1
+        while (true) {
+            val candidate = "${base}_$n$ext"
+            if (!java.io.File(dir, candidate).exists()) return candidate
+            n++
+        }
+    }
+
+    /** One image attachment after ingest: what prepareUserAttachments appends to its lists. */
+    class IngestedImage(
+        val ref: com.openminis.app.data.model.MediaRef,
+        val imagePart: LLMMessage.ImagePart,
+        val modelNote: String?,
+        val linuxPath: String?,
+        val mediaRefPartJson: String,
+    )
+
+    /**
+     * The per-image core of prepareUserAttachments, moved verbatim: persist the
+     * ORIGINAL to MediaStore, fit a copy for the model (downscaleForModel), copy
+     * the ORIGINAL into the session's uploads dir, label the model copy with the
+     * MIME of its bytes. Null when MediaStore could not persist it (the caller
+     * skips the attachment, as before).
+     */
+    fun ingestImage(
+        rawBytes: ByteArray,
+        mimeType: String,
+        fileName: String,
+        sessionId: String,
+        mediaStore: com.openminis.app.data.storage.MediaStore,
+        uploadsHostDir: java.io.File,
+    ): IngestedImage? {
+                val ref = try {
+                    mediaStore.saveMedia(
+                        data = rawBytes,
+                        mimeType = mimeType,
+                        sessionId = sessionId,
+                        originalFileName = fileName,
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to persist image attachment ${fileName}", e)
+                    return null
+                }
+                // Resize only for the LLM payload — token-efficient and a
+                // close-enough sketch of the picture for the model. Falls
+                // back to raw bytes if the source is already small or the
+                // decode/compress step fails.
+                // [T-android-image-downscale-parity] The same function rebuilds
+                // this copy from the saved original on reload (toLLMMessage), so
+                // every turn sends the same ≤2000 px image, as iOS does.
+                val downscaled = ImageBudget.downscaleForModel(rawBytes)
+                val inferenceBytes = downscaled?.bytes ?: rawBytes
+
+                // Mirror ORIGINAL bytes into the iSH uploads dir under a
+                // unique safe name so agent shell tools see the full-res
+                // image. Don't fail the send if this write fails —
+                // image_url in the request still carries (resized) bytes;
+                // the model just won't be able to ask the agent to re-read
+                // the same file from shell.
+                //
+                // Done BEFORE ImagePart construction so the linuxPath is
+                // attached to the part — request-level image budgeting
+                // uses it to emit a re-fetchable text placeholder when
+                // the cumulative payload would exceed the per-request cap.
+                val safeName = uniqueUploadFileName(uploadsHostDir, fileName)
+                val dest = java.io.File(uploadsHostDir, safeName)
+                val uploadOk = try { dest.writeBytes(rawBytes); true } catch (e: Exception) {
+                    Log.w(TAG, "uploads write failed for ${fileName}: ${e.message}")
+                    false
+                }
+                val linuxPath = if (uploadOk) "/var/minis/attachments/uploads/$safeName" else null
+
+                // [T-android-image-upload-format] Label the part with what
+                // inferenceBytes ARE, not what the attachment was. downscaleForModel
+                // re-encodes anything over 2000 px (a HEIC photo comes out JPEG),
+                // and the old code kept "image/heic" on those JPEG bytes — which
+                // DeepSeek rejects on the label alone. The provider boundary
+                // re-derives the MIME too; this keeps the in-memory part honest
+                // for every other consumer (Vision Group, model-use, audits).
+                val inferenceMime = ImageBudget.sniffFormat(inferenceBytes).mimeType ?: mimeType
+                return IngestedImage(
+                    ref = ref,
+                    imagePart = LLMMessage.ImagePart(inferenceBytes, inferenceMime, linuxPath = linuxPath),
+                    modelNote = downscaled?.let { ImageBudget.downscaleNote(it, linuxPath) },
+                    linuxPath = linuxPath,
+                    mediaRefPartJson = ChatPartsJson.buildMediaRefPartJson(ref, linuxPath = linuxPath),
+                )
+    }
+
+    fun addModelImage(
+        parts: MutableList<AgentContentPart>,
+        part: LLMMessage.ImagePart,
+        path: String?,
+        note: String?,
+        visionPlaceholderFor: (String?) -> String?,
+    ) = with(parts) {
+        if (path != null) add(AgentContentPart.Text("[attached image: $path]"))
+        add(AgentContentPart.ImageData(part.data, part.mimeType, linuxPath = path, noVisionPlaceholder = visionPlaceholderFor(path)))
+        if (note != null) add(AgentContentPart.Text(note))
+    }
+
+    fun liveUserTurn(
+        modelBody: String,
+        imageParts: List<LLMMessage.ImagePart>,
+        imageUploadPaths: List<String>,
+        imageModelNotes: List<String?>,
+        attachedFilesXml: String?,
+        dbMessageId: String,
+        visionPlaceholderFor: (String?) -> String?,
+    ): LLMMessage {
+            val userContentParts = mutableListOf<AgentContentPart>()
+            if (modelBody.isNotEmpty()) userContentParts.add(AgentContentPart.Text(modelBody))
+            imageParts.forEachIndexed { idx, part ->
+                addModelImage(userContentParts, part, imageUploadPaths.getOrNull(idx), imageModelNotes.getOrNull(idx), visionPlaceholderFor)
+            }
+            attachedFilesXml?.let { userContentParts.add(AgentContentPart.Text(it)) }
+
+            return LLMMessage(
+                role = LLMMessage.Role.USER,
+                content = modelBody,
+                imageParts = imageParts,
+                contentParts = userContentParts,
+                dbMessageId = dbMessageId,
+            )
+    }
+
+    /**
+     * [T-ctx-builder] prepareUserAttachments, moved verbatim: each attachment →
+     * MediaStore original + uploads copy + model image / <user-attached-files>
+     * entry. The Android I/O is a parameter — [openStream] (production:
+     * contentResolver.openInputStream(uri)), [filesDir], [clockMs], [fileUri]
+     * (Uri.fromFile) — and the budget event + log run in [onBudgetMutated],
+     * at the same point.
+     */
+    fun prepare(
+        attachments: List<InputAttachment>,
+        sessionId: String,
+        filesDir: java.io.File,
+        mediaStore: com.openminis.app.data.storage.MediaStore,
+        openStream: (InputAttachment) -> java.io.InputStream?,
+        clockMs: () -> Long,
+        onBudgetMutated: (ImageBudget.BudgetResult) -> Unit,
+        fileUri: (java.io.File) -> Uri,
+    ): PreparedAttachments {
+        val imageParts = mutableListOf<LLMMessage.ImagePart>()
+        val imageUris = mutableListOf<Uri>()
+        val imageNames = mutableListOf<String>()
+        val nonImageNames = mutableListOf<String>()
+        val nonImageUris = mutableListOf<Uri>()
+        // T150: separate buffers so the persisted mediaRefPartsJson is
+        // image-first, matching the on-screen UserAttachmentList ordering
+        // and `attachmentNames = imageNames + nonImageNames`. On restore,
+        // `loadSessionMessages` walks parts_json in array order — keeping
+        // the persisted order image-first means restoredAttachmentNames
+        // and restoredAttachmentUris also come out image-first/non-image-suffix.
+        val imageMediaRefPartsJson = mutableListOf<String>()
+        val nonImageMediaRefPartsJson = mutableListOf<String>()
+        val imageUploadPaths = mutableListOf<String>()
+        // [T-android-image-downscale-parity] One entry per imageParts entry: the
+        // "downscaled from W×H" note, or null when the image was sent as-is.
+        val imageModelNotes = mutableListOf<String?>()
+        // T132: also write the resized bytes into the session's iSH-bound
+        // attachments dir (filesDir/minis-sessions/<sid>/attachments/uploads/),
+        // which is mounted at /var/minis/attachments/ inside iSH. This makes
+        // the same image accessible to the agent via shell tools (read_image
+        // / cat / file) and matches the iOS uploads-directory convention.
+        val uploadsHostDir = java.io.File(
+            filesDir,
+            "minis-sessions/$sessionId/attachments/uploads",
+        ).apply { mkdirs() }
+        // Metadata captured per attachment for the <user-attached-files> XML.
+        data class UploadMeta(val linuxPath: String, val size: Long, val modifiedIso: String)
+        val metas = mutableListOf<UploadMeta>()
+        val nowMs = clockMs()
+        val isoFormatter = java.text.SimpleDateFormat(
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            java.util.Locale.US,
+        ).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+        val nowStr = isoFormatter.format(java.util.Date(nowMs))
+
+        for (attachment in attachments) {
+            if (attachment.isImage) {
+                // T209: read the original image bytes once and reuse them
+                // for storage + uploads dir; only the LLM inference payload
+                // gets the resized copy. Pre-T209 the resized JPEG was used
+                // for all three, so chat history fullscreen view and agent
+                // shell tools (read_image / cat) saw a 1024px JPEG instead
+                // of the user's original picture. Matches iOS canonical
+                // (AIChatViewModel.swift L1595-1617).
+                val rawBytes = try {
+                    openStream(attachment)?.use { it.readBytes() }
+                } catch (e: Exception) {
+                    Log.w(TAG, "image read failed for ${attachment.fileName}: ${e.message}")
+                    null
+                } ?: continue
+                val ingested = ChatAttachmentIngest.ingestImage(
+                    rawBytes, attachment.mimeType, attachment.fileName, sessionId, mediaStore, uploadsHostDir,
+                ) ?: continue
+                val linuxPath = ingested.linuxPath
+                if (linuxPath != null) {
+                    imageUploadPaths.add(linuxPath)
+                    metas.add(UploadMeta(linuxPath = linuxPath, size = rawBytes.size.toLong(), modifiedIso = nowStr))
+                }
+                imageParts.add(ingested.imagePart)
+                imageModelNotes.add(ingested.modelNote)
+                val savedFile = java.io.File(mediaStore.mediaBaseDir, ingested.ref.relativePath)
+                imageUris.add(fileUri(savedFile))
+                imageNames.add(attachment.fileName)
+                imageMediaRefPartsJson.add(ingested.mediaRefPartJson)
+                continue
+            }
+
+            // T150: non-image attachment — stream-copy to disk (no
+            // resize), persist a mediaRef so the chip survives session
+            // reload (T151), and put a copy in the iSH uploads dir so
+            // the agent can `cat` it via shell tools. iOS parity: the
+            // file content is NOT inlined into the LLM payload — it
+            // only appears in <user-attached-files> XML metadata, the
+            // model fetches content on demand.
+            //
+            // CRITICAL: we deliberately do NOT `readBytes()` the
+            // attachment here. A 400MB APK shared in by the user would
+            // OOM on a low-RAM device (heap growth limit ~500MB on
+            // Pixel 4a); the file's not even going into the LLM
+            // payload, so loading the full byte array is pointless.
+            // Stream-copy to the uploads dest first, then hand that
+            // file to MediaStore.saveMediaStreamed so a second
+            // streaming pass produces the durable mediaRef.
+            nonImageNames.add(attachment.fileName)
+            val safeName = uniqueUploadFileName(uploadsHostDir, attachment.fileName)
+            val dest = java.io.File(uploadsHostDir, safeName)
+            val uploadOk = try {
+                openStream(attachment)?.use { input ->
+                    dest.outputStream().use { output -> input.copyTo(output) }
+                } != null
+            } catch (e: Exception) {
+                Log.w(TAG, "non-image upload write failed for ${attachment.fileName}: ${e.message}")
+                runCatching { dest.delete() }
+                false
+            }
+            if (!uploadOk) continue
+
+            val ref = try {
+                dest.inputStream().use { input ->
+                    mediaStore.saveMediaStreamed(
+                        source = input,
+                        mimeType = attachment.mimeType,
+                        sessionId = sessionId,
+                        originalFileName = attachment.fileName,
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to persist non-image attachment ${attachment.fileName}", e)
+                null
+            }
+            if (ref != null) {
+                nonImageMediaRefPartsJson.add(ChatPartsJson.buildMediaRefPartJson(ref))
+                nonImageUris.add(fileUri(java.io.File(mediaStore.mediaBaseDir, ref.relativePath)))
+            }
+
+            val linuxPath = "/var/minis/attachments/uploads/$safeName"
+            metas.add(UploadMeta(linuxPath = linuxPath, size = dest.length(), modifiedIso = nowStr))
+        }
+
+        // T-imgsize: byte-level budget enforcement. The downscaleForModel pass
+        // above caps *resolution* at 2000px but does nothing for the JPEG byte
+        // size when the source is a 12-megapixel photo — Anthropic 413s once
+        // cumulative inline image payload crosses ~30MB. ImageBudget walks
+        // every image part, re-encodes oversize ones via the quality ladder,
+        // and drops the tail when cumulative bytes would exceed 20MB. Result
+        // is surfaced to the UI through _imageBudgetEvent so the Snackbar can
+        // tell the user we touched their attachments.
+        if (imageParts.isNotEmpty()) {
+            val budgetResult = ImageBudget.applyMessageBudget(imageParts.map { it.data })
+            // budgetResult.keptBytes.size <= imageParts.size; tail-drop the
+            // parallel image-only lists symmetrically. Re-encoded bytes always
+            // come out as JPEG so flip the mimeType on any part whose bytes
+            // changed size (cheap proxy — never a false positive that hurts
+            // semantics because the byte stream itself is the JPEG header).
+            val newImageParts = budgetResult.keptBytes.mapIndexed { idx, kept ->
+                val orig = imageParts[idx]
+                if (kept === orig.data) orig
+                else LLMMessage.ImagePart(kept, "image/jpeg", linuxPath = orig.linuxPath)
+            }
+            val newSize = newImageParts.size
+            imageParts.clear()
+            imageParts.addAll(newImageParts)
+            while (imageUris.size > newSize) imageUris.removeAt(imageUris.size - 1)
+            while (imageNames.size > newSize) imageNames.removeAt(imageNames.size - 1)
+            while (imageMediaRefPartsJson.size > newSize) imageMediaRefPartsJson.removeAt(imageMediaRefPartsJson.size - 1)
+            while (imageUploadPaths.size > newSize) imageUploadPaths.removeAt(imageUploadPaths.size - 1)
+            while (imageModelNotes.size > newSize) imageModelNotes.removeAt(imageModelNotes.size - 1)
+            if (budgetResult.mutated) {
+                onBudgetMutated(budgetResult)
+            }
+        }
+
+        // Build the <user-attached-files> XML block (iOS parity). One <file>
+        // per attachment (image and non-image) that successfully landed in
+        // the iSH uploads dir — gives the model a metadata-only inventory
+        // it can resolve via shell tools when content is needed.
+        val xml = if (metas.isEmpty()) null else buildString {
+            append("<user-attached-files>\n")
+            for (m in metas) {
+                val urlPath = m.linuxPath.removePrefix("/var/minis/")
+                append("  <file path=\"")
+                append(m.linuxPath)
+                append("\" url=\"minis://")
+                append(urlPath)
+                append("\" size=\"")
+                append(m.size)
+                append("\" modified=\"")
+                append(m.modifiedIso)
+                append("\" />\n")
+            }
+            append("</user-attached-files>")
+        }
+
+        // Order matches UserAttachmentList convention: images first, then files.
+        return PreparedAttachments(
+            imageParts = imageParts,
+            imageUris = imageUris,
+            attachmentNames = imageNames + nonImageNames,
+            mediaRefPartsJson = imageMediaRefPartsJson + nonImageMediaRefPartsJson,
+            imageUploadPaths = imageUploadPaths,
+            imageModelNotes = imageModelNotes,
+            attachedFilesXml = xml,
+            nonImageUris = nonImageUris,
+        )
+    }
+
+    /**
+     * [T-ctx-builder] buildPastedParts, moved verbatim: each `[Pasted#N]` in
+     * [text] written to its own text/plain media file. [buffer] stands for
+     * the composer's paste buffer (read where the old code read it) and
+     * [fileUri] for Uri.fromFile.
+     */
+    fun pastedParts(
+        text: String,
+        buffer: () -> List<PastedText>,
+        sessionId: String,
+        mediaStore: com.openminis.app.data.storage.MediaStore,
+        fileUri: (java.io.File) -> Uri,
+    ): PastedParts? {
+        val (chunks, consumed) = splitPastePlaceholders(text, buffer())
+        if (consumed.isEmpty()) return null
+        val byId = buffer().associateBy { it.id }
+
+        val parts = mutableListOf<String>()
+        val model = StringBuilder()
+        val names = mutableListOf<String>()
+        val uris = mutableListOf<Uri>()
+        for (chunk in chunks) {
+            when (chunk) {
+                is PasteChunk.Text -> {
+                    parts.add("""{"type":"text","value":${ChatPartsJson.escapeJson(chunk.value)}}""")
+                    model.append(chunk.value)
+                }
+                is PasteChunk.Pasted -> {
+                    val entry = byId[chunk.id] ?: continue
+                    val ref = try {
+                        mediaStore.saveMedia(
+                            data = entry.text.toByteArray(Charsets.UTF_8),
+                            mimeType = PastedMedia.MIME,
+                            sessionId = sessionId,
+                            originalFileName = PastedMedia.fileNameFor(chunk.id),
+                        )
+                    } catch (e: Exception) {
+                        // Disk full / unwritable: fall back to inlining this one
+                        // block as text. The message is then shaped like the old
+                        // behaviour — big, but complete. Losing the paste
+                        // silently would be far worse than a heavy bubble.
+                        AppLogger.warning(
+                            TAG,
+                            "[Paste] saveMedia failed for #${chunk.id}, inlining: ${e.message}",
+                        )
+                        parts.add("""{"type":"text","value":${ChatPartsJson.escapeJson(entry.text)}}""")
+                        model.append(entry.text)
+                        continue
+                    }
+                    parts.add(ChatPartsJson.buildMediaRefPartJson(ref))
+                    model.append(entry.text)
+                    names.add(ref.originalFileName ?: PastedMedia.fileNameFor(chunk.id))
+                    uris.add(fileUri(java.io.File(mediaStore.mediaBaseDir, ref.relativePath)))
+                }
+            }
+        }
+        AppLogger.info(
+            TAG,
+            "[Paste] ${consumed.size} placeholder(s) -> mediaRef: " +
+                "${text.length} chars in bubble, ${model.length} chars to model",
+        )
+        return PastedParts(parts, model.toString(), names, uris, consumed)
+    }
+
+    /** A queued batch's model parts (texts, then images, then the XML) and its joined text. */
+    class QueuedTurn(val parts: MutableList<AgentContentPart>, val text: String)
+
+    /**
+     * [T-ctx-builder] The combined user turn of a queued batch, moved from
+     * injectQueuedPromptsAsNewTurn / drainQueuedPrompts (identical in both):
+     * one text part per non-empty prompt, joined with blank lines for the
+     * persisted text, then every image via [addModelImage], then the XML.
+     */
+    fun queuedTurn(texts: List<String>, prepared: PreparedAttachments, visionPlaceholderFor: (String?) -> String?): QueuedTurn {
+        val combinedParts = mutableListOf<AgentContentPart>()
+        val combinedText = StringBuilder()
+        for (text in texts) {
+            if (text.isNotEmpty()) {
+                if (combinedText.isNotEmpty()) combinedText.append("\n\n")
+                combinedText.append(text)
+                combinedParts.add(AgentContentPart.Text(text))
+            }
+        }
+        prepared.imageParts.forEachIndexed { idx, part ->
+            addModelImage(combinedParts, part, prepared.imageUploadPaths.getOrNull(idx), prepared.imageModelNotes.getOrNull(idx), visionPlaceholderFor)
+        }
+        prepared.attachedFilesXml?.let { combinedParts.add(AgentContentPart.Text(it)) }
+        return QueuedTurn(combinedParts, combinedText.toString())
+    }
+
+    /**
+     * [T-ctx-builder] The history message of a queued batch, moved from both
+     * queue paths. [interruptReminder] is the mid-loop note (null when draining
+     * or for a scheduled insert); [dbMessageId] is null on the drain path, as
+     * before.
+     */
+    fun queuedHistoryMessage(
+        userText: String,
+        pastedModelText: String?,
+        imageParts: List<LLMMessage.ImagePart>,
+        combinedParts: List<AgentContentPart>,
+        interruptReminder: String?,
+        dbMessageId: String?,
+    ): LLMMessage {
+        val body = pastedModelText?.let { modelText ->
+                    // Replace the whole LEADING RUN of text parts with the one
+                    // expanded body, then keep everything after it.
+                    //
+                    // Not "index 0": each queued prompt contributes its own text
+                    // part, and combinedText joined them with blank lines —
+                    // modelText is the expansion of that join, so it stands
+                    // for all of them. The image and <user-attached-files> parts
+                    // that follow must survive untouched.
+                    val bodyCount = combinedParts.takeWhile { it is AgentContentPart.Text }.size
+                    listOf(AgentContentPart.Text(modelText)) + combinedParts.drop(bodyCount)
+        } ?: combinedParts
+        return LLMMessage(
+                role = LLMMessage.Role.USER,
+                // Expanded for the model; the persisted row above stays small.
+                content = pastedModelText ?: userText,
+                imageParts = imageParts,
+                contentParts = if (interruptReminder == null) body else body + AgentContentPart.Text(interruptReminder),
+                dbMessageId = dbMessageId,
+            )
+    }
+}
+
+/**
+ * [T-ctx-builder] The single, pure entry from history to the messages a
+ * provider serializes. Every model request in the agent loop is built by
+ * [build]; unit tests call the same function with data they construct.
+ *
+ * Inputs are all explicit: the history, the compaction state, the budget and
+ * window lookups, the spill directory. Nothing here reads a Context, a global
+ * singleton (other than [ImageBudget.codec], which [BPETokenizer] and the
+ * budget already go through) or a ChatViewModel instance. The stages are the
+ * former ChatViewModel functions, moved verbatim (member reads became
+ * parameters), in the order the agent loop ran them:
+ *
+ *  1. [compacted]  — `<context-summary>` injection (was effectiveAgentHistoryUncounted)
+ *  2. [dropOrphanedToolParts] — tool call/result pairing repair
+ *     (1+2 = [outbound], what the context meter measures; [build] hands it to
+ *     `onOutbound` before going on, exactly where recordContextDispatch ran)
+ *  3. [applyRequestBudget] — the 25 MB request image budget
+ *  4. [auditOutgoingPayload] — the GH#352 size audit (logs only)
+ *
+ * No behaviour change: diagnostics are recorded on the side and never feed back
+ * into the messages.
+ */
+internal object RequestContextBuilder {
+    private const val TAG = ChatViewModel.TAG
+
+    /**
+     * [T-ctx-trim-ladder] A user message the user actually wrote: text, no tool
+     * results, not an app-inserted runtime note or sub agent callback.
+     */
+    fun isRealUserText(msg: LLMMessage): Boolean {
+        if (msg.role != LLMMessage.Role.USER) return false
+        if (msg.contentParts.any { it is AgentContentPart.ToolResult }) return false
+        val text = msg.content.ifBlank {
+            msg.contentParts.filterIsInstance<AgentContentPart.Text>().joinToString("\n") { it.text }
+        }.trim()
+        if (text.isEmpty()) return false
+        return !text.startsWith("<system-reminder>") && !text.startsWith("<agent_callback")
+    }
+
+    /**
+     * The compaction state a request is built against. The warm-up lookups are
+     * functions so they are evaluated exactly where, and only when, the former
+     * code read ChatViewModel state: [cachedWarmUpDrop] / [recordWarmUpDrop]
+     * stand for `warmUpDropByMarker[markerId]`, [warmUpBudget] for the
+     * window / policy / calibration lookup behind it.
+     */
+    data class Compaction(
+        val summary: String?,
+        val marker: CompactMarkerEntity?,
+        val cachedWarmUpDrop: (markerId: String) -> Int? = { null },
+        val recordWarmUpDrop: (markerId: String, drop: Int) -> Unit = { _, _ -> },
+        val warmUpBudget: () -> Int? = { null },
+    )
+
+    data class Input(
+        /** Read, never mutated. Passing a live list behaves like the former member read. */
+        val history: List<LLMMessage>,
+        val compaction: Compaction? = null,
+        val keepRecentUserTurns: Int = 3,
+        /** For the orphan-repair log line only. */
+        val sessionId: () -> String = { "" },
+        /** Read by the payload audit when it runs; null / <= 0 = unknown. */
+        val contextWindowTokens: () -> Int? = { null },
+        /** Spill directory for dropped images without a path; resolved only when one is dropped. */
+        val resolveAttachmentsRoot: () -> java.io.File? = { null },
+        /** Called once when the request budget dropped something (UI event + log in production). */
+        val onRequestBudget: (ImageBudget.RequestBudgetPlan) -> Unit = {},
+        /** [T-ctx-trim-ladder] The frozen trim, applied after compaction and before orphan repair. */
+        val trim: (List<LLMMessage>) -> List<LLMMessage> = { it },
+    )
+
+    enum class CompactionMode {
+        NONE, V2_ANCHOR_UNRESOLVED, V2_PREPENDED_TO_TEXT, V2_NEW_LEADING_TEXT, V2_CONTENT_ONLY, V2_STANDALONE,
+        V2_APPENDED_AFTER_TOOL_RESULTS,
+        V1_HEAD, V1_UNRESOLVED,
+    }
+
+    enum class WarmUpDecision { CACHED, DECIDED, UNDECIDED }
+
+    /** What [compacted] did. [injectedAt] indexes the summary-carrying message in its output. */
+    class CompactionTrace {
+        var mode: CompactionMode? = null
+        var anchorIdx: Int? = null
+        var priorIdx: Int? = null
+        var walkBackStop: String? = null
+        var warmUp: WarmUpDecision? = null
+        var preAnchorSent: Int? = null
+        var warmUpSent: Int? = null
+        var postAnchorCount: Int? = null
+        var injectedAt: Int? = null
+        override fun toString() =
+            "mode=$mode anchorIdx=$anchorIdx priorIdx=$priorIdx walkBackStop=$walkBackStop warmUp=$warmUp " +
+                "preAnchorSent=$preAnchorSent warmUpSent=$warmUpSent postAnchor=$postAnchorCount injectedAt=$injectedAt"
+    }
+
+    class OrphanTrace {
+        var orphanedResults: List<String> = emptyList()
+        var orphanedUses: List<String> = emptyList()
+    }
+
+    data class PayloadFinding(val msgIdx: Int, val kind: String, val id: String?, val finding: PayloadSizeAudit.Finding)
+
+    data class Diagnostics(
+        val compaction: CompactionTrace,
+        val orphans: OrphanTrace,
+        val budget: ImageBudget.RequestBudgetPlan?,
+        val audit: List<PayloadFinding>,
+    )
+
+    data class RequestContext(
+        /** After stages 1+2: what the context meter measures. */
+        val outbound: List<LLMMessage>,
+        /** After all stages: what the provider receives. */
+        val messages: List<LLMMessage>,
+        val diagnostics: Diagnostics,
+    )
+
+    /** History → provider messages. [onOutbound] runs between stage 2 and 3. */
+    fun build(input: Input, onOutbound: (List<LLMMessage>) -> Unit = {}): RequestContext {
+        val compactionTrace = CompactionTrace()
+        val orphanTrace = OrphanTrace()
+        val outbound = outbound(input, compactionTrace, orphanTrace)
+        onOutbound(outbound)
+        var plan: ImageBudget.RequestBudgetPlan? = null
+        val budgeted = applyRequestBudget(outbound, input.resolveAttachmentsRoot) {
+            plan = it
+            input.onRequestBudget(it)
+        }
+        val findings = mutableListOf<PayloadFinding>()
+        val messages = auditOutgoingPayload(budgeted, input.contextWindowTokens, findings)
+        return RequestContext(outbound, messages, Diagnostics(compactionTrace, orphanTrace, plan, findings))
+    }
+
+    /** Stages 1+2 (was ChatViewModel.effectiveAgentHistory). */
+    fun outbound(input: Input, compactionTrace: CompactionTrace? = null, orphanTrace: OrphanTrace? = null): List<LLMMessage> =
+        dropOrphanedToolParts(input.trim(compacted(input.history, input.compaction, input.keepRecentUserTurns, compactionTrace)), input.sessionId, orphanTrace)
+
+    /** Stage 3 (was ChatViewModel.applyRequestImageBudget; [onPlan] = its event + log). */
+    fun applyRequestBudget(
+        messages: List<LLMMessage>,
+        resolveAttachmentsRoot: () -> java.io.File?,
+        onPlan: (ImageBudget.RequestBudgetPlan) -> Unit,
+    ): List<LLMMessage> {
+        val applied = ImageBudget.applyRequestBudget(messages, resolveAttachmentsRoot)
+        val plan = applied.plan ?: return messages
+        onPlan(plan)
+        return applied.messages
+    }
+
+    /** Base64 expands 3 bytes to 4; the wire size is what the audit cares about. */
+    fun base64Size(rawBytes: Int): Int = if (rawBytes <= 0) 0 else (rawBytes + 2) / 3 * 4
+
+    /** Local 4-tuple so the audit's per-part extraction stays one expression. */
+    private data class Quad(val a: Int, val b: Int, val c: String, val d: String?)
+
+
+    /** Stage 1 (was ChatViewModel.effectiveAgentHistoryUncounted; see its KDoc and effectiveAgentHistory's). */
+    /**
+     * [T-ctx-trim-ladder] Estimated tokens an in-loop compaction would remove
+     * from the request now (negative when the summary costs more than it
+     * frees), without a model call: the same slicing as [compacted] with the
+     * anchor on the newest message and a [summaryTokens]-sized placeholder
+     * summary. Reasoning is left out on both sides - the trim ladder handles
+     * it either way. Null when the newest message has no id to anchor on.
+     */
+    fun simulatedSummaryGain(
+        history: List<LLMMessage>,
+        current: Compaction?,
+        keepRecentUserTurns: Int,
+        summaryTokens: Int,
+    ): Int? {
+        val anchorId = history.lastOrNull()?.dbMessageId ?: return null
+        val summary = "摘".repeat(summaryTokens)
+        val marker = CompactMarkerEntity(
+            id = "simulated", sessionId = "", summary = summary, firstKeptSortOrder = 0,
+            compactedCount = 0, createdAt = 0, lastCompactedMessageId = anchorId, version = 2,
+        )
+        val now = compacted(history, current, keepRecentUserTurns)
+        val after = compacted(history, Compaction(summary = summary, marker = marker), keepRecentUserTurns)
+        return ContextSizeMeter.estimateTokens(now) - ContextSizeMeter.estimateTokens(after)
+    }
+
+    fun compacted(
+        history: List<LLMMessage>,
+        compaction: Compaction?,
+        keepRecentUserTurns: Int,
+        trace: CompactionTrace? = null,
+    ): List<LLMMessage> {
+        val summary = compaction?.summary
+        val marker = compaction?.marker
+        // No compact in play → return full history untouched.
+        if (compaction == null || summary.isNullOrBlank() || marker == null) return history.toList().also { trace?.mode = CompactionMode.NONE }
+
+        val summaryWrappedText = "<context-summary>\n" +
+            "The following is a summary of the earlier conversation that was compacted to save context space.\n" +
+            "Treat it as background context only. The user's most recent message (below or in the next turn) takes precedence — if it changes the task, the goal, or any numbers/scope, follow the new instruction and do not resume the old plan from this summary. Do not re-run discovery (reading memory, scanning skills, re-reading files) unless the new instruction requires it.\n\n" +
+            summary +
+            "\n</context-summary>"
+
+        // ─── v2 markers (id-only anchor model) ─────────────────────────
+        //
+        // anchor = lastCompactedMessageId. What we send to the model:
+        //   1. last [COMPACT_KEEP_RECENT_USER_TURNS] user-text turns BEFORE
+        //      anchor (inclusive of anchor) — recent verbatim warm-up
+        //   2. the summary, INLINED as a `<context-summary>` text part
+        //      prepended to the first user message AFTER anchor (preserves
+        //      strict role alternation — no synthetic standalone user turn)
+        //   3. all messages strictly after anchor (the kept-tail "active"
+        //      region — typically empty right after compact, populated as
+        //      the user sends new prompts)
+        //
+        // If anchor unresolvable, degrade to full history (over-inform
+        // beats summary-only; the M-Team session bug taught us that a lone
+        // summary message paired with hot tools makes the model loop).
+        if (marker.version >= 2) {
+            val anchorId = marker.lastCompactedMessageId?.takeIf { it.isNotEmpty() }
+            val anchorIdx = anchorId?.let { id ->
+                history.indexOfLast { it.dbMessageId == id }
+            } ?: -1
+            if (anchorIdx < 0) {
+                Log.w(TAG, "[Compact] effectiveAgentHistory v2: anchorId=${anchorId?.take(8) ?: "nil"} not in agentHistory(size=${history.size}) — degrading to full history (no summary)")
+                trace?.mode = CompactionMode.V2_ANCHOR_UNRESOLVED
+                return history.toList()
+            }
+
+            // Step 1: walk back from anchor collecting user-text turns. Stop
+            // when EITHER we've collected N user-text turns OR including the
+            // next turn would push preAnchor over 100 messages. Decisions
+            // happen only at user-message boundaries so we never split a
+            // user/assistant/tool round in half (which would orphan a
+            // tool_use with no matching tool_result).
+            //
+            // [T-compact-preanchor-prune, port iOS 8b76cd74]
+            val keepN = keepRecentUserTurns
+            val preAnchorCap = 100
+            val walkBack = walkBackUserTurnsBounded(
+                history = history,
+                anchorIdx = anchorIdx,
+                maxUserTextTurns = keepN,
+                maxMessages = preAnchorCap,
+            )
+            val priorIdxResolved: Int? = walkBack.priorIdx
+            val priorIdx = walkBack.priorIdx ?: (anchorIdx + 1) // empty preAnchor sentinel
+            trace?.apply { this.anchorIdx = anchorIdx; this.priorIdx = priorIdx; walkBackStop = walkBack.stopReason }
+            if (walkBack.stopReason != "userTextTargetMet") {
+                AppLogger.info(TAG, "[CompactDiag] eAH v2 walkBack stopped: reason=${walkBack.stopReason} priorIdx=$priorIdx userTextTurnsFound=${walkBack.userTextTurnsFound} preAnchorMsgs=${walkBack.messageCount}")
+            }
+
+            // PRE-ANCHOR PRUNE (tool-heavy session fix):
+            // The walk-back-N-user-text strategy pulls in everything between
+            // the Nth-last and last user-text turn — in a heavy tool-call
+            // session that can be many messages of tool_result / tool_use,
+            // tens of thousands of tokens that the summary already covers.
+            // Drop any tool_result > 1000 chars in the preAnchor slice and
+            // strip the matching tool_use part (same id) from the assistant
+            // message so the model never sees a dangling tool_use/result.
+            val preAnchorRaw: List<LLMMessage> =
+                if (priorIdx <= anchorIdx) history.subList(priorIdx, anchorIdx + 1).toList()
+                else {
+                    // [T-ctx-trim-ladder] One user turn longer than the cap (an agent
+                    // run of 50+ tool rounds) used to leave NOTHING before the
+                    // anchor - the user's own request survived only inside the
+                    // summary. Keep that message verbatim; the trim ladder sizes
+                    // the rest.
+                    val request = (anchorIdx downTo 0).firstOrNull { i ->
+                        val m = history[i]
+                        m.role == LLMMessage.Role.USER && isRealUserText(m)
+                    }
+                    if (request != null) {
+                        AppLogger.info(TAG, "[CompactDiag] eAH v2 pinned the current request (idx=$request) — walk-back hit the cap")
+                        listOf(history[request])
+                    } else {
+                        emptyList()
+                    }
+                }
+
+            val droppedToolIds = mutableSetOf<String>()
+            var droppedToolResultCount = 0
+            for (msg in preAnchorRaw) {
+                for (part in msg.contentParts) {
+                    if (part is AgentContentPart.ToolResult && part.content.length > 1000) {
+                        droppedToolIds.add(part.id)
+                        droppedToolResultCount += 1
+                    }
+                }
+            }
+
+            val preAnchorPruned: MutableList<LLMMessage> = ArrayList(preAnchorRaw.size)
+            for (msg in preAnchorRaw) {
+                if (msg.contentParts.isEmpty()) {
+                    // Plain text-only message — nothing to prune.
+                    preAnchorPruned.add(msg)
+                    continue
+                }
+                val kept = msg.contentParts.filter { part ->
+                    when (part) {
+                        is AgentContentPart.ToolUse -> !droppedToolIds.contains(part.id)
+                        is AgentContentPart.ToolResult -> !droppedToolIds.contains(part.id)
+                        else -> true
+                    }
+                }
+                if (kept.isEmpty()) continue // skip empty shells
+                preAnchorPruned.add(msg.copy(contentParts = kept))
+            }
+
+            if (droppedToolResultCount > 0) {
+                AppLogger.info(TAG, "[CompactDiag] eAH v2 preAnchor prune: dropped $droppedToolResultCount toolResult(>1kc) + paired toolUse, ${preAnchorRaw.size - preAnchorPruned.size} messages emptied; pruned slice=${preAnchorPruned.size}")
+            }
+
+            // ROLE ALIGNMENT: the API requires the first message to be `user`.
+            // After clamp (cap may land on assistant) and after prune (the
+            // head user may have been emptied), peel any leading non-user
+            // messages so preAnchor starts on a user turn.
+            while (preAnchorPruned.isNotEmpty() && preAnchorPruned.first().role != LLMMessage.Role.USER) {
+                preAnchorPruned.removeAt(0)
+            }
+
+            val postAnchor = if (anchorIdx + 1 < history.size) {
+                history.subList(anchorIdx + 1, history.size)
+            } else {
+                emptyList()
+            }
+            // [T-ctx-warmup-fit] Warm-up turns are optional context — the summary
+            // covers them. Drop them oldest-first when keeping them all would
+            // leave the request over the compact line (see trimWarmUpToFit).
+            // Decided ONCE per marker, then reused: re-deciding every request
+            // slid the warm-up window one turn per message (measured on the
+            // iOS twin), changing the request prefix every turn and defeating
+            // prompt caching. Fixed per marker, the prefix is stable, the
+            // request grows normally, and compaction fires at the line.
+            // [T-ctx-warmup-trim-undecided] Cache only a REAL decision. When no
+            // budget could be computed yet (no entry, unknown window, fixed
+            // tokens not seeded) the trim passes the warm-up through unchanged;
+            // caching drop=0 then would pin "keep everything" for this marker
+            // forever, even once the budget is known and says it does not fit.
+            val warmUp = compaction.cachedWarmUpDrop(marker.id)?.let { drop ->
+                trace?.warmUp = WarmUpDecision.CACHED
+                preAnchorPruned.drop(minOf(drop, preAnchorPruned.size))
+            } ?: trimWarmUpToFit(preAnchorPruned, postAnchor, summaryWrappedText, compaction.warmUpBudget).let { trim ->
+                trace?.warmUp = if (trim.decided) WarmUpDecision.DECIDED else WarmUpDecision.UNDECIDED
+                if (trim.decided) compaction.recordWarmUpDrop(marker.id, preAnchorPruned.size - trim.kept.size)
+                trim.kept
+            }
+            trace?.apply { preAnchorSent = preAnchorPruned.size; warmUpSent = warmUp.size; postAnchorCount = postAnchor.size }
+            // Step 2 & 3: copy the lookback window (post-prune, trimmed to fit),
+            // then splice in the summary as parts[0] of the first post-anchor user msg.
+            val result = mutableListOf<LLMMessage>()
+            result.addAll(warmUp)
+
+            // DIAG: explain how the slice was sized using post-prune /
+            // post-alignment counts so the log reflects what actually
+            // reaches the model.
+            val preAnchorRawCount = maxOf(0, anchorIdx - priorIdx + 1)
+            val priorIdxSource =
+                if (priorIdxResolved == null) "fallback=empty(<$keepN user-text turns before anchor or cap hit)"
+                else "userTextWalkBack(N=$keepN)"
+            AppLogger.info(TAG, "[CompactDiag] eAH v2 slice: priorIdx=$priorIdx anchorIdx=$anchorIdx agentHistory.size=${history.size} → preAnchorRaw=$preAnchorRawCount preAnchorSent=${preAnchorPruned.size} postAnchor=${postAnchor.size} summaryChars=${summary.length} priorIdxSource=$priorIdxSource markerId=${marker.id.take(8)}")
+
+            val firstUserOffset = postAnchor.indexOfFirst { it.role == LLMMessage.Role.USER }
+            if (firstUserOffset >= 0) {
+                if (firstUserOffset > 0) {
+                    result.addAll(postAnchor.subList(0, firstUserOffset))
+                }
+                val target = postAnchor[firstUserOffset]
+                // Prepend `<context-summary>...` to the user turn.
+                //
+                // [T-android-compact-summary-dropped] `content` alone is NOT
+                // enough. Every persisted message carries contentParts (its
+                // partsJson round-trips into a Text part), and the provider
+                // serializers prefer parts when they exist — the Responses
+                // API builder emits `textParts.joinToString("")` for a user
+                // turn and never reads `msg.content`. So injecting into
+                // `content` only meant the summary was assembled, logged
+                // (summaryChars=734 in CompactDiag) and then silently dropped
+                // on the way to the wire: the model got neither the compacted
+                // detail nor the summary standing in for it. Measured on
+                // device — the post-compact request carried 27 rows exactly as
+                // the slice log predicted, with no `<context-summary>`
+                // anywhere in the body.
+                //
+                // Update BOTH representations so the summary survives whichever
+                // one a given provider reads.
+                // [T-404-summary-after-tool-results] A tool-result carrier gets the
+                // summary AFTER its tool results. Prepending it made the request
+                // `[tool_use] | [text(summary), tool_result]`: Anthropic and Gemini
+                // require the result to come right after its call (#404). Every
+                // other turn is untouched.
+                val lastToolResultIdx = target.contentParts.indexOfLast { it is AgentContentPart.ToolResult }
+                val isToolResultCarrier = lastToolResultIdx >= 0
+                val injectedParts = if (target.contentParts.isEmpty()) {
+                    target.contentParts
+                } else if (isToolResultCarrier) {
+                    target.contentParts.subList(0, lastToolResultIdx + 1) +
+                        AgentContentPart.Text(summaryWrappedText) +
+                        target.contentParts.subList(lastToolResultIdx + 1, target.contentParts.size)
+                } else {
+                    val firstTextIdx = target.contentParts.indexOfFirst { it is AgentContentPart.Text }
+                    if (firstTextIdx < 0) {
+                        // No text part to prepend onto (image/tool-only turn):
+                        // add one at the front rather than editing a non-text
+                        // part, so nothing already there is disturbed.
+                        listOf(AgentContentPart.Text(summaryWrappedText)) + target.contentParts
+                    } else {
+                        target.contentParts.mapIndexed { i, part ->
+                            if (i != firstTextIdx || part !is AgentContentPart.Text) part
+                            else AgentContentPart.Text(summaryWrappedText + "\n\n" + part.text)
+                        }
+                    }
+                }
+                val injected = target.copy(
+                    content = if (!isToolResultCarrier) summaryWrappedText + "\n\n" + target.content
+                    else if (target.content.isEmpty()) summaryWrappedText
+                    else target.content + "\n\n" + summaryWrappedText,
+                    contentParts = injectedParts,
+                )
+                trace?.apply {
+                    injectedAt = result.size
+                    mode = when {
+                        target.contentParts.isEmpty() -> CompactionMode.V2_CONTENT_ONLY
+                        isToolResultCarrier -> CompactionMode.V2_APPENDED_AFTER_TOOL_RESULTS
+                        target.contentParts.none { it is AgentContentPart.Text } -> CompactionMode.V2_NEW_LEADING_TEXT
+                        else -> CompactionMode.V2_PREPENDED_TO_TEXT
+                    }
+                }
+                result.add(injected)
+                if (firstUserOffset + 1 < postAnchor.size) {
+                    result.addAll(postAnchor.subList(firstUserOffset + 1, postAnchor.size))
+                }
+            } else {
+                // Rare: no user message after anchor. Append everything
+                // post-anchor (typically empty) then a standalone summary
+                // user turn. Safe — no later user follows it to break
+                // alternation.
+                result.addAll(postAnchor)
+                trace?.apply { injectedAt = result.size; mode = CompactionMode.V2_STANDALONE }
+                result.add(LLMMessage(role = LLMMessage.Role.USER, content = summaryWrappedText))
+            }
+            return result
+        }
+
+        // ─── v1 (legacy) markers ──────────────────────────────────────
+        //
+        // Original behavior preserved unchanged so old markers keep
+        // rendering / sending data the same way they always did.
+        val summaryHead = LLMMessage(role = LLMMessage.Role.USER, content = summaryWrappedText)
+        val firstKeptId = (marker.firstKeptMessageId?.takeIf { it.isNotEmpty() })
+            ?: (marker.boundaryMessageId?.takeIf { it.isNotEmpty() })
+
+        if (firstKeptId != null) {
+            val keepStart = history.indexOfFirst { it.dbMessageId == firstKeptId }
+            if (keepStart >= 0) {
+                trace?.apply { injectedAt = 0; mode = CompactionMode.V1_HEAD }
+                return buildList(history.size - keepStart + 1) {
+                    add(summaryHead)
+                    addAll(history.subList(keepStart, history.size))
+                }
+            }
+            // Fall through to safety net.
+        } else {
+            val lcmId = marker.lastCompactedMessageId?.takeIf { it.isNotEmpty() }
+            val lcmIdx = lcmId?.let { id ->
+                history.indexOfLast { it.dbMessageId == id }
+            } ?: -1
+            val postCompactStart = lcmIdx + 1
+            trace?.apply { injectedAt = 0; mode = CompactionMode.V1_HEAD }
+            return buildList(history.size - postCompactStart + 1) {
+                add(summaryHead)
+                if (postCompactStart < history.size) {
+                    addAll(history.subList(postCompactStart, history.size))
+                }
+            }
+        }
+
+        trace?.mode = CompactionMode.V1_UNRESOLVED
+        Log.w(TAG, "[Compact] effectiveAgentHistory: marker ${marker.id.take(8)} unresolvable in agentHistory (size=${history.size}); returning full history")
+        return history.toList()
+    }
+
+    /** Stage 2 (was ChatViewModel.dropOrphanedToolParts; see the KDoc there). */
+    fun dropOrphanedToolParts(history: List<LLMMessage>, sessionId: () -> String, trace: OrphanTrace? = null): List<LLMMessage> {
+        // [T-android-responses-tool-id-normalize] Paired on ToolPairing.key,
+        // not the raw id: the Responses path stores "call|fc" ids and a history
+        // can hold both forms for one call, which raw ids called orphans.
+        val toolUseIds = HashSet<String>()
+        val toolResultIds = HashSet<String>()
+        for (msg in history) {
+            for (part in msg.contentParts) {
+                when (part) {
+                    is AgentContentPart.ToolUse -> toolUseIds.add(com.openminis.app.provider.ToolPairing.key(part.id))
+                    is AgentContentPart.ToolResult -> toolResultIds.add(com.openminis.app.provider.ToolPairing.key(part.id))
+                    else -> {}
+                }
+            }
+        }
+        val orphanedResults = toolResultIds - toolUseIds
+        val orphanedUses = HashSet(toolUseIds - toolResultIds)
+
+        // [T-android-compact-orphan-toolcall] IN-FLIGHT EXEMPTION (iOS
+        // 5d346dc2e). The tool_uses in the FINAL assistant message are not
+        // orphans while the loop sits between "model asked for tools" and
+        // "results appended" — agentHistory legitimately looks unpaired for
+        // that whole window (the assistant turn is appended at ~7500 and its
+        // tool results only at ~7517). Any snapshot taken inside that gap would
+        // otherwise carry fabricated "interrupted" results for tools that were
+        // about to run normally, telling the model its tools had failed.
+        // Trailing unanswered calls need no repair anyway: a request ending on
+        // an assistant tool_use is exactly what the API expects mid-round.
+        val last = history.lastOrNull()
+        if (last != null && last.role == LLMMessage.Role.ASSISTANT) {
+            for (part in last.contentParts) {
+                if (part is AgentContentPart.ToolUse) orphanedUses.remove(com.openminis.app.provider.ToolPairing.key(part.id))
+            }
+        }
+
+        if (orphanedResults.isEmpty() && orphanedUses.isEmpty()) return history
+        trace?.apply { this.orphanedResults = orphanedResults.sorted(); this.orphanedUses = orphanedUses.sorted() }
+
+        AppLogger.warning(
+            TAG,
+            // [T-android-orphan-toolcall-diag] (GH#352) Session id and the
+            // roles carrying each orphan were missing, and both are what a
+            // report like GH#352 needs: without the session id a log cannot be
+            // tied to the conversation the user complains about, and without
+            // the roles it is impossible to tell WHICH side lost its partner
+            // (a dangling assistant tool_call is a different bug from a
+            // stranded tool reply). ALL ids are listed, not a sample of three —
+            // the case worth diagnosing is the one where a specific id repeats.
+            "[CompactDiag] orphan tool parts in OUTGOING history — repairing. " +
+                "session=${sessionId()} " +
+                "orphanedOutputs=${orphanedResults.size} [${orphanedResults.sorted().joinToString(",")}] " +
+                "orphanedCalls=${orphanedUses.size} [${orphanedUses.sorted().joinToString(",")}] " +
+                "orphanRoles=[${orphanRoleSummary(history, orphanedResults, orphanedUses)}] " +
+                "historyCount=${history.size}",
+        )
+
+        val cleaned = ArrayList<LLMMessage>(history.size)
+        for (msg in history) {
+            val kept = msg.contentParts.filter { part ->
+                if (part is AgentContentPart.ToolResult) !orphanedResults.contains(com.openminis.app.provider.ToolPairing.key(part.id)) else true
+            }
+            // Only drop the message when it HAD parts and lost them all. A
+            // plain text message legitimately carries no contentParts and must
+            // survive untouched.
+            if (kept.isEmpty() && msg.contentParts.isNotEmpty()) continue
+            cleaned.add(if (kept.size == msg.contentParts.size) msg else msg.copy(contentParts = kept))
+
+            // Follow an assistant turn holding orphaned calls with the
+            // placeholder results it never got, so the pair is complete.
+            if (msg.role != LLMMessage.Role.ASSISTANT) continue
+            val unanswered = kept.filterIsInstance<AgentContentPart.ToolUse>()
+                .filter { orphanedUses.contains(com.openminis.app.provider.ToolPairing.key(it.id)) }
+            if (unanswered.isNotEmpty()) {
+                cleaned.add(
+                    LLMMessage(
+                        role = LLMMessage.Role.USER,
+                        content = "",
+                        contentParts = unanswered.map {
+                            AgentContentPart.ToolResult(
+                                id = it.id,
+                                name = it.name,
+                                content = "Tool execution was interrupted by an unexpected error.",
+                                isError = true,
+                            )
+                        },
+                    ),
+                )
+            }
+        }
+        return cleaned
+    }
+
+    /**
+     * [T-android-orphan-toolcall-diag] (GH#352) `role:id` for every orphan, so
+     * a log alone says which side of the pairing broke.
+     */
+    private fun orphanRoleSummary(
+        history: List<LLMMessage>,
+        orphanedResults: Set<String>,
+        orphanedUses: Set<String>,
+    ): String {
+        val out = mutableListOf<String>()
+        for (msg in history) {
+            for (part in msg.contentParts) {
+                val id = when (part) {
+                    is AgentContentPart.ToolUse -> part.id.takeIf { com.openminis.app.provider.ToolPairing.key(it) in orphanedUses }
+                    is AgentContentPart.ToolResult -> part.id.takeIf { com.openminis.app.provider.ToolPairing.key(it) in orphanedResults }
+                    else -> null
+                } ?: continue
+                out += "${msg.role}:$id"
+            }
+        }
+        return out.joinToString(",")
+    }
+
+    /**
+     * Result of a bounded walk-back. `priorIdx` is the agentHistory index
+     * the caller should use as the start of preAnchor; `null` means even
+     * the first user turn including anchor would exceed `maxMessages`, so
+     * preAnchor should be empty.
+     *
+     * Mirrors iOS `WalkBackResult` in AIChatViewModel.swift (8b76cd74).
+     */
+    data class WalkBackResult(
+        val priorIdx: Int?,
+        val userTextTurnsFound: Int,
+        val messageCount: Int,
+        /** "userTextTargetMet" | "messageCapWouldExceed" | "reachedStart" | "invalidAnchor" */
+        val stopReason: String,
+    )
+
+    /** Was ChatViewModel.walkBackUserTurnsBounded (see the KDoc there), over [history]. */
+    fun walkBackUserTurnsBounded(
+        history: List<LLMMessage>,
+        anchorIdx: Int,
+        maxUserTextTurns: Int,
+        maxMessages: Int,
+    ): WalkBackResult {
+        if (anchorIdx < 0 || anchorIdx >= history.size) {
+            return WalkBackResult(null, 0, 0, "invalidAnchor")
+        }
+        var acceptedPriorIdx: Int? = null
+        var acceptedUserTextTurns = 0
+        var acceptedMessageCount = 0
+
+        var i = anchorIdx
+        while (i >= 0) {
+            val msg = history[i]
+            if (msg.role != LLMMessage.Role.USER) {
+                i -= 1
+                continue
+            }
+            // [T-android-compact-orphan-toolcall] A user message CARRYING a
+            // tool result is the second half of a round, not the start of one.
+            // This walk-back's whole premise is that `role == USER` marks a
+            // round boundary — but tool results are themselves persisted as
+            // USER messages (see the agentHistory.add at the end of the tool
+            // dispatch loop), so stopping on one cuts between an assistant's
+            // tool_use and its own tool_result. The call is then discarded with
+            // pre-history while the result survives in preAnchor and goes out
+            // alone, which every OpenAI-compatible provider answers with
+            //     400 No tool call found for function call output with call_id …
+            // and, since the slice is recomputed identically on every retry and
+            // fallback, the session wedges permanently. Port of iOS c7f6a299e.
+            if (msg.contentParts.any { it is AgentContentPart.ToolResult }) {
+                i -= 1
+                continue
+            }
+            val candidateMessageCount = anchorIdx - i + 1
+            if (candidateMessageCount > maxMessages) {
+                return WalkBackResult(
+                    priorIdx = acceptedPriorIdx,
+                    userTextTurnsFound = acceptedUserTextTurns,
+                    messageCount = acceptedMessageCount,
+                    stopReason = "messageCapWouldExceed",
+                )
+            }
+            // Accept this user as the new tentative priorIdx.
+            acceptedPriorIdx = i
+            acceptedMessageCount = candidateMessageCount
+            // [T-ctx-trim-ladder] App-inserted notes (runtime <system-reminder>,
+            // sub agent callbacks) are user-role but are not the user speaking:
+            // they no longer use up one of the "recent user turns".
+            if (isRealUserText(msg)) {
+                acceptedUserTextTurns += 1
+                if (acceptedUserTextTurns >= maxUserTextTurns) {
+                    return WalkBackResult(
+                        priorIdx = acceptedPriorIdx,
+                        userTextTurnsFound = acceptedUserTextTurns,
+                        messageCount = acceptedMessageCount,
+                        stopReason = "userTextTargetMet",
+                    )
+                }
+            }
+            i -= 1
+        }
+        return WalkBackResult(
+            priorIdx = acceptedPriorIdx,
+            userTextTurnsFound = acceptedUserTextTurns,
+            messageCount = acceptedMessageCount,
+            stopReason = "reachedStart",
+        )
+    }
+
+    /**
+     * [T-ctx-warmup-fit] (was ChatViewModel.trimWarmUpToFit) Trim a compaction's warm-up turns so the request fits
+     * under the compact line. Mirrors iOS `trimWarmUpToFit`.
+     *
+     * A compaction keeps the last few user turns before its anchor as warm-up.
+     * When those turns are large, or the model's tokenizer is denser than the
+     * one the session ran on, summary + warm-up can still be over the line;
+     * every later compaction keeps the same warm-up, so the session can never
+     * continue on that model (measured on device with a 1.8x-denser model:
+     * compacted and still at 100% of the window). Only runs over budget, so a
+     * normal compaction's request and prompt-cache prefix are unchanged. Drops
+     * whole user-TEXT turns oldest-first (tool results are USER messages too,
+     * and cutting between a call and its result would orphan it), in
+     * raw-estimate units so it cannot recurse into the measurement.
+     */
+    fun trimWarmUpToFit(warmUp: List<LLMMessage>, rest: List<LLMMessage>, summaryText: String, warmUpBudget: () -> Int?): WarmUpTrim {
+        if (warmUp.isEmpty()) return WarmUpTrim(warmUp, decided = true)
+        // [T-ctx-warmup-trim-undecided] No entry / unknown window / fixed
+        // tokens not yet seeded: there is no budget to judge against, so the
+        // warm-up passes through UNDECIDED and the caller must not cache it.
+        val budget = warmUpBudget() ?: return WarmUpTrim(warmUp, decided = false)
+        val restTokens = ContextSizeMeter.estimateTokens(rest) + ContextSizeMeter.estimateTokens(summaryText)
+        if (ContextSizeMeter.estimateTokens(warmUp) + restTokens < budget) return WarmUpTrim(warmUp, decided = true)
+        val drop = ContextSizeMeter.warmUpDrop(
+            sizes = warmUp.map { ContextSizeMeter.estimateTokens(listOf(it)) },
+            startsTurn = warmUp.map { m -> m.role == LLMMessage.Role.USER && m.contentParts.none { it is AgentContentPart.ToolResult } },
+            restTokens = restTokens,
+            budget = budget,
+        )
+        AppLogger.info(TAG, "[CtxMeter] warmup trimmed to fit: kept ${warmUp.size - drop}/${warmUp.size} message(s) (budget=$budget raw tokens)")
+        return WarmUpTrim(warmUp.drop(drop), decided = true)
+    }
+
+    /** Stage 4 (was ChatViewModel.auditOutgoingPayload; see the KDoc there). Logs only, returns [messages]. */
+    fun auditOutgoingPayload(messages: List<LLMMessage>, contextWindowTokens: () -> Int?, findings: MutableList<PayloadFinding>? = null): List<LLMMessage> {
+        val window = contextWindowTokens() ?: 0
+        for ((msgIdx, msg) in messages.withIndex()) {
+            for (part in msg.contentParts) {
+                val (bytes, estTokens, kind, id) = when (part) {
+                    is AgentContentPart.ImageData ->
+                        // Base64 is what actually leaves the device, so measure
+                        // that, not the raw byte count.
+                        Quad(base64Size(part.data.size), BPETokenizer.countImageTokens(part.data), "image", null)
+                    is AgentContentPart.ToolResult -> {
+                        val imgBytes = part.imageData?.size ?: 0
+                        Quad(
+                            part.content.length + base64Size(imgBytes),
+                            BPETokenizer.countTokens(part.content) +
+                                (part.imageData?.let { BPETokenizer.countImageTokens(it) } ?: 0),
+                            "tool_result",
+                            part.id,
+                        )
+                    }
+                    is AgentContentPart.Text ->
+                        Quad(part.text.length, BPETokenizer.countTokens(part.text), "text", null)
+                    is AgentContentPart.ToolUse -> {
+                        val raw = part.input.toString()
+                        Quad(raw.length, BPETokenizer.countTokens(raw), "tool_use", part.id)
+                    }
+                }
+                val finding = PayloadSizeAudit.audit(bytes, estTokens, window)
+                if (!finding.suspicious && !finding.dangerous) continue
+                findings?.add(PayloadFinding(msgIdx, kind, id, finding))
+                AppLogger.warning(
+                    TAG,
+                    "[PayloadAudit] GH#352 oversized part msgIdx=$msgIdx role=${msg.role} " +
+                        "kind=$kind id=${id ?: "-"} bytes=${finding.bytes} " +
+                        "estTokens=${finding.estimatedTokens} bytesPerToken=${finding.bytesPerToken} " +
+                        "window=$window suspicious=${finding.suspicious} dangerous=${finding.dangerous}" +
+                        if (finding.dangerous) {
+                            " — this part alone could exhaust the window if measured as text; " +
+                                "if the provider now 400s on context length the self-heal path " +
+                                "([T-android-context-overflow-selfheal]) will offload it."
+                        } else "",
+                )
+            }
+        }
+        return messages
+    }
+}
+
+/**
+ * [T-ctx-builder] A browser_use result → the tool result the agent loop wraps,
+ * moved verbatim from ChatViewModel.executeBrowserUseTool (with
+ * persistBrowserArtifact and linuxPathToMinisURL, which delegate here). The
+ * clock, the Base64 decoder and the writer are parameters so a JVM test runs
+ * the real naming / persisting / minis_url code; production passes
+ * System.currentTimeMillis, android.util.Base64 (DEFAULT) and the session's
+ * browser directory.
+ */
+internal object BrowserArtifacts {
+    fun toolResult(
+        result: com.openminis.app.browser.BrowserActionResult,
+        toolTitle: String,
+        decodeBase64: (String) -> ByteArray,
+        clockMs: () -> Long,
+        persist: (filename: String, data: ByteArray) -> String?,
+    ): ToolExecutionResult {
+        var output = result.text
+        var persistentImagePath: String? = result.imageFilePath
+        var inferenceBytes: ByteArray? = null
+
+        // Persist browser screenshots to /var/minis/browser/<session>/ so the
+        // agent can reference them via minis:// in subsequent tool calls
+        // (mirrors iOS AIChatViewModel case "browser_use").
+        val base64 = result.base64Image
+        var linuxImagePath: String? = null
+        if (base64 != null) {
+            val raw = try {
+                decodeBase64(base64)
+            } catch (_: Exception) { null }
+            if (raw != null) {
+                // Anthropic supports up to 8000×8000 / 5MB; we standardize at 2000
+                // long edge across attachments / browser / read_image.
+                inferenceBytes = ImageBudget.resizeJpegToMaxEdge(raw, 2000) ?: raw
+                val filename = "screenshot_${clockMs() / 1000}.jpg"
+                val persistPath = persist(filename, raw)
+                if (persistPath != null) {
+                    persistentImagePath = persistPath
+                    linuxImagePath = "/var/minis/browser/$filename"
+                    linuxPathToMinisURL(linuxImagePath)?.let {
+                        output = "$output\nminis_url: $it"
+                    }
+                }
+            }
+        }
+
+        // Persist fetched files (fetch action) and append minis_url
+        val fetchData = result.fetchedFileData
+        val fetchName = result.fetchedFileName
+        if (fetchData != null && fetchName != null) {
+            persist(fetchName, fetchData)
+            linuxPathToMinisURL("/var/minis/browser/$fetchName")?.let {
+                output = "$output\nminis_url: $it"
+            }
+        }
+
+        return ToolExecutionResult(
+            output = output,
+            success = result.success,
+            imageData = inferenceBytes,
+            imageMimeType = if (inferenceBytes != null) "image/jpeg" else null,
+            toolTitle = toolTitle,
+            pageURL = result.pageURL,
+            imageFilePath = persistentImagePath,
+            imageLinuxPath = linuxImagePath,
+        )
+    }
+
+    /**
+     * Write bytes to <filesDir>/minis-sessions/<sessionId>/browser/<filename>.
+     * That directory is bind-mounted to `/var/minis/browser/` so the agent can
+     * read it back via file_read / file_write / minis:// URLs.
+     * Returns the host absolute path on success, null otherwise.
+     */
+    fun persist(sessionId: String, filesDir: () -> java.io.File, filename: String, data: ByteArray): String? {
+        val sid = sessionId.takeIf { it.isNotEmpty() } ?: return null
+        return try {
+            val dir = java.io.File(filesDir(), "minis-sessions/$sid/browser").apply { mkdirs() }
+            val file = java.io.File(dir, filename)
+            file.writeBytes(data)
+            file.absolutePath
+        } catch (e: Exception) {
+            android.util.Log.w("ChatViewModel", "persistBrowserArtifact failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Convert a Linux path under /var/minis/ to a percent-encoded minis:// URL.
+     * Mirrors iOS AIChatViewModel.linuxPathToMinisURL.
+     */
+    fun linuxPathToMinisURL(path: String): String? {
+        val prefix = "/var/minis/"
+        if (!path.startsWith(prefix)) return null
+        val rest = path.removePrefix(prefix)
+        val slash = rest.indexOf('/')
+        if (slash < 0) return null
+        val namespace = rest.substring(0, slash)
+        val filename = rest.substring(slash + 1)
+        val encoded = java.net.URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
+        return "minis://$namespace/$encoded"
+    }
+}
+
+/**
+ * [T-ctx-builder] How a tool's execution result enters the conversation, moved
+ * from the agent loop and persistToolResultMessage: the ToolResult part (the
+ * image rides as imageData, exactly as returned), the USER message appended to
+ * history, and the row written for it. The writer is a parameter (production:
+ * ChatRepository.appendMessage) so a test can persist into memory and rebuild.
+ */
+internal object ToolResultWrap {
+    fun part(id: String, name: String, content: String, result: ToolExecutionResult): AgentContentPart.ToolResult =
+        AgentContentPart.ToolResult(
+                            id = id,
+                            name = name,
+                            content = content,
+                            isError = !result.success,
+                            imageData = result.imageData,
+                            imageMimeType = result.imageMimeType,
+                            imageLinuxPath = result.imageLinuxPath,
+                        )
+
+    fun historyMessage(resultParts: List<AgentContentPart>, dbMessageId: String?): LLMMessage =
+            LLMMessage(
+                role = LLMMessage.Role.USER,
+                content = "",
+                contentParts = resultParts,
+                dbMessageId = dbMessageId,
+            )
+
+    /**
+     * Persist tool results as a user-role message (mirrors iOS behavior).
+     * [durationsMs] by tool_use id: written as iOS's `snapshot.duration`
+     * (seconds) so the pill and fold times survive a reload. Returns the row id.
+     */
+    suspend fun persist(
+        parts: List<AgentContentPart>,
+        durationsMs: Map<String, Long>,
+        sessionId: () -> String,
+        append: suspend (sessionId: String, role: String, partsJson: String) -> String,
+    ): String? {
+        val results = parts.filterIsInstance<AgentContentPart.ToolResult>()
+        if (results.isEmpty()) return null
+        val partsJson = ChatPartsJson.toolResultPartsJson(results, durationsMs)
+        return append(sessionId(), "user", partsJson)
+    }
 }

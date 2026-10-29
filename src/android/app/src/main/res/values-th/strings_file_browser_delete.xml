@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">\"%1$s\" เป็นโฟลเดอร์ที่ Minis เมานต์ไว้ที่นี่ จึงลบจากเบราว์เซอร์ไฟล์ไม่ได้ ไม่มีสิ่งใดถูกลบ หากต้องการนำโฟลเดอร์ภายนอกออก ให้ไปที่ การตั้งค่า › เมานต์โฟลเดอร์ภายนอก</string>
+</resources>

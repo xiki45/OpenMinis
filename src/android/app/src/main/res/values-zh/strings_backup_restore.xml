@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-backup-restore-semantics / B01] Restore page copy for the restore semantics
+     decided 2026-10-15: the backup wins items present on both sides (API keys
+     included, OAuth sign-ins only when expired); nothing only on this device is
+     deleted. Replaces backup_restore_footer / backup_creds_restored /
+     backup_creds_kept, whose text promised the opposite. -->
+<resources>
+    <string name="backup_restore_merge_footer">恢复会把备份合并到本设备。同一项在两边都存在时（服务商、模型的设置，或同名的模型组），使用备份中的版本，即使本设备上的更新。API 密钥也是如此；本设备上已登录的账号会保留，除非其登录已失效。只存在于本设备的内容不会被删除。</string>
+    <string name="backup_restore_creds_restored">已从备份为 %1$d 个服务商恢复凭据。备份中的 API 密钥会替换本设备上的密钥；本设备上已登录的账号会保留，除非其登录已失效。</string>
+    <string name="backup_restore_creds_kept">没有更改任何凭据：本设备上的 API 密钥与备份一致，已登录的账号未被标记为登录失效，因此予以保留。</string>
+</resources>

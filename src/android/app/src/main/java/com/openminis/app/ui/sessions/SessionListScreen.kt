@@ -115,7 +115,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
@@ -135,7 +134,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Path
@@ -147,7 +147,6 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import com.openminis.app.agent.jobs.AgentJobRegistry
 import com.openminis.app.service.SessionActivityTracker
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -155,6 +154,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.FocusRequester
@@ -292,8 +293,6 @@ data class FolderGroupBlock(
     val latestUpdatedAt: Long,
     /** Newest member's title — iOS folderSectionHeader's "N chats · title" summary line. */
     val summaryTitle: String? = null,
-    /** Newest member's category — tints the composed folder icon like iOS FolderComposedIcon. */
-    val firstCategory: String? = null,
     /**
      * [T-android-group-pause-badge-restamp] Any member carrying a FRESH corner
      * badge (entered within the last 24h). Rendered on the card icon ONLY while
@@ -308,16 +307,53 @@ data class FolderGroupBlock(
     val anyPaused: Boolean = false,
     /**
      * [T-android-group-running-ring] Any member currently running its agent
-     * loop. Drives the collapsed group card's SpinningRing, so a task started
-     * inside a group stays visible after the group is folded shut — otherwise
-     * collapsing the group hides the only signal that work is in flight.
+     * loop. Drives the comet round the group tile's edge (GroupLoadingBorder,
+     * UI-261023-03), so a task started inside a group stays visible after the
+     * group is folded shut.
      * Mirrors iOS `SidebarGroup.anyActive` (ContentView.swift:4771).
      *
      * Unlike [anyPaused] there is no freshness window: "running" is live state
      * that ends on its own, so it can never go stale.
      */
     val anyActive: Boolean = false,
+    /**
+     * [T-folder-pages] Members of an open folder not in [ids] because they
+     * are past the pages shown; drives the "Show N more (M left)" row. Display
+     * only: [totalCount], the badges and the summary still read every member.
+     */
+    val hiddenCount: Int = 0,
+    /**
+     * [T-folder-pages] Pages on screen, reveal included (iOS
+     * `SidebarGroup.pagesShown`). "Show more" counts from this, not from the
+     * stored count, so a tap after a reveal always adds a page.
+     */
+    val pagesShown: Int = 1,
+    /**
+     * [PAR-261022-02] The members the group tile shows, WeChat style: the
+     * [MEMBER_TILE_MAX] most recently updated, newest first (sub agent chats
+     * are not members). Empty for an empty group, which shows the group glyph.
+     */
+    val tileMembers: List<FolderTileMember> = emptyList(),
+    /**
+     * [UI-261023-03] The category of the most recently updated working member
+     * (a chat before a sub agent), whose avatar colour tints the loading
+     * comet. Null when nothing is working or that member has no category.
+     */
+    val activeCategory: String? = null,
+    /**
+     * [UI-261023-07] Any member has an unread reply (SessionUnreadStore).
+     * Drawn on the tile's top-right corner while the group is collapsed;
+     * open, the member rows show their own dots. Mirrors iOS
+     * `SidebarGroup.anyUnread`.
+     */
+    val anyUnread: Boolean = false,
 )
+
+/** [PAR-261022-02] One cell of a group tile: a member's icon. */
+data class FolderTileMember(val category: String?)
+
+/** [PAR-261022-02] Members a group tile shows (four stay legible at 44dp; WeChat shows nine). */
+internal const val MEMBER_TILE_MAX = 4
 
 /**
  * [T-android-session-grouping] Partition sessions into group blocks + the
@@ -391,8 +427,37 @@ internal fun partitionByFolder(
     freshBadgedIds: Set<String> = emptySet(),
     /** Ids whose agent loop is running — see [FolderGroupBlock.anyActive]. */
     activeSessionIds: Set<String> = emptySet(),
+    /** [UI-261023-07] Ids with an unread reply — see [FolderGroupBlock.anyUnread]. */
+    unreadIds: Set<String> = emptySet(),
     /** Injected so the empty-group recency rule is testable without a clock. */
     nowMs: Long = System.currentTimeMillis(),
+    /**
+     * [T-folder-pages] Pages the user opened per folder ("Show more" taps),
+     * absent = the first page. Only the open folder is read.
+     */
+    folderPages: Map<String, Int> = emptyMap(),
+    /**
+     * [T-folder-pages] Select mode lists every member, so select-all covers
+     * the whole folder (iOS: paging is display-only and off while selecting).
+     */
+    showAllMembers: Boolean = false,
+    /**
+     * [T-folder-pages] Rows that must stay visible: the session open in the
+     * detail pane. The open folder widens to the page holding one.
+     */
+    revealIds: Set<String> = emptySet(),
+    /**
+     * [T-search-folder-expand] A search result set is on screen: every folder
+     * in it opens with its matching members (no accordion, the saved open
+     * folder is not read or touched), and an empty folder shows only when its
+     * NAME matched ([searchMatchedFolderIds]).
+     */
+    searchResultsActive: Boolean = false,
+    searchMatchedFolderIds: Set<String> = emptySet(),
+    /** [T-search-folder-pages] Pages per folder in the result set, absent = the first 20. */
+    searchFolderPages: Map<String, Int> = emptyMap(),
+    /** [T-search-folder-collapse] Result folders the user folded for this search (unsaved). */
+    searchCollapsedFolderIds: Set<String> = emptySet(),
 ): Pair<List<FolderGroupBlock>, List<ChatSessionEntity>> {
     if (folders.isEmpty()) return emptyList<FolderGroupBlock>() to sessions
 
@@ -413,7 +478,13 @@ internal fun partitionByFolder(
     // First-encounter order = activity order. Empty groups are appended only
     // when they are still plausibly wanted — see [emptyGroupIsStillRelevant].
     val ordered = members.keys.toMutableList()
-    for (f in folders) if (f.id !in members && emptyGroupIsStillRelevant(f, nowMs)) ordered.add(f.id)
+    for (f in folders) {
+        if (f.id in members) continue
+        // [T-search-folder-expand] In a result set an empty card is noise -
+        // unless the folder's name is itself the match.
+        val shown = if (searchResultsActive) f.id in searchMatchedFolderIds else emptyGroupIsStillRelevant(f, nowMs)
+        if (shown) ordered.add(f.id)
+    }
 
     // [T-android-group-accordion] At most ONE group is open at a time, and
     // [T-android-groups-collapsed-on-launch] only one the user opened: there
@@ -426,23 +497,47 @@ internal fun partitionByFolder(
     val blocks = ordered.mapNotNull { fid ->
         val folder = byId[fid] ?: return@mapNotNull null
         val m = members[fid].orEmpty()
-        val collapsed = fid != openId
+        // [T-search-folder-collapse] In a result set a folder is open unless the
+        // user folded it for this search; the saved open folder is not read.
+        val collapsed = if (searchResultsActive) fid in searchCollapsedFolderIds else fid != openId
         // Pinned members first, stable partition — the pin is a display
         // affordance inside the group, not a reason to leave it.
         val displayOrdered = m.filter { it.pinnedAt != null } + m.filter { it.pinnedAt == null }
+        // [T-folder-pages] First page(s) only, widened to hold a revealed row.
+        // [T-search-folder-pages] A result folder pages its matches 20 at a
+        // time too (iOS: before the select-mode check, as there).
+        val pages = if (collapsed) 1 else if (searchResultsActive) maxOf(1, searchFolderPages[fid] ?: 1) else FolderPages.revealing(
+            index = displayOrdered.indexOfFirst { it.id in revealIds }.takeIf { it >= 0 },
+            stored = folderPages[fid] ?: 1,
+        )
+        val (shown, hidden) = if (collapsed || (showAllMembers && !searchResultsActive)) displayOrdered.size to 0
+            else FolderPages.page(displayOrdered.size, pages)
         FolderGroupBlock(
             folder = folder,
-            ids = if (collapsed) emptyList() else displayOrdered.map { it.id },
+            ids = if (collapsed) emptyList() else displayOrdered.take(shown).map { it.id },
             totalCount = m.size,
             isCollapsed = collapsed,
+            hiddenCount = hidden,
+            pagesShown = pages,
             // Recency order (not display order) — this means "newest activity".
             latestUpdatedAt = m.firstOrNull()?.updatedAt ?: folder.updatedAt,
             summaryTitle = m.firstOrNull()?.title,
-            firstCategory = m.firstOrNull()?.category,
             // Early-exiting hash lookups over the pre-built snapshot — never a
             // per-member entry into the badge store.
             anyPaused = freshBadgedIds.isNotEmpty() && m.any { it.id in freshBadgedIds },
             anyActive = activeSessionIds.isNotEmpty() && m.any { it.id in activeSessionIds },
+            anyUnread = unreadIds.isNotEmpty() && m.any { it.id in unreadIds },
+            tileMembers = m.asSequence()
+                .filter { !it.isChild }
+                .sortedByDescending { it.updatedAt }
+                .take(MEMBER_TILE_MAX)
+                .map { FolderTileMember(it.category) }
+                .toList(),
+            activeCategory = if (activeSessionIds.isEmpty()) null else m.asSequence()
+                .filter { it.id in activeSessionIds }
+                // Same "newest" as the tile; a chat wins over a sub agent.
+                .sortedWith(compareBy<ChatSessionEntity> { it.isChild }.thenByDescending { it.updatedAt })
+                .firstOrNull()?.category,
         )
     }
 
@@ -511,6 +606,8 @@ fun SessionListScreen(
     onRootfsClick: () -> Unit = {},
     // [T-android-scheduled-tasks-design] Entry to the scheduled-tasks list.
     onScheduledTasksClick: () -> Unit = {},
+    /** [FEAT-261021-07] A network pill under the title: opens that Settings > Network page (a route). */
+    onNetworkPageClick: (String) -> Unit = {},
     /**
      * [T-android-tablet-split] The session currently shown in the detail pane,
      * highlighted in the list. Non-null only in two-pane (tablet) mode — in
@@ -667,9 +764,19 @@ fun SessionListScreen(
     val expandedFolderId by viewModel.expandedFolderId.collectAsState()
     val folderMemberCounts by viewModel.folderMemberCounts.collectAsState()
     val groupPickerRequest by viewModel.groupPickerRequest.collectAsState()
-    // While searching, group cards are suppressed: padding a result set with
-    // every non-matching group is noise, not structure.
-    val showFolderBlock = !isSearchActive || searchQuery.isBlank()
+    // [T-search-folder-expand] A result set on screen (iOS searchResultsActive:
+    // a real query whose results have arrived) is grouped by folder, every
+    // folder in it open with its matches. Until the first results arrive the
+    // group cards stay out: padding a pending result set with every group is
+    // noise, not structure.
+    val searchResultsReady by viewModel.searchResultsReady.collectAsState()
+    val searchMatchedFolderIds by viewModel.searchMatchedFolderIds.collectAsState()
+    val searchResultsActive = isSearchActive && searchQuery.isNotBlank() && searchResultsReady
+    // [T-search-folder-pages] Kept apart from folderPages (the normal list's).
+    val searchFolderPages by viewModel.searchFolderPages.collectAsState()
+    // [T-search-folder-collapse] Folded for this search only; never saved.
+    val searchCollapsedFolderIds by viewModel.searchCollapsedFolderIds.collectAsState()
+    val showFolderBlock = !isSearchActive || searchQuery.isBlank() || searchResultsActive
     // [T-android-group-pause-badge-restamp] Snapshot the fresh-badge set ONCE
     // per grouping pass (iOS does the same in computeGroupedSessionIDs). The
     // set itself is the recomposition key: as badges age past the 24h window
@@ -697,19 +804,46 @@ fun SessionListScreen(
     // its own hidden child session id, which no row here carries, so a
     // conversation that had delegated everything out went dark while its work
     // continued.
-    val streamingSessionIds by SessionActivityTracker.activeSessions.collectAsState()
-    val agentWorkParents by AgentJobRegistry.parentsWithAgentWork.collectAsState()
-    val activeSessionIds = remember(streamingSessionIds, agentWorkParents) {
-        if (agentWorkParents.isEmpty()) streamingSessionIds else streamingSessionIds + agentWorkParents
-    }
+    // [T-scheduled-active-session-android] Both halves (and a chat waiting on
+    // its own scheduled task) now come from the tracker's one "processing" set.
+    val activeSessionIds by SessionActivityTracker.processingSessions.collectAsState()
+    // [UI-261023-07] Chats with an unread reply, for the group tile's dot.
+    val unreadIds by com.openminis.app.service.SessionUnreadStore.ids.collectAsState()
+    // [T-folder-pages] Pages per open folder. The folder block is not built in
+    // search, so a search neither reads nor resets these: leaving search shows
+    // the list where it was.
+    val folderPages by viewModel.folderPages.collectAsState()
+    val revealIds = remember(selectedSessionId) { setOfNotNull(selectedSessionId) }
     val folderPartition = remember(
-        sessions, folders, expandedFolderId, showFolderBlock, freshBadgedIds, activeSessionIds,
+        sessions, folders, expandedFolderId, showFolderBlock, freshBadgedIds, activeSessionIds, unreadIds,
+        folderPages, isSelecting, revealIds, searchResultsActive, searchMatchedFolderIds, searchFolderPages,
+        searchCollapsedFolderIds,
     ) {
         if (showFolderBlock) {
             partitionByFolder(
                 sessions, folders, expandedFolderId, freshBadgedIds, activeSessionIds,
+                unreadIds = unreadIds,
+                folderPages = folderPages,
+                showAllMembers = isSelecting,
+                revealIds = revealIds,
+                searchResultsActive = searchResultsActive,
+                searchMatchedFolderIds = if (searchResultsActive) searchMatchedFolderIds else emptySet(),
+                searchFolderPages = if (searchResultsActive) searchFolderPages else emptyMap(),
+                searchCollapsedFolderIds = if (searchResultsActive) searchCollapsedFolderIds else emptySet(),
             )
         } else emptyList<FolderGroupBlock>() to sessions
+    }
+    // [T-folder-pages] A page a reveal opened stays open once the selection
+    // moves on (iOS commitRevealedFolderPages): the rows the user was looking
+    // at must not vanish under them. Only the normal list builds blocks, so a
+    // search or select pass is never written back.
+    LaunchedEffect(folderPartition) {
+        if (searchResultsActive) return@LaunchedEffect
+        for (b in folderPartition.first) {
+            if (!b.isCollapsed && b.pagesShown > (folderPages[b.folder.id] ?: 1)) {
+                viewModel.keepFolderPages(b.folder.id, b.pagesShown)
+            }
+        }
     }
     val folderBlocks = folderPartition.first
     val groupedSessions = remember(folderPartition) { groupSessionsByDate(folderPartition.second) }
@@ -730,7 +864,8 @@ fun SessionListScreen(
                 idx += 1 // the "分组" section header item
                 folderBlocks.forEach { b ->
                     put(b.folder.id, idx)
-                    idx += 1 + b.ids.size
+                    // [T-folder-pages] + the "Show N more" row while members are hidden.
+                    idx += 1 + b.ids.size + (if (b.hiddenCount > 0) 1 else 0)
                 }
             }
         }
@@ -797,16 +932,20 @@ fun SessionListScreen(
     val miniBarBlock by remember(folderBlocks, folderHeaderIndices, isSelecting) {
         derivedStateOf {
             if (isSelecting) return@derivedStateOf null
-            val block = folderBlocks.firstOrNull { !it.isCollapsed && it.ids.isNotEmpty() }
-                ?: return@derivedStateOf null
-            val headerIdx = folderHeaderIndices[block.folder.id] ?: return@derivedStateOf null
             val infos = listState.layoutInfo.visibleItemsInfo
-            when {
-                infos.isEmpty() -> null
-                infos.any { it.key == "folder_${block.folder.id}" } -> null
-                infos.first().index > headerIdx -> block
-                else -> null
-            }
+            val first = infos.firstOrNull()?.index ?: return@derivedStateOf null
+            // [T-search-folder-minibar] The block the reader is INSIDE: its
+            // header is above the viewport and its last row (or its "Show N
+            // more" row) is not. Search results open every folder, so "the
+            // first open folder" named and folded the wrong one; and past the
+            // block's end (the date buckets) there is no folder to name.
+            val block = folderBlocks.firstOrNull { b ->
+                if (b.isCollapsed || b.ids.isEmpty()) return@firstOrNull false
+                val headerIdx = folderHeaderIndices[b.folder.id] ?: return@firstOrNull false
+                val lastIdx = headerIdx + b.ids.size + (if (b.hiddenCount > 0) 1 else 0)
+                first in (headerIdx + 1)..lastIdx
+            } ?: return@derivedStateOf null
+            if (infos.any { it.key == "folder_${block.folder.id}" }) null else block
         }
     }
 
@@ -820,6 +959,13 @@ fun SessionListScreen(
         com.openminis.app.scheduled.ScheduledTaskStore(context).observe()
             .map { list -> list.count { it.enabled } }
     }.collectAsState(initial = 0)
+    // [T-android-sched-badge-toggle] The user can hide the count from the
+    // Scheduled Tasks screen's menu; the icon and its tap stay.
+    val showScheduledBadge by remember {
+        com.openminis.app.scheduled.ScheduledTaskStore(context).observeShowHomeBadge()
+    }.collectAsState(initial = true)
+    val scheduledBadgeCount = com.openminis.app.scheduled.ScheduledTaskStore
+        .homeBadgeCount(scheduledTaskCount, showScheduledBadge)
 
     Scaffold(
         topBar = {
@@ -835,11 +981,15 @@ fun SessionListScreen(
                             fontSize = 20.sp,
                         )
                     } else {
-                        Text(
-                            stringResource(R.string.app_name),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                        )
+                        Column {
+                            Text(
+                                stringResource(R.string.app_name),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp,
+                            )
+                            // [FEAT-261021-07] Tailscale / proxy state; nothing when neither is set up.
+                            NetworkStatusBadges(onOpen = onNetworkPageClick)
+                        }
                     }
                 },
                 navigationIcon = {
@@ -848,17 +998,32 @@ fun SessionListScreen(
                             Text(stringResource(R.string.cancel))
                         }
                     } else {
-                        IconButton(onClick = onSettingsClick) {
+                        // [T-update-channels] Beta only: the update badge's
+                        // third layer, derived - no state of its own.
+                        val updateBadge by com.openminis.app.data.UpdateStateStore.hasUpdateBadge.collectAsState()
+                        val updateChannel by com.openminis.app.data.UpdateStateStore.channel.collectAsState()
+                        // [T-android-badge-clip] Badge outside the button's clip.
+                        com.openminis.app.ui.components.BadgedIconButton(
+                            onClick = onSettingsClick,
+                            badge = if (com.openminis.app.data.UpdatePolicy.hasHomeBadge(updateBadge, updateChannel)) {
+                                { Badge() }
+                            } else {
+                                null
+                            },
+                        ) {
                             Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.sessionlist_settings))
                         }
                     }
                 },
                 actions = {
                     if (isSelecting) {
-                        MinisTextButton(onClick = { viewModel.selectAll() }) {
+                        // [FIX-261025-07] Counts against the rows the list shows
+                        // (search results during a search), as toggleSelectAll does.
+                        val allSelected = allShownSelected(selectedIds, persistedSessions.mapTo(HashSet()) { it.id })
+                        MinisTextButton(onClick = { viewModel.toggleSelectAll() }) {
                             Text(
                                 stringResource(
-                                    if (selectedIds.size == sessions.size) R.string.sessionlist_deselect_all
+                                    if (allSelected) R.string.sessionlist_deselect_all
                                     else R.string.sessionlist_select_all
                                 )
                             )
@@ -869,20 +1034,19 @@ fun SessionListScreen(
                         // [T-android-scheduled-tasks-full] Badge shows the count of
                         // scheduled tasks so the user can see at a glance how many
                         // are configured without opening the list.
-                        IconButton(onClick = onScheduledTasksClick) {
-                            if (scheduledTaskCount > 0) {
-                                BadgedBox(badge = { Badge { Text("$scheduledTaskCount") } }) {
-                                    Icon(
-                                        Icons.Outlined.Schedule,
-                                        contentDescription = stringResource(R.string.sessionlist_scheduled_tasks),
-                                    )
-                                }
-                            } else {
-                                Icon(
-                                    Icons.Outlined.Schedule,
-                                    contentDescription = stringResource(R.string.sessionlist_scheduled_tasks),
-                                )
-                            }
+                        // [T-android-badge-clip] The count badge used to sit INSIDE
+                        // the IconButton, whose 40dp circle clip cut off its
+                        // top-right corner; BadgedIconButton keeps it outside.
+                        com.openminis.app.ui.components.BadgedIconButton(
+                            onClick = onScheduledTasksClick,
+                            badge = scheduledBadgeCount?.let { n ->
+                                { Badge { Text("$n") } }
+                            },
+                        ) {
+                            Icon(
+                                Icons.Outlined.Schedule,
+                                contentDescription = stringResource(R.string.sessionlist_scheduled_tasks),
+                            )
                         }
                         // Shell menu (matching iOS trailing shell button: Terminal, Rootfs, Browser)
                         Box {
@@ -969,7 +1133,9 @@ fun SessionListScreen(
             // iOS `didInitialLoad` on ContentView. The transition is usually
             // sub-200ms, so no spinner.
             if (isInitialLoadComplete) Column(modifier = Modifier.fillMaxSize()) {
-                if (sessions.isEmpty()) {
+                // [T-search-folder-expand] A folder whose name matched is a result
+                // even with no member: the list shows it rather than "no results".
+                if (sessions.isEmpty() && !(searchResultsActive && folderBlocks.isNotEmpty())) {
                     if (isSearchActive && searchQuery.isNotBlank()) {
                         Box(
                             modifier = Modifier.fillMaxSize(),
@@ -1041,15 +1207,18 @@ fun SessionListScreen(
                             // welded container (iOS FolderMemberRowBackground);
                             // ungrouped rows stay full-bleed.
                             inFolder: Boolean = false,
+                            // [T-folder-pages] False while a "Show N more" row
+                            // follows: that row is the container's bottom then.
+                            closesFolder: Boolean = true,
                         ) {
                             items(rows, key = { it.id }) { session ->
                                 val activeQuery =
                                     if (isSearchActive && searchQuery.isNotBlank()) searchQuery else ""
                                 val rowModifier = if (inFolder) {
-                                    val isLast = session.id == rows.last().id
+                                    val isLast = closesFolder && session.id == rows.last().id
                                     Modifier
                                         .padding(
-                                            start = 6.dp, end = 6.dp,
+                                            start = LIST_GUTTER, end = LIST_GUTTER,
                                             bottom = if (isLast) 4.dp else 0.dp,
                                         )
                                         .folderSurface(
@@ -1157,7 +1326,16 @@ fun SessionListScreen(
                                     Box(Modifier.animateItem(placementSpec = tween(250))) {
                                     FolderCard(
                                         block = block,
+                                        searchQuery = if (searchResultsActive) searchQuery else null,
                                         onToggle = {
+                                            // [T-search-folder-collapse] In a result set the tap
+                                            // folds this folder for this search only: the saved
+                                            // open folder is left alone (nothing is persisted)
+                                            // and there is no accordion, so other results stay open.
+                                            if (searchResultsActive) {
+                                                viewModel.toggleSearchFolderCollapsed(block.folder.id)
+                                                return@FolderCard
+                                            }
                                             // Capture BEFORE the toggle — after it
                                             // the block still holds the old state.
                                             val willExpand = block.isCollapsed
@@ -1173,7 +1351,11 @@ fun SessionListScreen(
                                             // iOS newChatInFolder: auto-expand
                                             // first so the new session doesn't
                                             // vanish into a collapsed group.
-                                            if (block.isCollapsed) {
+                                            // [T-search-folder-collapse] In a result set only
+                                            // reopen a folder the user folded there.
+                                            if (searchResultsActive) {
+                                                viewModel.reopenSearchFolder(block.folder.id)
+                                            } else if (block.isCollapsed) {
                                                 viewModel.toggleFolderCollapsed(block.folder.id)
                                             }
                                             val sessionId = viewModel.createNewSession(
@@ -1192,7 +1374,25 @@ fun SessionListScreen(
                                 renderSessionRows(
                                     block.ids.mapNotNull { id -> sessions.firstOrNull { it.id == id } },
                                     inFolder = true,
+                                    closesFolder = block.hiddenCount == 0,
                                 )
+                                // [T-folder-pages] The rest, a page per tap.
+                                if (block.hiddenCount > 0) {
+                                    item(key = "folder_more_${block.folder.id}") {
+                                        Box(Modifier.animateItem(placementSpec = tween(250))) {
+                                            FolderShowMoreRow(
+                                                hidden = block.hiddenCount,
+                                                onClick = {
+                                                    if (searchResultsActive) {
+                                                        viewModel.showMoreInSearchFolder(block.folder.id, block.pagesShown)
+                                                    } else {
+                                                        viewModel.showMoreInFolder(block.folder.id, block.pagesShown)
+                                                    }
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -1259,9 +1459,12 @@ fun SessionListScreen(
                                         }
                                     },
                             ) {
-                                FolderComposedIcon(
-                                    category = bar.firstCategory,
-                                    diameter = 30.dp,
+                                // The mini-bar stands in for the header, so it
+                                // shows the comet like a closed group.
+                                FolderMemberTile(
+                                    members = bar.tileMembers,
+                                    size = 30.dp,
+                                    loadingColor = if (bar.anyActive) groupLoadingColor(bar.activeCategory) else null,
                                 )
                                 // Folder names are user data — verbatim.
                                 Text(
@@ -1282,7 +1485,10 @@ fun SessionListScreen(
                                         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
                                     )
                                     .clickable {
-                                        viewModel.toggleFolderCollapsed(bar.folder.id)
+                                        // [T-search-folder-collapse] In a result set the
+                                        // fold is for this search only.
+                                        if (searchResultsActive) viewModel.toggleSearchFolderCollapsed(bar.folder.id)
+                                        else viewModel.toggleFolderCollapsed(bar.folder.id)
                                     },
                             ) {
                                 Icon(
@@ -1673,6 +1879,13 @@ private fun DualFabRow(
                 containerColor = minisFabColor(),
                 modifier = Modifier
                     .size(56.dp)
+                    // [T-newchat-fab-shadow] The shadow goes FIRST, outside the clip
+                    // below: a shadow drawn after `.clip(CircleShape)` (and the FAB's
+                    // own elevation shadow, drawn inside the Surface) falls outside
+                    // the circle and was clipped away, so this button had no shadow
+                    // while the search FAB beside it did. Same shadow and elevation
+                    // as the search FAB so the pair looks alike, swapped or not.
+                    .shadow(6.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.15f))
                     // [T-android-fab-square-ripple] Clip BEFORE combinedClickable.
                     // FloatingActionButton's own `shape = CircleShape` only bounds
                     // the ripple it draws internally; this extra clickable layer
@@ -1687,9 +1900,8 @@ private fun DualFabRow(
                         onLongClick = {
                             if (topGroups.isNotEmpty()) showGroupMenu = true
                         },
-                    )
-                    .shadow(8.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.2f)),
-                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+                    ),
+                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
             ) {
                 Icon(Icons.Outlined.Forum, contentDescription = "New Chat", tint = Color.White, modifier = Modifier.size(24.dp))
             }
@@ -2288,7 +2500,7 @@ private fun Modifier.folderSurface(
     segment: FolderSegment,
     fill: Color,
     edge: Color,
-): Modifier = drawBehind {
+): Modifier = drawWithContent {
     val r = 16.dp.toPx()
     val w = size.width
     val h = size.height
@@ -2315,6 +2527,10 @@ private fun Modifier.folderSurface(
         }
     }
     drawPath(fillPath, fill)
+    // [PAR-261022-02] The border goes on top of the content, so a selected
+    // member's band or a press ripple, which run to the card's inner edge,
+    // never paint over it.
+    drawContent()
 
     // Border tiling (iOS FolderSegmentBorder): lone = full outline; top =
     // left edge up + top arcs + right edge down; middle = the two vertical
@@ -2346,6 +2562,39 @@ private fun Modifier.folderSurface(
         }
     }
     drawPath(border, edge, style = Stroke(width = 0.75.dp.toPx()))
+}
+
+/**
+ * [T-folder-pages] "Show N more (M left)" below an open folder's shown
+ * members (iOS folderShowMoreRow): the container's BOTTOM segment, in the
+ * accent colour, adding one page per tap.
+ */
+@Composable
+private fun FolderShowMoreRow(hidden: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(start = LIST_GUTTER, end = LIST_GUTTER, bottom = 4.dp)
+            .folderSurface(FolderSegment.BOTTOM, fill = folderFillColor(), edge = folderEdgeColor())
+            .clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = AVATAR_INSET, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            stringResource(R.string.sessionlist_folder_show_more, FolderPages.nextPageCount(hidden), hidden),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
 }
 
 /**
@@ -2385,30 +2634,115 @@ private fun groupGlyphPath(side: Float): Path = Path().apply {
 }
 
 /**
- * Port of iOS FolderComposedIcon: the grouped-list glyph on the SAME circular
- * translucent tint the session rows use, at the same 44dp slot — a group icon
- * and a session icon are the same species at the same size. Tint borrows the
- * newest member's category color (gray when empty); 0.28 vs the session
- * icons' 0.18 so a group circle reads as a different kind of thing.
+ * [PAR-261022-02] A group's avatar, WeChat style (Windows UI-261022-02..04):
+ * a rounded square of side [size], lightly tinted, holding the avatars of
+ * its most recently updated members, newest first, laid out by
+ * [memberTileCells]. It follows [FolderGroupBlock.tileMembers], so it
+ * changes as the members do. Chats stay circles, so the square reads as a
+ * different kind of thing. An empty group shows the group glyph.
+ * [loadingColor]: non-null while a member is working, so a comet of that
+ * colour runs round the tile's edge ([GroupLoadingBorder], UI-261023-03).
+ * The member cells never spin.
  */
 @Composable
-private fun FolderComposedIcon(category: String?, diameter: Dp = 44.dp) {
-    val tint = categoryStyle(category).color
+private fun FolderMemberTile(members: List<FolderTileMember>, size: Dp = 44.dp, loadingColor: Color? = null) {
+    val scale = size.value / 44f
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Box(
         modifier = Modifier
-            .size(diameter)
-            .background(tint.copy(alpha = 0.28f), CircleShape),
+            .size(size)
+            .background(
+                muted.copy(alpha = if (ChatColors.isDark) 0.22f else 0.16f),
+                RoundedCornerShape((12f * scale).dp),
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(diameter * 0.56f)) {
-            drawPath(groupGlyphPath(size.width), tint)
+        if (loadingColor != null) {
+            GroupLoadingBorder(
+                cornerRadius = (12f * scale).dp,
+                color = loadingColor,
+                modifier = Modifier.matchParentSize(),
+            )
+        }
+        if (members.isEmpty()) {
+            Canvas(Modifier.size(size * 0.5f)) {
+                drawPath(groupGlyphPath(this.size.width), muted)
+            }
+            return@Box
+        }
+        memberTileCells(members.size).zip(members).forEach { (cell, member) ->
+            val style = categoryStyle(member.category)
+            val side = (cell.side * scale).dp
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = (cell.x * scale).dp, y = (cell.y * scale).dp)
+                    .size(side)
+                    // 35 %: a row's highlighted tint - a cell is small, the
+                    // 18 % resting tint would wash out on the tile's grey.
+                    .background(style.color.copy(alpha = 0.35f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = style.icon,
+                    contentDescription = null,
+                    tint = style.color,
+                    modifier = Modifier.size(side * 0.55f),
+                )
+            }
         }
     }
 }
 
+/** [PAR-261022-02] Where a group tile's member cell sits on the 44dp tile, in dp. */
+internal data class MemberTileCell(val x: Float, val y: Float, val side: Float)
+
+/**
+ * [PAR-261022-02] The cells of a 44dp group tile, newest member first (Windows
+ * `member_tile_cells`): 4dp inset, 2dp between cells. One member at a cell's
+ * size in the middle (filling the tile, it read as a chat, not a group); two
+ * side by side; three as one centred on top and two below; four in a 2 x 2.
+ */
+internal fun memberTileCells(n: Int): List<MemberTileCell> {
+    val pad = 4f
+    val gap = 2f
+    val inner = 44f - 2 * pad
+    val cell = (inner - gap) / 2
+    val far = pad + cell + gap
+    val mid = pad + (inner - cell) / 2
+    return when {
+        n <= 0 -> emptyList()
+        n == 1 -> listOf(MemberTileCell(mid, mid, cell))
+        n == 2 -> listOf(MemberTileCell(pad, mid, cell), MemberTileCell(far, mid, cell))
+        n == 3 -> listOf(MemberTileCell(mid, pad, cell), MemberTileCell(pad, far, cell), MemberTileCell(far, far, cell))
+        else -> listOf(
+            MemberTileCell(pad, pad, cell), MemberTileCell(far, pad, cell),
+            MemberTileCell(pad, far, cell), MemberTileCell(far, far, cell),
+        )
+    }
+}
+
+/**
+ * [PAR-261022-02] How far a row's avatar stays from its fill's left, top and
+ * bottom edges (and the time from its right), and the group tile from its
+ * card's inner edges: one gap all round, as on Windows (UI-261022-04). 12dp
+ * keeps Android's 68dp row (44dp avatar) and, with [LIST_GUTTER], the 16dp
+ * content keyline.
+ */
+private val AVATAR_INSET = 12.dp
+
+/** [PAR-261022-02] The space between the screen edge and a row's fill or a group card. */
+private val LIST_GUTTER = 4.dp
+
 @Composable
 private fun FolderCard(
     block: FolderGroupBlock,
+    /**
+     * [T-search-folder-expand] The query while a result set is on screen, else
+     * null: the name highlights its hit and the count line reads "N matching
+     * chats".
+     */
+    searchQuery: String? = null,
     onToggle: () -> Unit,
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
@@ -2448,12 +2782,12 @@ private fun FolderCard(
     val headerHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     Box(
         modifier = Modifier
-            // 6dp outer inset floats the rounded card inside the list width
+            // The outer inset floats the rounded card inside the list width
             // (iOS: the inset frame is what separates it from the full-bleed
-            // session rows at a glance). 6 outer + 10 inner = 16 — the folder
-            // icon sits exactly on the session rows' alignment grid.
+            // session rows at a glance). [PAR-261022-02] LIST_GUTTER outside +
+            // AVATAR_INSET inside = 16dp, the tile on the rows' avatar column.
             .padding(
-                start = 6.dp, end = 6.dp, top = 4.dp,
+                start = LIST_GUTTER, end = LIST_GUTTER, top = 4.dp,
                 bottom = if (isExpandedWithRows) 0.dp else 4.dp,
             )
             .folderSurface(
@@ -2512,7 +2846,9 @@ private fun FolderCard(
                 .semantics(mergeDescendants = true) {
                     onClick(label = expandLabel) { onToggle(); true }
                 }
-                .padding(horizontal = 10.dp, vertical = 10.dp),
+                // [PAR-261022-02] The tile is as far from the card's inner
+                // left, top and bottom edges as a row's avatar from its fill's.
+                .padding(AVATAR_INSET),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // [T-android-group-pause-badge-restamp] Collapsed-only paused
@@ -2524,17 +2860,22 @@ private fun FolderCard(
             // `anyPaused` already carries the 24h freshness filter; rows are
             // deliberately unfiltered.
             Box(modifier = Modifier.size(44.dp)) {
-                FolderComposedIcon(category = block.firstCategory)
-                // [T-android-group-running-ring] Collapsed-only, same as the
-                // paused badge below and for the same reason: an expanded
-                // group's members carry their own rings, so a header copy
-                // would leave the user guessing which row it refers to.
-                if (block.isCollapsed && block.anyActive) {
-                    SpinningRing(
-                        color = categoryStyle(block.firstCategory).color,
+                // [UI-261023-03] A closed group with a working member: a comet
+                // runs round the tile's edge, in the newest working member's
+                // avatar colour. Open, the member rows show their own rings,
+                // so the tile stays still (no track either).
+                FolderMemberTile(
+                    members = block.tileMembers,
+                    loadingColor = if (block.isCollapsed && block.anyActive) groupLoadingColor(block.activeCategory) else null,
+                )
+                if (block.isCollapsed && block.anyUnread) {
+                    UnreadDot(
                         modifier = Modifier
-                            .size(42.dp)
-                            .align(Alignment.Center),
+                            .align(Alignment.TopEnd)
+                            // [UI-261023-07] iOS's group dot corner, 2dp
+                            // further left and down (UI-261023-09).
+                            .offset(x = 2.5.dp, y = (-2.5).dp),
+                        ringColor = folderFillColor(),
                     )
                 }
                 if (block.isCollapsed && block.anyPaused) {
@@ -2542,10 +2883,15 @@ private fun FolderCard(
                         state = com.openminis.app.service.SessionBadgeStore
                             .SessionBadgeState.PAUSED,
                         modifier = Modifier.align(Alignment.BottomEnd),
+                        // Ringed in the card's fill: the tile under it is busy
+                        // with member cells.
+                        ringColor = folderFillColor(),
                     )
                 }
             }
-            Spacer(Modifier.width(8.dp))
+            // [PAR-261022-02] A row's avatar-to-title gap, so the group name
+            // starts where its members' titles do.
+            Spacer(Modifier.width(12.dp))
             Column(
                 modifier = Modifier.weight(1f),
                 // [T-android-group-header-spacing] Match the session row's
@@ -2557,7 +2903,9 @@ private fun FolderCard(
             ) {
                 // User data — rendered verbatim, never a string lookup.
                 Text(
-                    block.folder.name,
+                    // [T-search-folder-expand] A folder-name hit is highlighted like a title hit.
+                    if (searchQuery != null) highlightedAnnotatedString(block.folder.name, searchQuery)
+                    else androidx.compose.ui.text.AnnotatedString(block.folder.name),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -2569,6 +2917,13 @@ private fun FolderCard(
                     // rows but must still report its real membership. iOS
                     // summary line: "N chats · <newest member title>".
                     when {
+                        // [T-search-folder-collapse] Folded for this search: how many
+                        // matches the fold hides (the count line, as on iOS).
+                        searchQuery != null && block.isCollapsed && block.totalCount > 0 ->
+                            stringResource(R.string.sessionlist_folder_matches_hidden, block.totalCount)
+                        // In a result set the members are the matches.
+                        searchQuery != null ->
+                            stringResource(R.string.sessionlist_folder_matching_chats, block.totalCount)
                         block.totalCount > 0 && block.summaryTitle != null ->
                             stringResource(R.string.group_n_chats, block.totalCount) +
                                 " · " + block.summaryTitle
@@ -2737,9 +3092,9 @@ private fun SessionRow(
     // onPress, and mount it with Modifier.indication.
     //
     // Highlight SHAPE mirrors the folder card (user request): ungrouped rows
-    // clip the indication to the same 6dp-inset, 16dp-radius rounded rect the
-    // group card uses — 6dp outside the clip + 10dp inside keeps the total
-    // 16dp content lead, so nothing moves. Folder members skip this: their
+    // clip the indication to the same LIST_GUTTER-inset, 16dp-radius rounded
+    // rect the group card uses — 4dp outside the clip + 12dp inside keeps the
+    // 16dp content lead. Folder members skip this: their
     // wrapper Box already clips to the welded container's segment shape
     // (square middles / bottom-rounded last), and a rounded ripple mid-weld
     // would break the one-container illusion.
@@ -2751,34 +3106,24 @@ private fun SessionRow(
     // member (so the welded container shows through) and, since the two-pane
     // list gained a selected row, a primary tint for the selection. The old
     // `rowBackground != null` test could not tell them apart, so a SELECTED
-    // ungrouped row was treated as a folder member: it skipped the 6dp inset
+    // ungrouped row was treated as a folder member: it skipped the gutter inset
     // and the 16dp clip, and the tint was painted edge-to-edge as a square
     // band. That is the reported symptom — the highlight looked taller than it
     // was wide-inset, with hard corners.
     val inFolder = isFolderMember
-    // [T-android-split-selection-shape] A SELECTED folder member gets the same
-    // rounded-pill treatment as a selected ungrouped row, just sized to sit
-    // inside the welded container.
-    //
-    // Members deliberately skip the outer inset/clip (their wrapper already
-    // clips them to the container's segment shape — square middles, rounded
-    // last row — and a rounded ripple mid-weld would break the one-container
-    // illusion). But that also meant a selected member's tint was painted
-    // edge-to-edge with hard corners, so selection looked different depending
-    // on whether the chat happened to be in a group.
-    //
-    // The tint alone is inset and rounded, leaving the container's own fill
-    // and borders untouched: 4dp (not 6) because the container already
-    // contributes its 6dp, and 12dp radius (not 16) so the pill nests inside
-    // the card's corner rather than fighting it.
-    val selectionTint = rowBackground?.takeIf { inFolder && it != Color.Transparent }
+    // [PAR-261022-02] A SELECTED folder member is a square band across the
+    // card's inner width (Windows UI-261022-03), no longer an inset rounded
+    // pill: it is plainly one row of the card, and the wrapper's clip rounds
+    // the last row's band into the card's bottom corners. The card's fill is
+    // white / #1C1C1E over the #F2F2F7 / black list, so the selection tint,
+    // the same as a loose row's, stands out on it.
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .then(
                 if (!inFolder) {
                     Modifier
-                        .padding(horizontal = 6.dp)
+                        .padding(horizontal = LIST_GUTTER)
                         .clip(RoundedCornerShape(16.dp))
                 } else {
                     Modifier
@@ -2788,79 +3133,14 @@ private fun SessionRow(
             // filled the full row width and squared off the corners, so the
             // clip only ever shaped the ripple. Now the tint is the rounded
             // rect itself, matching the folder card's shape and leaving equal
-            // 6dp gutters left and right.
-            .background(
-                if (selectionTint != null) Color.Transparent
-                else rowBackground ?: MaterialTheme.colorScheme.surface,
-            )
-            // [T-android-selection-no-reflow] DRAWN, not padded.
-            //
-            // The first cut expressed the inset as
-            // `.padding(4.dp, 2.dp).clip(...).background(...)`, which is a
-            // LAYOUT modifier: it shrank the content box, so selecting a row
-            // visibly nudged its icon and text. The row must not move at all —
-            // only the tint's own rectangle should inset.
-            //
-            // `drawBehind` paints inside the row's existing bounds and
-            // occupies no space, so the geometry of a selected row is
-            // byte-identical to an unselected one. The 4dp/2dp inset and 12dp
-            // radius now describe the painted rect alone.
-            .then(
-                if (selectionTint != null) {
-                    Modifier.drawBehind {
-                        val insetX = 4.dp.toPx()
-                        val insetY = 2.dp.toPx()
-                        drawRoundRect(
-                            color = selectionTint,
-                            topLeft = Offset(insetX, insetY),
-                            size = Size(
-                                size.width - insetX * 2,
-                                size.height - insetY * 2,
-                            ),
-                            cornerRadius = CornerRadius(12.dp.toPx()),
-                        )
-                    }
-                } else {
-                    Modifier
-                }
-            )
+            // gutters left and right.
+            .background(rowBackground ?: MaterialTheme.colorScheme.surface)
             .then(
                 if (onLongClick != null) {
                     Modifier
-                        // [T-android-sessionrow-press-shape] Clip the press
-                        // ripple to the SAME rounded rect the selection tint
-                        // paints, for a folder member.
-                        //
-                        // Ungrouped rows already got this from the
-                        // `.clip(RoundedCornerShape(16.dp))` above, but folder
-                        // members deliberately skip that clip (their wrapper
-                        // shapes the welded container), so their ripple was
-                        // drawn square and edge-to-edge. Under the rounded
-                        // selection tint that read as two stacked highlights
-                        // with mismatched corners — the reported symptom.
-                        //
-                        // Radius matches the tint's 12dp so the two agree; the
-                        // ungrouped 16dp would not, since the container already
-                        // contributes its own 6dp.
-                        //
-                        // [T-android-selection-no-reflow] Shape only — NO
-                        // padding. The tint's 4dp/2dp inset cannot be reproduced
-                        // here with `.padding`, because padding is a LAYOUT
-                        // modifier: it would shrink the row's content box and
-                        // shift every folder member's icon and text, which is
-                        // the reflow this row is twice documented as avoiding.
-                        // `clip` alone occupies no space, so the ripple is
-                        // rounded to the row's full bounds. The 4dp difference
-                        // between the ripple's edge and the tint's is not
-                        // visible — a ripple is a transient wash, not an edge —
-                        // whereas the square corners were.
-                        .then(
-                            if (inFolder) {
-                                Modifier.clip(RoundedCornerShape(12.dp))
-                            } else {
-                                Modifier
-                            },
-                        )
+                        // Folder members: the wrapper's clip shapes the
+                        // ripple to the card's segment, like the selection
+                        // band (PAR-261022-02).
                         .indication(pressInteractions, LocalIndication.current)
                         .pointerInput(Unit) {
                             detectTapGestures(
@@ -2897,25 +3177,12 @@ private fun SessionRow(
                     }
                 }
             )
-            .padding(
-                // 10dp in BOTH branches. Ungrouped: 6dp highlight-clip inset
-                // + 10 = 16dp lead. In-folder: the wrapper Box already adds
-                // the container's 6dp inset, so 16dp here pushed member icons
-                // to 22dp — 6dp right of the folder card's own icon (6 outer
-                // + 10 inner = 16). 10dp restores one shared 16dp icon grid
-                // for the card, its members, and ungrouped rows alike.
-                horizontal = 10.dp,
-                // [T-android-selection-no-reflow] Back to the original 12dp.
-                //
-                // This was briefly 16dp and then 10dp while chasing "even
-                // padding on the selection pill". Both were the wrong lever:
-                // this padding sets the ROW's height, so changing it resized
-                // every row in the list — selected or not — to fix how one
-                // tinted rectangle looked. Row metrics are left exactly as they
-                // were; the pill's proportions are handled by the inset of the
-                // drawn tint instead (see the drawBehind above).
-                vertical = 12.dp,
-            ),
+            // [PAR-261022-02] AVATAR_INSET on every side, in both branches:
+            // the avatar is as far from its fill's left as from its top and
+            // bottom (the 44dp avatar keeps the row at 68dp), and LIST_GUTTER
+            // (loose rows) or the wrapper's gutter (folder members) + 12 puts
+            // every avatar - the group tile's too - on one 16dp column.
+            .padding(AVATAR_INSET),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -2926,15 +3193,17 @@ private fun SessionRow(
         // Category icon in colored circle (18% opacity matching iOS)
         // [T-android-sidebar-subagent-running] See the folder aggregate above:
         // running sub agents count as this session working.
-        val activeSessions by SessionActivityTracker.activeSessions.collectAsState()
-        val agentWorkParents by AgentJobRegistry.parentsWithAgentWork.collectAsState()
-        val isActive = session.id in activeSessions || session.id in agentWorkParents
+        // [T-scheduled-active-session-android] The tracker's one "processing"
+        // set: streaming, sub agents, or its own scheduled task still due.
+        val processingSessions by SessionActivityTracker.processingSessions.collectAsState()
+        val isActive = session.id in processingSessions
         // [T-android-session-paused-badge] Head of this session's badge queue
         // — null for the common case. Renders as an overlay in the icon's
         // bottom-right corner, mirroring where iOS's iCloud badge sits so
         // future ICLOUD_SYNCING uses the same anchor.
         val badgeMap by com.openminis.app.service.SessionBadgeStore.byId.collectAsState()
         val badgeHead = badgeMap[session.id]?.firstOrNull()
+        val unreadIds by com.openminis.app.service.SessionUnreadStore.ids.collectAsState()
         Box(
             modifier = Modifier.size(44.dp),
         ) {
@@ -2972,6 +3241,11 @@ private fun SessionRow(
                     state = badgeHead,
                     modifier = Modifier.align(Alignment.BottomEnd),
                 )
+            }
+            // [UI-261023-07] Unread reply: iOS SessionRow's top-trailing dot,
+            // apart from the bottom corner badge so both can show.
+            if (session.id in unreadIds) {
+                UnreadDot(modifier = Modifier.align(Alignment.TopEnd).offset(x = (-1).dp, y = 1.dp))
             }
         }
 
@@ -3067,6 +3341,82 @@ private fun DialogTextFieldFrame(content: @Composable () -> Unit) {
 }
 
 /**
+ * [UI-261023-03] A group tile's "a member is working" border: a faint track
+ * round the rounded square, and a comet (a sweep gradient fading in to its
+ * head) running round it once every [GROUP_LOADING_PERIOD_MS].
+ *
+ * Cost: the comet turns by rotating the shader's local matrix inside the draw
+ * lambda, reading the shared [rememberDecorativeTick] there (draw phase, no
+ * recomposition); the path, shader and stroke are built once per size in
+ * drawWithCache, and the layer stops each redraw at this node. The clock is
+ * held only while a loading tile is composed, so a list scrolled past it, or
+ * with no working member, runs nothing. With animations removed (animator
+ * scale 0, Android's Reduce Motion) the border is a still, full highlight.
+ */
+@Composable
+private fun GroupLoadingBorder(cornerRadius: Dp, color: Color, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val still = remember(context) { com.openminis.app.ui.chat.animationsDisabled(context) }
+    val tick = if (still) null else rememberDecorativeTick()
+    Spacer(
+        modifier
+            .graphicsLayer()
+            .drawWithCache {
+                val strokePx = GROUP_LOADING_STROKE.toPx()
+                val half = strokePx / 2
+                // The stroke is centred on the path: inset by half its width
+                // so the border stays inside the tile.
+                val outline = Path().apply {
+                    addRoundRect(
+                        RoundRect(
+                            Rect(half, half, size.width - half, size.height - half),
+                            CornerRadius((cornerRadius.toPx() - half).coerceAtLeast(0f)),
+                        ),
+                    )
+                }
+                val stroke = Stroke(width = strokePx)
+                val track = color.copy(alpha = 0.22f)
+                val cx = size.width / 2
+                val cy = size.height / 2
+                val shader = android.graphics.SweepGradient(
+                    cx, cy,
+                    intArrayOf(
+                        android.graphics.Color.TRANSPARENT,
+                        android.graphics.Color.TRANSPARENT,
+                        color.toArgb(),
+                    ),
+                    floatArrayOf(0f, 0.35f, 1f),
+                )
+                val comet = ShaderBrush(shader)
+                val matrix = android.graphics.Matrix()
+                onDrawBehind {
+                    if (tick == null) {
+                        drawPath(outline, color, style = stroke)
+                        return@onDrawBehind
+                    }
+                    drawPath(outline, track, style = stroke)
+                    matrix.setRotate(decorativePhase(tick.value, GROUP_LOADING_PERIOD_MS) * 360f, cx, cy)
+                    shader.setLocalMatrix(matrix)
+                    drawPath(outline, comet, style = stroke)
+                }
+            },
+    )
+}
+
+/**
+ * [UI-261023-03] The comet's colour: the working member's category avatar
+ * colour, or the theme accent when it has no (known) category.
+ */
+@Composable
+private fun groupLoadingColor(category: String?): Color {
+    val style = categoryStyle(category)
+    return if (category.isNullOrBlank() || style == categoryStyle(null)) MaterialTheme.colorScheme.primary else style.color
+}
+
+private val GROUP_LOADING_STROKE = 2.5.dp
+private const val GROUP_LOADING_PERIOD_MS = 1500
+
+/**
  * Spinning arc overlaid on the session icon while the agent loop is active.
  * Mirrors iOS `SpinningRing` (ContentView.swift:2405): 1.5dp stroke at 30%
  * opacity, 30% arc length, full rotation every ~1 second. Uses
@@ -3108,6 +3458,21 @@ private fun SpinningRing(
 }
 
 /**
+ * [UI-261023-07] The unread dot: iOS's 8pt system red, optionally lifted off
+ * a busy tile by a 1.5dp ring in [ringColor] (the group card's fill).
+ */
+@Composable
+private fun UnreadDot(modifier: Modifier = Modifier, ringColor: Color? = null) {
+    val red = if (ChatColors.isDark) Color(0xFFFF453A) else Color(0xFFFF3B30)
+    Box(
+        modifier = modifier
+            .then(if (ringColor != null) Modifier.background(ringColor, CircleShape).padding(1.5.dp) else Modifier)
+            .size(8.dp)
+            .background(red, CircleShape),
+    )
+}
+
+/**
  * [T-android-session-paused-badge] Corner overlay for [SessionBadgeStore]
  * states. Anchored bottom-end inside the 44dp icon Box. Mirrors where the
  * iOS iCloud-sync badge sits so future ICLOUD_SYNCING uses the same anchor.
@@ -3121,6 +3486,8 @@ private fun SpinningRing(
 private fun SessionBadgeOverlay(
     state: com.openminis.app.service.SessionBadgeStore.SessionBadgeState,
     modifier: Modifier = Modifier,
+    /** The ring that lifts the badge off the icon: the background behind it. */
+    ringColor: Color = MaterialTheme.colorScheme.surface,
 ) {
     when (state) {
         com.openminis.app.service.SessionBadgeStore.SessionBadgeState.PAUSED -> {
@@ -3136,7 +3503,7 @@ private fun SessionBadgeOverlay(
                     )
                     .border(
                         width = 1.5.dp,
-                        color = MaterialTheme.colorScheme.surface,
+                        color = ringColor,
                         shape = CircleShape,
                     ),
                 contentAlignment = Alignment.Center,

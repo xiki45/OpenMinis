@@ -82,13 +82,19 @@ class SharedShareStoreTest {
         context = FakeContext(filesDir, prefs)
         SharedShareStore.clearPendingShare(context)
         // Drain any buffer a previous test left in the process-global coordinator.
-        ShareCoordinator.consumeBuffer(context)
+        drain()
     }
 
     @After
     fun tearDown() {
-        ShareCoordinator.consumeBuffer(context)
+        drain()
         filesDir.deleteRecursively()
+    }
+
+    /** [T-android-share-routing] A share is only consumable once addressed; address it, then take it. */
+    private fun drain(): PendingShare? {
+        ShareCoordinator.addressTo("test-session")
+        return ShareCoordinator.consumeBuffer(context, "test-session")
     }
 
     private fun text(v: String) = PendingShare.Item(PendingShare.Item.Kind.INLINE_TEXT, v)
@@ -198,7 +204,7 @@ class SharedShareStoreTest {
         assertTrue("live buffer's file must survive", a.exists())
         assertFalse("the stale share's own file is cleaned", stale.exists())
 
-        val consumed = ShareCoordinator.consumeBuffer(context)
+        val consumed = drain()
         assertEquals(listOf(attachment("a-live.png")), consumed!!.items)
     }
 
@@ -213,9 +219,9 @@ class SharedShareStoreTest {
         SharedShareStore.savePendingShare(context, share(text("B"), text("A")))
         ShareCoordinator.processPendingShare(context)
         assertEquals("a warm session must be told to inject", v1 + 1, ShareCoordinator.bufferVersion.value)
-        val consumed = ShareCoordinator.consumeBuffer(context)
+        val consumed = drain()
         assertEquals(listOf(text("A"), text("B")), consumed!!.items)
-        assertNull("consume is one-shot", ShareCoordinator.consumeBuffer(context))
+        assertNull("consume is one-shot", drain())
     }
 
     /** A stale record on launch is discarded and never buffered. */
@@ -224,6 +230,60 @@ class SharedShareStoreTest {
         SharedShareStore.savePendingShare(context, share(text("old"), ageMs = 400_000))
         ShareCoordinator.processPendingShare(context)
         assertNull(SharedShareStore.loadPendingShare(context))
-        assertNull(ShareCoordinator.consumeBuffer(context))
+        assertNull(drain())
+    }
+
+    // ============================================================ routing ([T-android-share-routing])
+
+    /** The reported bug's mechanism: an unaddressed share was drained by whichever chat composed next. */
+    @Test
+    fun `an unaddressed share is consumable by nobody`() {
+        SharedShareStore.savePendingShare(context, share(text("A")))
+        ShareCoordinator.processPendingShare(context)
+        assertTrue(ShareCoordinator.hasUnaddressedShare())
+        assertNull(ShareCoordinator.consumeBuffer(context, "any-chat"))
+        assertTrue("still waiting to be routed", ShareCoordinator.hasUnaddressedShare())
+    }
+
+    @Test
+    fun `only the addressed chat takes the share`() {
+        SharedShareStore.savePendingShare(context, share(text("A")))
+        ShareCoordinator.processPendingShare(context)
+        val v = ShareCoordinator.bufferVersion.value
+        assertTrue(ShareCoordinator.addressTo("__new__draft"))
+        assertEquals("addressing re-notifies the chats", v + 1, ShareCoordinator.bufferVersion.value)
+        assertFalse(ShareCoordinator.hasUnaddressedShare())
+        assertNull("another chat cannot take it", ShareCoordinator.consumeBuffer(context, "busy-chat"))
+        assertEquals(listOf(text("A")), ShareCoordinator.consumeBuffer(context, "__new__draft")!!.items)
+        assertNull(ShareCoordinator.consumeBuffer(context, "__new__draft"))
+    }
+
+    @Test
+    fun `the first router wins and a second cannot re-target`() {
+        SharedShareStore.savePendingShare(context, share(text("A")))
+        ShareCoordinator.processPendingShare(context)
+        assertTrue(ShareCoordinator.addressTo("visible-chat"))
+        assertFalse(ShareCoordinator.addressTo("__new__other"))
+        assertNull(ShareCoordinator.consumeBuffer(context, "__new__other"))
+        assertEquals(listOf(text("A")), ShareCoordinator.consumeBuffer(context, "visible-chat")!!.items)
+    }
+
+    @Test
+    fun `a second share merges and the whole buffer is routed again to what is visible now`() {
+        SharedShareStore.savePendingShare(context, share(text("A")))
+        ShareCoordinator.processPendingShare(context)
+        ShareCoordinator.addressTo("chat-closed-before-taking-it")
+        SharedShareStore.savePendingShare(context, share(text("B")))
+        ShareCoordinator.processPendingShare(context)
+        assertTrue(ShareCoordinator.hasUnaddressedShare())
+        assertNull(ShareCoordinator.consumeBuffer(context, "chat-closed-before-taking-it"))
+        assertTrue(ShareCoordinator.addressTo("__new__draft"))
+        assertEquals(listOf(text("A"), text("B")), ShareCoordinator.consumeBuffer(context, "__new__draft")!!.items)
+    }
+
+    @Test
+    fun `nothing buffered - nothing to address`() {
+        assertFalse(ShareCoordinator.hasUnaddressedShare())
+        assertFalse(ShareCoordinator.addressTo("x"))
     }
 }

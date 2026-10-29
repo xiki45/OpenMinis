@@ -19,6 +19,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -301,21 +302,26 @@ internal fun LargeContentGuard(
 
 /**
  * [T-android-streaming-regex-hang] Bounded plain-text rendering for a LIVE
- * block over [STREAM_DEGRADE_CHARS]. Shows a one-line notice plus the tail of
- * the content (the part the user is watching grow). No markdown parse, no
- * regex, no AnnotatedString construction — a single Text layout of at most
- * [DEGRADED_TAIL_CHARS] characters per publish.
+ * block over [STREAM_DEGRADE_CHARS]: the tail of the content (the part the
+ * user is watching grow). No markdown parse, no regex, no AnnotatedString
+ * construction — a single Text layout of at most [DEGRADED_TAIL_CHARS]
+ * characters per publish.
+ *
+ * [T-silence-auto-notices] The "Performance protection: simplified rendering"
+ * line above it is gone: an internal rendering strategy the user can neither
+ * act on nor needs to know about. Logged once when a block enters this mode.
  */
 private const val DEGRADED_TAIL_CHARS = 4_000
 
 @Composable
 private fun DegradedStreamingTail(content: String) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = stringResource(R.string.chat_stream_degraded_notice),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+    LaunchedEffect(Unit) {
+        com.openminis.app.logging.AppLogger.info(
+            "StreamDegrade",
+            "live block over $STREAM_DEGRADE_CHARS chars (${content.length}) rendered as a plain tail",
         )
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = if (content.length > DEGRADED_TAIL_CHARS) {
                 "…" + content.takeLast(DEGRADED_TAIL_CHARS)
@@ -324,7 +330,6 @@ private fun DegradedStreamingTail(content: String) {
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(top = 4.dp),
         )
     }
 }

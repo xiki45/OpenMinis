@@ -38,6 +38,15 @@ object LLMRequestLog {
 
     private val entries = mutableListOf<Entry>()
 
+    /**
+     * The newest request body, untruncated - one slot only, so the T302 heap
+     * bound stays at one body. Checking what a request really replays (the
+     * reasoning and tool calls of every past turn) needs the tail, which the
+     * 64 KB cap cuts off. Served by debug.llmRequests {fullLast:true}.
+     */
+    private var lastFullBody: String? = null
+    private var lastFullTimestamp: Long = 0
+
     @Synchronized
     fun add(entry: Entry) {
         // T302: belt-and-suspenders. Release builds short-circuit the whole
@@ -48,16 +57,66 @@ object LLMRequestLog {
         // each entry truncated to MAX_BODY_CHARS so even a single retained
         // entry can't push a memory-tight device over the line.
         if (!BuildConfig.DEV_TOOLS) return
-        val safeEntry = if (entry.requestBody.length > MAX_BODY_CHARS) {
-            entry.copy(
-                requestBody = entry.requestBody.take(MAX_BODY_CHARS) +
-                    "\n…[truncated ${entry.requestBody.length - MAX_BODY_CHARS} chars]",
+        // [T-android-llmlog-redact] Never retain credentials: the ring is
+        // served by debug.llmRequests, which a LAN client reaches with only
+        // the debug-server token, and callers hand over the raw request
+        // header map (Authorization: Bearer <key>, x-api-key). Redact here,
+        // once, so every current and future caller is covered.
+        val redacted = entry.copy(
+            requestHeaders = redactHeaders(entry.requestHeaders),
+            requestURL = redactUrl(entry.requestURL),
+        )
+        lastFullBody = redacted.requestBody
+        lastFullTimestamp = redacted.timestamp
+        val safeEntry = if (redacted.requestBody.length > MAX_BODY_CHARS) {
+            redacted.copy(
+                requestBody = redacted.requestBody.take(MAX_BODY_CHARS) +
+                    "\n…[truncated ${redacted.requestBody.length - MAX_BODY_CHARS} chars]",
             )
-        } else entry
+        } else redacted
         entries.add(safeEntry)
         if (entries.size > MAX_ENTRIES) {
             entries.removeAt(0)
         }
+    }
+
+    /** Header names whose value is a credential (compared case-insensitively). */
+    private val SECRET_HEADERS = setOf(
+        "authorization", "proxy-authorization", "x-api-key", "api-key",
+        "x-goog-api-key", "cookie", "set-cookie",
+    )
+
+    /** Query parameters that carry an API key (e.g. Gemini's `?key=`). */
+    private val SECRET_QUERY_PARAMS = setOf("key", "api_key", "apikey", "access_token", "token")
+
+    /**
+     * Credential headers become `***`; an `Authorization` value keeps its
+     * scheme (`Bearer ***`, `Basic ***`) like iOS, so the shape of the request
+     * stays visible. Every other header, including `x-opencode-session`, is
+     * kept as is.
+     */
+    fun redactHeaders(headers: Map<String, String>): Map<String, String> =
+        headers.mapValues { (name, value) ->
+            val lower = name.lowercase()
+            val trimmed = value.trim()
+            when {
+                lower !in SECRET_HEADERS -> value
+                (lower == "authorization" || lower == "proxy-authorization") && ' ' in trimmed ->
+                    "${trimmed.substringBefore(' ')} ***"
+                else -> "***"
+            }
+        }
+
+    /** Replaces the value of key-carrying query parameters with `***`. */
+    fun redactUrl(url: String): String {
+        val q = url.indexOf('?')
+        if (q < 0) return url
+        val fragmentAt = url.indexOf('#', q).let { if (it < 0) url.length else it }
+        val query = url.substring(q + 1, fragmentAt).split('&').joinToString("&") { pair ->
+            val name = pair.substringBefore('=')
+            if ('=' in pair && name.lowercase() in SECRET_QUERY_PARAMS) "$name=***" else pair
+        }
+        return url.substring(0, q + 1) + query + url.substring(fragmentAt)
     }
 
     @Synchronized
@@ -67,7 +126,21 @@ object LLMRequestLog {
     fun getLast(n: Int): List<Entry> = entries.takeLast(n)
 
     @Synchronized
-    fun clear() = entries.clear()
+    fun clear() {
+        entries.clear()
+        lastFullBody = null
+    }
+
+    /** {timestamp, length, requestBody} of the newest request, untruncated; null when none. */
+    @Synchronized
+    fun lastFullJSON(): JSONObject? {
+        val body = lastFullBody ?: return null
+        return JSONObject().apply {
+            put("timestamp", lastFullTimestamp)
+            put("length", body.length)
+            put("requestBody", body)
+        }
+    }
 
     fun toJSON(last: Int? = null): JSONObject {
         val list = if (last != null) getLast(last) else getAll()

@@ -25,6 +25,9 @@ data class SessionMetaRow(
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
     @ColumnInfo(name = "msg_count") val msgCount: Int,
+    /** [T-sessions-cli-update] Group membership and icon (category) for `list`. */
+    @ColumnInfo(name = "folder_id") val folderId: String? = null,
+    val category: String? = null,
 )
 
 /**
@@ -63,6 +66,9 @@ data class MessageHeadRow(
     val role: String,
     @ColumnInfo(name = "parts_json") val partsJson: String,
 )
+
+/** [T-android-chat-title-follows-store] What a chat's top bar shows of its session row. */
+data class SessionTitleRow(val title: String?, val category: String?)
 
 @Dao
 interface ChatDao {
@@ -104,11 +110,28 @@ interface ChatDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: ChatSessionEntity)
 
+    /**
+     * [T-android-chat-title-follows-store] The stored title and category of
+     * one session, re-emitted when the sessions table changes; null while the
+     * row does not exist. No schema change - a projection of existing columns.
+     */
+    @Query("SELECT title, category FROM sessions WHERE id = :id")
+    fun observeSessionTitle(id: String): Flow<SessionTitleRow?>
+
     @Query("UPDATE sessions SET title = :title, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateSessionTitle(id: String, title: String, updatedAt: Long)
 
     @Query("UPDATE sessions SET title = :title, category = COALESCE(:category, category), updated_at = :updatedAt WHERE id = :id")
     suspend fun updateSessionTitleAndCategory(id: String, title: String, category: String?, updatedAt: Long)
+
+    /**
+     * [T-sessions-cli-update] Writes the category (the session's icon) as
+     * given, null included - the one way to go back to the default icon, which
+     * [updateSessionTitleAndCategory]'s COALESCE cannot express. Stamps
+     * `updated_at` like every other title / category edit.
+     */
+    @Query("UPDATE sessions SET category = :category, updated_at = :updatedAt WHERE id = :id")
+    suspend fun updateSessionCategory(id: String, category: String?, updatedAt: Long)
 
     @Query("UPDATE sessions SET updated_at = :updatedAt WHERE id = :id")
     suspend fun touchSession(id: String, updatedAt: Long)
@@ -121,6 +144,17 @@ interface ChatDao {
 
     @Query("UPDATE sessions SET model_binding = :binding, model_id = :modelId, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateSessionBinding(id: String, binding: String, modelId: String, updatedAt: Long = System.currentTimeMillis())
+
+    /**
+     * [T-backup-restore-semantics / B01] Sessions whose binding mentions
+     * [needle] (a group id), for rewriting a group a restore merged away.
+     */
+    @Query("SELECT * FROM sessions WHERE model_binding LIKE '%' || :needle || '%'")
+    suspend fun sessionsWithBindingLike(needle: String): List<ChatSessionEntity>
+
+    /** Rewrite a binding WITHOUT touching updated_at, so the list order stays. */
+    @Query("UPDATE sessions SET model_binding = :binding WHERE id = :id")
+    suspend fun updateSessionBindingOnly(id: String, binding: String)
 
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun deleteSession(id: String)
@@ -216,6 +250,22 @@ interface ChatDao {
     @Query("SELECT id FROM sessions WHERE folder_id = :folderId ORDER BY updated_at DESC")
     suspend fun sessionIdsInFolder(folderId: String): List<String>
 
+    /**
+     * [T-autogroup-folder-titles] Titled, non-child member sessions of every
+     * group, by group and newest first; FolderOfferFormat.group keeps the
+     * newest few per group. iOS uses ROW_NUMBER() OVER (PARTITION BY ...),
+     * but window functions need SQLite 3.25 (Android 11+), so the per-group
+     * cut happens in Kotlin. Only the three columns are read.
+     */
+    @Query(
+        "SELECT folder_id AS folderId, title, updated_at AS updatedAt FROM sessions " +
+            "WHERE folder_id IS NOT NULL AND folder_id != '' " +
+            "AND title IS NOT NULL AND TRIM(title) != '' " +
+            "AND (parent_session_id IS NULL OR parent_session_id = '') " +
+            "ORDER BY folder_id, updated_at DESC",
+    )
+    suspend fun titledFolderMembers(): List<FolderMemberTitle>
+
     @Query("SELECT COUNT(*) FROM sessions WHERE folder_id = :folderId")
     suspend fun sessionCountInFolder(folderId: String): Int
 
@@ -249,6 +299,10 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE session_id = :sessionId ORDER BY sort_order ASC")
     fun observeMessages(sessionId: String): Flow<List<MessageEntity>>
+
+    /** [T-multi-select-share] When the earliest of these rows was written (the share export header's date). */
+    @Query("SELECT MIN(created_at) FROM messages WHERE id IN (:ids)")
+    suspend fun earliestCreatedAt(ids: List<String>): Long?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: MessageEntity)
@@ -328,6 +382,24 @@ interface ChatDao {
         WHERE m.token_usage IS NOT NULL
     """)
     suspend fun allUsageRecords(): List<UsageRecord>
+
+    /**
+     * [T-usage-step1] Rows for the time-ranged Usage report
+     * (com.openminis.app.usage.UsageReportBuilder). Same LEFT JOIN as
+     * [allUsageRecords] so orphaned rows still count, but the snapshot and the
+     * session model come back separately (the builder does the COALESCE and
+     * needs the snapshot alone for attribution), along with the instance id,
+     * and only rows at or after [sinceMs] are read. Pass 0 for all time.
+     */
+    @Query("""
+        SELECT m.created_at AS createdAt, m.session_id AS sessionId,
+               m.model_id AS modelId, s.model_id AS sessionModelId,
+               m.model_display_name AS modelDisplayName, m.provider_type AS providerType,
+               m.provider_instance_id AS providerInstanceId, m.token_usage AS tokenUsage
+        FROM messages m LEFT JOIN sessions s ON m.session_id = s.id
+        WHERE m.token_usage IS NOT NULL AND m.created_at >= :sinceMs
+    """)
+    suspend fun usageRowsSince(sinceMs: Long): List<UsageRowRecord>
 
     // Last message preview for session list
     @Query("""
@@ -558,4 +630,11 @@ data class SessionSearchRow(
 /** [T-android-search-visible-only] One message's parts, for the look-further-back pass. */
 data class PartsJsonRow(
     @ColumnInfo(name = "parts_json") val partsJson: String,
+)
+
+/** [T-autogroup-folder-titles] One row of [ChatDao.titledFolderMembers]. */
+data class FolderMemberTitle(
+    val folderId: String,
+    val title: String,
+    val updatedAt: Long,
 )

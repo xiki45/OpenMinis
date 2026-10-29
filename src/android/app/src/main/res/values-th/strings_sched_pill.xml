@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">กำลังทำงาน</string>
+    <string name="sched_pill_waiting">กำลังรอ</string>
+    <string name="sched_pill_run_now">เรียกใช้ทันที</string>
+    <string name="sched_pill_hide">ซ่อนการนับถอยหลังนี้</string>
+    <string name="sched_pill_cancel_all">ยกเลิกงานที่ตั้งเวลาไว้ทั้งหมด</string>
+    <string name="sched_pill_cancel_all_title">ยกเลิกงานที่ตั้งเวลาไว้ทั้งหมดหรือไม่</string>
+    <string name="sched_pill_cancel_all_confirm">ยกเลิกทั้งหมด</string>
+    <string name="sched_pill_not_now">ไว้ทีหลัง</string>
+    <string name="sched_pill_cancel_all_message">งานทั้งหมดที่ยังตั้งเวลาไว้ในการสนทนานี้จะถูกยกเลิก</string>
+    <string name="sched_pill_a11y_title">งานที่ตั้งเวลาไว้ถัดไป</string>
+    <string name="sched_pill_a11y_running">กำลังรัน</string>
+    <string name="sched_pill_a11y_waiting">รองานอื่นให้เสร็จ</string>
+    <string name="sched_pill_a11y_upcoming_left">การรันครั้งถัดไป · เหลือ %1$d ครั้ง</string>
+    <string name="sched_pill_a11y_upcoming">การรันครั้งถัดไป</string>
+    <string name="sched_pill_a11y_run_of">ครั้งที่ %1$d จาก %2$d</string>
+    <string name="sched_pill_a11y_run">ครั้งที่ %1$d</string>
+    <string name="sched_pill_a11y_next_in">รันครั้งถัดไปในอีก %1$s</string>
+    <string name="sched_pill_a11y_more">+อีก %1$d</string>
+    <string name="sched_pill_a11y_hint">เปิดรายละเอียดงาน</string>
+</resources>

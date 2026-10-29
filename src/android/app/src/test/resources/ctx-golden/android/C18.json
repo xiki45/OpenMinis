@@ -1,0 +1,326 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x32768\nFull page: true\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          },
+          {
+            "image": {
+              "base64Len": 11760,
+              "bytes": 8820,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5f78e75e670a7291",
+              "w": 65
+            },
+            "inResultOf": "call_shot1",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x32768\nFull page: true\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          },
+          {
+            "image": {
+              "base64Len": 11760,
+              "bytes": 8820,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5f78e75e670a7291",
+              "w": 65
+            },
+            "inResultOf": "fn:browser_use",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x32768\nFull page: true\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by browser_use (tool_call_id: call_shot1)]"
+          },
+          {
+            "image": {
+              "base64Len": 11760,
+              "bytes": 8820,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5f78e75e670a7291",
+              "w": 65
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x32768\nFull page: true\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by browser_use]"
+          },
+          {
+            "image": {
+              "base64Len": 11760,
+              "bytes": 8820,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5f78e75e670a7291",
+              "w": 65
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x32768\nFull page: true\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x32768\nFull page: true\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x32768\nFull page: true\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Open example.com and take a screenshot"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_shot1",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x32768\nFull page: true\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      }
+    ]
+  }
+}

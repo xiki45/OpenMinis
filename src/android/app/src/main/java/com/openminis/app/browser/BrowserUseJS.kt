@@ -7,6 +7,75 @@ package com.openminis.app.browser
  */
 object BrowserUseJS {
 
+    // BEGIN BrowserReadGuard
+    /**
+     * [T-android-js-error-detail] Wraps an action script (an IIFE expression
+     * returning a JSON string) so it never fails silently. Android's
+     * `WebView.evaluateJavascript` swallows a thrown exception and hands the
+     * callback a bare `null`, so an unguarded `document.body.innerText` on a
+     * document without a body - mid-navigation, or not HTML at all (SVG, XML,
+     * an image) - reached the tool as the success text "null" with no reason.
+     *
+     * - no body yet (or still loading with an empty body) → a JSON `error`
+     *   saying so and what to do; with `requiresBody = false` the script runs
+     *   anyway (get_page_info must work exactly then, and the write actions
+     *   only want the try/catch);
+     * - anything thrown → `{error: "Script threw: <name>: <message>"}`.
+     * The wrapped script's own return value passes through unchanged, so a
+     * successful result is byte-identical to the unwrapped one. Same wording
+     * as iOS `BrowserUseJS.guardedRead` (BrowserUseJavaScript.swift).
+     */
+    fun guardedRead(iife: String, requiresBody: Boolean = true): String = """
+(function() {
+${if (requiresBody) BODY_CHECK_JS else ""}
+    try {
+        return $iife;
+    } catch (e) {
+        return JSON.stringify({error: 'Script threw: ' + ((e && e.name) || 'Error') + ': ' + ((e && e.message) || String(e))});
+    }
+})()
+""".trim()
+
+    /** Returns early with a JSON error when the page has no usable body. */
+    const val BODY_CHECK_JS = """
+    var __b = document.body;
+    if (!__b || (document.readyState === 'loading' && !__b.firstElementChild && !(__b.textContent || '').trim())) {
+        var __rs = document.readyState, __u = String(location.href).substring(0, 200);
+        if (__rs === 'loading' || !__b && __rs !== 'complete') {
+            return JSON.stringify({error: 'The page has no body yet (readyState=' + __rs + ', url=' + __u + '). Wait for it to finish loading - e.g. call wait_for_dom_stable or get_page_info first - then retry.'});
+        }
+        return JSON.stringify({error: 'This document has no <body> (readyState=' + __rs + ', contentType=' + (document.contentType || '?') + ', url=' + __u + ') - it is not an HTML page (e.g. SVG, XML or an image). Use execute_js with document.documentElement instead.'});
+    }"""
+
+    /**
+     * JS expression describing a caught exception `e` as
+     * "Script threw: <name>: <message>" - the read guard's wording, also used
+     * by execute_js's wrapper so a user script's throw keeps its type.
+     */
+    const val SCRIPT_THREW_JS =
+        "'Script threw: ' + ((e && e.name) || 'Error') + ': ' + ((e && e.message) || String(e))"
+
+    /**
+     * Compiles an execute_js [script] as an async function body WITHOUT
+     * running it, and returns the SyntaxError text ("SyntaxError: …") or ''
+     * when it compiles. Used only after the wrapped script failed to run:
+     * WebView reports a parse failure as a bare null, with no message.
+     * Pages whose Content-Security-Policy forbids eval answer with an
+     * EvalError instead, which [BrowserJSResult.syntaxErrorMessage] turns
+     * into the generic text.
+     */
+    fun syntaxCheck(script: String): String = """
+(function() {
+    try {
+        new (Object.getPrototypeOf(async function() {}).constructor)(${org.json.JSONObject.quote(script)});
+        return '';
+    } catch (e) {
+        return ((e && e.name) || 'Error') + ': ' + ((e && e.message) || String(e));
+    }
+})()
+""".trim()
+    // END BrowserReadGuard
+
     /** Safely escape a string for embedding in JavaScript source (single-quoted). */
     fun jsQuote(s: String): String = buildString {
         for (ch in s) {
@@ -24,7 +93,7 @@ object BrowserUseJS {
 
     // -- Click --
 
-    fun click(selector: String): String = """
+    fun click(selector: String): String = guardedRead("""
         (function() {
             var el = document.querySelector('${jsQuote(selector)}');
             if (!el) return JSON.stringify({error: 'Element not found: ${jsQuote(selector)}'});
@@ -41,9 +110,9 @@ object BrowserUseJS {
             el.dispatchEvent(new MouseEvent('mouseout', bOpts));
             return JSON.stringify({clicked: true, tag: el.tagName, text: (el.innerText || '').substring(0, 100)});
         })()
-    """.trimIndent()
+    """.trimIndent(), requiresBody = false)
 
-    fun clickCoordinate(x: Int, y: Int): String = """
+    fun clickCoordinate(x: Int, y: Int): String = guardedRead("""
         (function() {
             var el = document.elementFromPoint($x, $y);
             if (!el) return JSON.stringify({error: 'No element at ($x, $y)'});
@@ -60,11 +129,11 @@ object BrowserUseJS {
             el.dispatchEvent(new MouseEvent('mouseout', bOpts));
             return JSON.stringify({clicked: true, tag: el.tagName, x: $x, y: $y, text: (el.innerText || '').substring(0, 100)});
         })()
-    """.trimIndent()
+    """.trimIndent(), requiresBody = false)
 
     // -- Type --
 
-    fun type(selector: String, text: String): String = """
+    fun type(selector: String, text: String): String = guardedRead("""
         (function() {
             var el = document.querySelector('${jsQuote(selector)}');
             if (!el) return JSON.stringify({error: 'Element not found: ${jsQuote(selector)}'});
@@ -107,14 +176,14 @@ object BrowserUseJS {
             }
             return JSON.stringify({typed: true, selector: '${jsQuote(selector)}', length: chars.length});
         })()
-    """.trimIndent()
+    """.trimIndent(), requiresBody = false)
 
     // -- Get Text --
 
     fun getText(selector: String?): String {
         if (selector != null) {
             val sel = jsQuote(selector)
-            return """
+            return guardedRead("""
                 (function() {
                     var el = document.querySelector('$sel');
                     if (!el) return JSON.stringify({error: 'Element not found: $sel'});
@@ -123,20 +192,20 @@ object BrowserUseJS {
                     var text = innerTextVal.substring(0, 10000);
                     return JSON.stringify({text: text, length: text.length});
                 })()
-            """.trimIndent()
+            """.trimIndent())
         }
-        return """
+        return guardedRead("""
             (function() {
                 var innerTextVal = document.body.innerText || '';
                 var text = innerTextVal.substring(0, 10000);
                 return JSON.stringify({text: text, length: text.length, url: location.href, title: document.title});
             })()
-        """.trimIndent()
+        """.trimIndent())
     }
 
     // -- Get Readable --
 
-    fun getReadable(): String = """
+    fun getReadable(): String = guardedRead("""
         (function() {
             var candidateSelectors = [
                 'article', '[role="main"]', 'main', '.post-content',
@@ -156,7 +225,7 @@ object BrowserUseJS {
             var text = innerTextVal.replace(/\s+/g, ' ').trim().substring(0, 15000);
             return JSON.stringify({title: title, text: text, length: text.length, source: matchedSelector});
         })()
-    """.trimIndent()
+    """.trimIndent())
 
     // -- Scroll --
 
@@ -164,7 +233,7 @@ object BrowserUseJS {
         val pixels = if (direction == ScrollDirection.DOWN) amount else -amount
         val dir = direction.value
         val selectorJS = if (selector != null) "'${jsQuote(selector)}'" else "null"
-        return """
+        return guardedRead("""
             (function() {
                 var targetSelector = $selectorJS;
                 var target = null;
@@ -208,12 +277,12 @@ object BrowserUseJS {
                 }
                 return JSON.stringify({scrolled: false, error: 'No scrollable target found'});
             })()
-        """.trimIndent()
+        """.trimIndent(), requiresBody = false)
     }
 
     // -- Hover --
 
-    fun hover(selector: String): String = """
+    fun hover(selector: String): String = guardedRead("""
         (function() {
             var el = document.querySelector('${jsQuote(selector)}');
             if (!el) return JSON.stringify({error: 'Element not found: ${jsQuote(selector)}'});
@@ -221,11 +290,11 @@ object BrowserUseJS {
             el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
             return JSON.stringify({hovered: true, tag: el.tagName, text: (el.innerText || '').substring(0, 100)});
         })()
-    """.trimIndent()
+    """.trimIndent(), requiresBody = false)
 
     // -- Find Elements --
 
-    fun findElements(selector: String): String = """
+    fun findElements(selector: String): String = guardedRead("""
         (function() {
             var els = document.querySelectorAll('${jsQuote(selector)}');
             var results = [];
@@ -245,17 +314,19 @@ object BrowserUseJS {
             }
             return JSON.stringify({count: els.length, shown: limit, elements: results});
         })()
-    """.trimIndent()
+    """.trimIndent(), requiresBody = false)
 
     // -- Get Page Info --
 
-    fun getPageInfo(): String = """
+    // [T-android-js-error-detail] Must work on a page without a body: the
+    // no-body error of the other read actions points the model here.
+    fun getPageInfo(): String = guardedRead("""
         (function() {
             return JSON.stringify({
                 url: window.location.href,
                 title: document.title,
                 scrollY: window.scrollY,
-                scrollHeight: document.body.scrollHeight,
+                scrollHeight: document.body ? document.body.scrollHeight : (document.documentElement ? document.documentElement.scrollHeight : 0),
                 viewportWidth: window.innerWidth,
                 viewportHeight: window.innerHeight,
                 readyState: document.readyState,
@@ -264,11 +335,11 @@ object BrowserUseJS {
                 images: document.images.length
             });
         })()
-    """.trimIndent()
+    """.trimIndent(), requiresBody = false)
 
     // -- Get Backbone --
 
-    fun getBackbone(maxDepth: Int): String = """
+    fun getBackbone(maxDepth: Int): String = guardedRead("""
         (function() {
             var MAX_DEPTH = $maxDepth;
             var MERGE_THRESHOLD = 10;
@@ -436,7 +507,7 @@ object BrowserUseJS {
             var tree = roots.map(function(r) { return ser(r, 1); });
             return JSON.stringify({backbone: tree, nodeCount: totalNodes, depth: maxD, merged: mergedCount});
         })()
-    """.trimIndent()
+    """.trimIndent())
 
     // -- Fetch (async IIFE) --
 
@@ -466,3 +537,84 @@ object BrowserUseJS {
         """.trimIndent()
     }
 }
+
+// BEGIN BrowserJSResult
+/**
+ * [T-android-js-error-detail] One reading of a `WebView.evaluateJavascript`
+ * result for the action scripts in [BrowserUseJS], which always return a
+ * JSON string. Android hands the callback a bare `null` both when the script
+ * evaluated to null/undefined and when it THREW - the exception never
+ * reaches Kotlin - so for these scripts `null` means "failed, reason
+ * unknown". It used to be reported as the success text "null" (get_text,
+ * get_readable, get_page_info, scroll) or as org.json's misleading
+ * "Value null ... cannot be converted to JSONObject" (get_backbone).
+ *
+ * Only for scripts that must return. execute_js does not come through here:
+ * a user script may legitimately return null, and its value arrives over the
+ * `__minis__` bridge, not this callback.
+ */
+object BrowserJSResult {
+
+    /** The tool-facing error for a must-return script that produced nothing. */
+    const val NO_RESULT_ERROR =
+        "JavaScript error: the page script stopped without returning a result. " +
+            "Android WebView does not report the exception, so the reason is unknown - " +
+            "often the page was mid-navigation or is not an HTML page. Call get_page_info, then retry."
+
+    /**
+     * Decodes the raw callback value: a JSON string literal is unquoted, any
+     * other JSON value (number, object) is returned as written, and JS
+     * null/undefined - or a thrown exception - is `null`.
+     */
+    fun decode(callbackValue: String?): String? {
+        if (callbackValue == null || callbackValue == "null") return null
+        if (callbackValue.length >= 2 && callbackValue.startsWith("\"") && callbackValue.endsWith("\"")) {
+            return try {
+                org.json.JSONObject("{\"v\":$callbackValue}").getString("v")
+            } catch (_: Exception) {
+                callbackValue
+            }
+        }
+        return callbackValue
+    }
+
+    sealed interface Outcome {
+        /** The script produced nothing: it threw, or did not parse. */
+        data object NoResult : Outcome
+        /** The script returned `{error: …}`. */
+        data class ScriptError(val message: String) : Outcome
+        data class Json(val json: org.json.JSONObject) : Outcome
+        /** Not a JSON object; passed through as text, as before. */
+        data class Text(val text: String) : Outcome
+    }
+
+    fun classify(decoded: String?): Outcome {
+        if (decoded == null) return Outcome.NoResult
+        val json = try { org.json.JSONObject(decoded) } catch (_: Exception) { null }
+            ?: return Outcome.Text(decoded)
+        return if (json.has("error")) Outcome.ScriptError(json.getString("error")) else Outcome.Json(json)
+    }
+
+    /**
+     * execute_js's error when its wrapped script never ran. [detail] is the
+     * [BrowserUseJS.syntaxCheck] result:
+     * - "SyntaxError: …" → shown as is;
+     * - '' (it compiles on its own) → not a plain syntax error: the page
+     *   navigated away during injection, or the script breaks out of the
+     *   async wrapper (e.g. a stray `})`);
+     * - anything else (CSP refused the check with an EvalError, or the check
+     *   itself failed) → the generic text.
+     */
+    fun syntaxErrorMessage(detail: String?): String = when {
+        detail != null && detail.startsWith("SyntaxError") ->
+            "JavaScript error: the script does not parse, so it never ran - $detail"
+        detail == "" ->
+            "JavaScript error: the script did not run. It compiles on its own, so either the page navigated " +
+                "away while it was injected, or the script breaks out of execute_js's async wrapper " +
+                "(e.g. a stray `})`). Retry, or simplify the script."
+        else ->
+            "JavaScript error: the script does not parse, so it never ran (a syntax error; this page " +
+                "does not report the details). Check for unbalanced braces, parentheses or quotes."
+    }
+}
+// END BrowserJSResult

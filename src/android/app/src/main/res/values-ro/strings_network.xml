@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Rețea</string>
+    <string name="network_status">Stare</string>
+    <string name="network_status_starting">Se pornește…</string>
+    <string name="network_status_connecting">Se conectează…</string>
+    <string name="network_status_off">Dezactivat</string>
+    <string name="network_device_name">Nume dispozitiv</string>
+    <string name="network_device_name_automatic">Automat</string>
+    <string name="network_exit_node_none">Niciunul</string>
+    <string name="network_sign_out">Deconectează-te</string>
+    <string name="network_scope_shell">Shell</string>
+    <string name="network_scope_browser">Browser</string>
+    <string name="network_scope_backup">Copie de rezervă</string>
+    <string name="network_proxy_type">Tip</string>
+    <string name="network_proxy_server">Server</string>
+    <string name="network_proxy_authentication">Autentificare</string>
+    <string name="network_proxy_password">Parolă</string>
+    <string name="network_proxy_bypass">Omite</string>
+    <string name="network_proxy_test">Testează conexiunea</string>
+    <string name="network_cancel">Anulează</string>
+    <string name="network_save">Salvează</string>
+    <string name="network_provider_route">Rețea</string>
+</resources>

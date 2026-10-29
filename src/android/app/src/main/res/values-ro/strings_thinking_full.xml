@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">Afișează tot raționamentul</string>
+    <string name="thinking_full_title">Raționament complet</string>
+    <string name="thinking_full_char_count">%1$s caractere</string>
+    <string name="thinking_full_load_more">Încarcă mai mult</string>
+    <string name="thinking_full_copy_failed">Prea lung pentru a fi copiat</string>
+</resources>

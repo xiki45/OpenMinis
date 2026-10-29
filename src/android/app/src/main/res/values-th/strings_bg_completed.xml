@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-completed-copy] The completed line without a session count, derived from bg_service_notification_text_completed. -->
+<resources>
+    <string name="bg_service_notification_text_completed_no_count">เสร็จสิ้นใน %1$s</string>
+</resources>

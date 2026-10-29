@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">思考をすべて表示</string>
+    <string name="thinking_full_title">思考の全文</string>
+    <string name="thinking_full_char_count">%1$s 文字</string>
+    <string name="thinking_full_load_more">さらに読み込む</string>
+    <string name="thinking_full_copy_failed">長すぎてコピーできません</string>
+</resources>

@@ -54,6 +54,34 @@ class InternalBridgeFilterTest {
         assertFalse(msg("assistant", "").isInternalBridge)
     }
 
+    // [T-bridge-to-reminder] The bridge is no longer written; the note that
+    // replaced it is a user-side <system-reminder>.
+
+    @Test
+    fun `the interrupt note is a system-reminder that does not pose as the user`() {
+        val note = ChatMessage.QUEUED_INTERRUPT_REMINDER_TEXT
+        assertTrue(note.startsWith("<system-reminder>"))
+        assertTrue(note.endsWith("</system-reminder>"))
+        assertTrue(note.contains("not something the user wrote"))
+        assertTrue(note.contains("do not forget or abandon it unless the user explicitly asks you to stop"))
+        assertTrue(note.contains("Do not repeat or mention this note."))
+        // It is not a bridge: nothing would hide it as one.
+        assertFalse(ChatMessage.isInternalBridgeText(note))
+    }
+
+    @Test
+    fun `the interrupt note is word for word the iOS one`() {
+        // Walk up to the repo root; skip on an Android-only checkout.
+        var dir: java.io.File? = java.io.File("").absoluteFile
+        var ios: java.io.File? = null
+        while (dir != null && ios == null) {
+            ios = java.io.File(dir, "src/ios/Agent/Chat/ChatStoreModels.swift").takeIf { it.exists() }
+            dir = dir.parentFile
+        }
+        if (ios == null) return
+        assertTrue(ios.readText().contains("\"" + ChatMessage.QUEUED_INTERRUPT_REMINDER_TEXT + "\""))
+    }
+
     @Test
     fun `a message that merely mentions interruption is not flagged`() {
         // Substring / fuzzy matches must not trip the filter — only the exact

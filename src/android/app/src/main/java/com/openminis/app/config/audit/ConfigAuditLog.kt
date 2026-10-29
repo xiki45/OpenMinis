@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.openminis.app.config.readable.ReadableSummary
 import com.openminis.app.logging.AppLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,6 +59,10 @@ class ConfigAuditLog private constructor(context: Context) {
                 put(COL_STATUS, entry.status.raw)
                 if (entry.revertOf != null) put(COL_REVERT_OF, entry.revertOf) else putNull(COL_REVERT_OF)
                 if (!entry.caption.isNullOrEmpty()) put(COL_CAPTION, entry.caption) else putNull(COL_CAPTION)
+                if (helper.readableColumn) {
+                    val readable = entry.readable?.jsonString()
+                    if (readable != null) put(COL_READABLE, readable) else putNull(COL_READABLE)
+                }
             }
             db.insertWithOnConflict(TABLE, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
 
@@ -99,7 +104,7 @@ class ConfigAuditLog private constructor(context: Context) {
         val cap = limit.coerceIn(1, MAX_ROWS)
         val db = helper.readableDatabase
         val sql = buildString {
-            append("SELECT $COLUMNS FROM $TABLE")
+            append("SELECT ${selectColumns()} FROM $TABLE")
             if (scope != null) append(" WHERE $COL_SCOPE = ?")
             append(" ORDER BY $COL_AT DESC LIMIT ?")
         }
@@ -115,7 +120,7 @@ class ConfigAuditLog private constructor(context: Context) {
     fun get(id: String): ConfigAuditEntry? {
         val db = helper.readableDatabase
         db.rawQuery(
-            "SELECT $COLUMNS FROM $TABLE WHERE $COL_ID = ?",
+            "SELECT ${selectColumns()} FROM $TABLE WHERE $COL_ID = ?",
             arrayOf(id),
         ).use { c ->
             if (c.moveToNext()) return decode(c)
@@ -136,6 +141,9 @@ class ConfigAuditLog private constructor(context: Context) {
 
     data class Usage(val count: Int, val capacity: Int)
 
+    /** Call after opening the database: [Helper.readableColumn] is set in onOpen. */
+    private fun selectColumns(): String = if (helper.readableColumn) COLUMNS else LEGACY_COLUMNS
+
     private fun decode(c: android.database.Cursor): ConfigAuditEntry? {
         val statusRaw = c.getStringOrNull(COL_STATUS_IDX) ?: return null
         val status = ConfigAuditStatus.fromRaw(statusRaw) ?: return null
@@ -152,6 +160,11 @@ class ConfigAuditLog private constructor(context: Context) {
             status = status,
             revertOf = c.getStringOrNull(COL_REVERT_OF_IDX),
             caption = c.getStringOrNull(COL_CAPTION_IDX),
+            readable = if (c.columnCount > COL_READABLE_IDX) {
+                ReadableSummary.decode(c.getStringOrNull(COL_READABLE_IDX))
+            } else {
+                null
+            },
         )
     }
 
@@ -164,40 +177,76 @@ class ConfigAuditLog private constructor(context: Context) {
         null,
         DB_VERSION,
     ) {
+        /**
+         * false only if the `readable` column is missing and could not be
+         * added; reads and writes then use the pre-readable column list so
+         * the log keeps working without the descriptions.
+         */
+        @Volatile var readableColumn = true
+
         override fun onCreate(db: SQLiteDatabase) {
-            db.execSQL(
-                """
-                CREATE TABLE $TABLE (
-                    $COL_ID            TEXT PRIMARY KEY,
-                    $COL_AT            INTEGER NOT NULL,
-                    $COL_ACTOR         TEXT NOT NULL,
-                    $COL_SESSION_ID    TEXT,
-                    $COL_SCOPE         TEXT NOT NULL,
-                    $COL_KEY           TEXT NOT NULL,
-                    $COL_OLD_VALUE     TEXT NOT NULL,
-                    $COL_NEW_VALUE     TEXT NOT NULL,
-                    $COL_CONFIRMED_AT  INTEGER,
-                    $COL_STATUS        TEXT NOT NULL,
-                    $COL_REVERT_OF     TEXT,
-                    $COL_CAPTION       TEXT
-                )
-                """.trimIndent()
-            )
+            db.execSQL(CREATE_TABLE)
             db.execSQL("CREATE INDEX idx_audit_at ON $TABLE($COL_AT DESC)")
             db.execSQL("CREATE INDEX idx_audit_scope ON $TABLE($COL_SCOPE, $COL_AT DESC)")
             db.execSQL("CREATE INDEX idx_audit_revert_of ON $TABLE($COL_REVERT_OF)")
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            // No prior shipped versions on Android — first-time install
-            // creates the table with `caption` already in place. Future
-            // schema bumps land here.
+            // No version bump so far — see [DB_VERSION]. Future schema bumps
+            // land here.
+        }
+
+        /**
+         * [T-config-readable] Never throw on a downgrade. SQLiteOpenHelper's
+         * default throws, which would make the audit log (and the Logs
+         * screen) fail to open after installing an older build. Every schema
+         * change here only ADDS nullable columns, which an older build ignores
+         * because it names its columns explicitly, so keeping the newer schema
+         * is safe and loses nothing.
+         */
+        override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+
+        /**
+         * [T-config-readable] Add the `readable` column to a table created
+         * before it existed. Idempotent, and runs on every open — the same
+         * pattern as the iOS audit log's ALTER TABLE — so it needs no version
+         * bump: see [DB_VERSION] for why a bump would be unsafe.
+         */
+        override fun onOpen(db: SQLiteDatabase) {
+            super.onOpen(db)
+            val columns = HashSet<String>()
+            try {
+                db.rawQuery("PRAGMA table_info($TABLE)", null).use { c ->
+                    val nameIdx = c.getColumnIndex("name")
+                    while (c.moveToNext()) columns.add(c.getString(nameIdx))
+                }
+                val migrations = missingColumnMigrations(columns)
+                if (migrations.isNotEmpty() && !db.isReadOnly) {
+                    migrations.forEach(db::execSQL)
+                    columns.add(COL_READABLE)
+                    AppLogger.info(TAG, "added the readable column")
+                }
+            } catch (t: Throwable) {
+                // Never block the log over the descriptions: fall back to the
+                // pre-readable columns (see [readableColumn]).
+                AppLogger.error(TAG, "readable column check failed: ${t.message}")
+            }
+            readableColumn = COL_READABLE in columns
         }
     }
 
     companion object {
         private const val TAG = "ConfigAuditLog"
         private const val DB_NAME = "minis-config-audit.db"
+
+        /**
+         * Stays 1 on purpose. Builds before [T-config-readable] use the
+         * default SQLiteOpenHelper.onDowngrade, which THROWS: bumping this
+         * would make an older build unable to open the audit log after a
+         * downgrade. New nullable columns are added idempotently in
+         * Helper.onOpen instead (see [missingColumnMigrations]), and older
+         * builds ignore them because they name their columns explicitly.
+         */
         private const val DB_VERSION = 1
         private const val MAX_ROWS = 1000
 
@@ -214,9 +263,46 @@ class ConfigAuditLog private constructor(context: Context) {
         private const val COL_STATUS = "status"
         private const val COL_REVERT_OF = "revert_of"
         private const val COL_CAPTION = "caption"
+        /**
+         * [T-config-readable] ReadableSummary JSON. Nullable with no DEFAULT:
+         * NULL means "written before readable descriptions existed".
+         */
+        private const val COL_READABLE = "readable"
+
+        /** Current DDL for a fresh install. */
+        internal val CREATE_TABLE = """
+            CREATE TABLE $TABLE (
+                $COL_ID            TEXT PRIMARY KEY,
+                $COL_AT            INTEGER NOT NULL,
+                $COL_ACTOR         TEXT NOT NULL,
+                $COL_SESSION_ID    TEXT,
+                $COL_SCOPE         TEXT NOT NULL,
+                $COL_KEY           TEXT NOT NULL,
+                $COL_OLD_VALUE     TEXT NOT NULL,
+                $COL_NEW_VALUE     TEXT NOT NULL,
+                $COL_CONFIRMED_AT  INTEGER,
+                $COL_STATUS        TEXT NOT NULL,
+                $COL_REVERT_OF     TEXT,
+                $COL_CAPTION       TEXT,
+                $COL_READABLE      TEXT
+            )
+        """.trimIndent()
+
+        /**
+         * Statements that bring a table with [existingColumns] up to date.
+         * Empty when nothing is missing, so running it twice is a no-op.
+         */
+        internal fun missingColumnMigrations(existingColumns: Set<String>): List<String> =
+            if (COL_READABLE in existingColumns) emptyList()
+            else listOf("ALTER TABLE $TABLE ADD COLUMN $COL_READABLE TEXT")
 
         // Cursor column indexes match the SELECT order below.
-        private const val COLUMNS =
+        internal const val COLUMNS =
+            "$COL_ID, $COL_AT, $COL_ACTOR, $COL_SESSION_ID, $COL_SCOPE, $COL_KEY, " +
+                "$COL_OLD_VALUE, $COL_NEW_VALUE, $COL_CONFIRMED_AT, $COL_STATUS, " +
+                "$COL_REVERT_OF, $COL_CAPTION, $COL_READABLE"
+        /** The column list before [T-config-readable]; see [Helper.readableColumn]. */
+        private const val LEGACY_COLUMNS =
             "$COL_ID, $COL_AT, $COL_ACTOR, $COL_SESSION_ID, $COL_SCOPE, $COL_KEY, " +
                 "$COL_OLD_VALUE, $COL_NEW_VALUE, $COL_CONFIRMED_AT, $COL_STATUS, " +
                 "$COL_REVERT_OF, $COL_CAPTION"
@@ -232,6 +318,7 @@ class ConfigAuditLog private constructor(context: Context) {
         private const val COL_STATUS_IDX = 9
         private const val COL_REVERT_OF_IDX = 10
         private const val COL_CAPTION_IDX = 11
+        private const val COL_READABLE_IDX = 12
 
         @Volatile private var INSTANCE: ConfigAuditLog? = null
 

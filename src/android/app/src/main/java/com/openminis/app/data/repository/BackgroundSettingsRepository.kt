@@ -73,24 +73,108 @@ class BackgroundSettingsRepository(context: Context) {
     }
 
     /**
-     * Last persisted overlay position (window x/y in pixels) from the
-     * previous drag. -1 means "no remembered position — let the overlay
-     * controller pick a default near the bottom-left, 10 dp from each
-     * edge" ([T-bg-overlay-polish]).
+     * [FIX-261025-03] How long before a scheduled task's next run its chat
+     * counts as active again, bringing back the ongoing notification, the
+     * capsule / Live Updates countdown and the keep-alive. Stored as an index
+     * into [SCHEDULED_COUNTDOWN_CASES]; see [scheduledCountdownLeadMs].
+     * Default 1 minute: holding the chat for the whole wait kept a daily
+     * task's notification and status chip up all day.
      */
-    fun getOverlayX(): Int = prefs.getInt(KEY_BG_OVERLAY_X, -1)
-    fun getOverlayY(): Int = prefs.getInt(KEY_BG_OVERLAY_Y, -1)
-    fun setOverlayPosition(x: Int, y: Int) {
-        prefs.edit().putInt(KEY_BG_OVERLAY_X, x).putInt(KEY_BG_OVERLAY_Y, y).apply()
+    private val _scheduledCountdownLead =
+        MutableStateFlow(readScheduledCountdownLead(prefs))
+    val scheduledCountdownLead: StateFlow<Int> = _scheduledCountdownLead.asStateFlow()
+
+    fun setScheduledCountdownLead(index: Int) {
+        val safe = index.takeIf { it in SCHEDULED_COUNTDOWN_CASES.indices } ?: DEFAULT_SCHEDULED_COUNTDOWN_LEAD
+        prefs.edit().putInt(KEY_SCHEDULED_COUNTDOWN_LEAD, safe).apply()
+        _scheduledCountdownLead.value = safe
     }
 
+    /**
+     * `minis-config set background.notifications|dynamicIsland|...` writes
+     * this prefs file directly (ConfigBuiltins PrefsBoolField), not through
+     * the setters above. Without this listener the flows kept the value read
+     * at construction, so a tester's `minis-config set background.dynamicIsland
+     * false` left the ongoing notification promoted to the lock-screen chip
+     * until the app restarted. Held in a field: SharedPreferences keeps only
+     * a weak reference to its listeners.
+     */
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
+        when (key) {
+            KEY_TASK_NOTIFICATIONS ->
+                _taskNotificationsEnabled.value = p.getBoolean(key, DEFAULT_TASK_NOTIFICATIONS)
+            KEY_BG_OVERLAY_ENABLED -> _backgroundOverlayEnabled.value = p.getBoolean(key, false)
+            KEY_DYNAMIC_ISLAND_ENABLED -> _dynamicIslandEnabled.value = p.getBoolean(key, false)
+            KEY_SCHEDULED_COUNTDOWN_LEAD -> _scheduledCountdownLead.value = readScheduledCountdownLead(p)
+        }
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+    }
+
+    /**
+     * Last persisted overlay position (window x/y in pixels) from the
+     * previous drag, or null when none was ever stored - the overlay
+     * controller then picks a default near the bottom-left, 10 dp from each
+     * edge ([T-bg-overlay-polish]).
+     *
+     * [T-overlay-position-restore] "Never stored" is the keys being absent,
+     * not a value: a capsule dragged partly off the left or top edge has a
+     * negative coordinate, and the old `-1` default made such a position
+     * look like no position at all.
+     */
+    fun getOverlayPosition(landscape: Boolean = false): Pair<Int, Int>? {
+        val (kx, ky) = overlayKeys(landscape)
+        if (!prefs.contains(kx) || !prefs.contains(ky)) return null
+        return prefs.getInt(kx, 0) to prefs.getInt(ky, 0)
+    }
+
+    fun setOverlayPosition(x: Int, y: Int, landscape: Boolean = false) {
+        val (kx, ky) = overlayKeys(landscape)
+        prefs.edit().putInt(kx, x).putInt(ky, y).apply()
+    }
+
+    /**
+     * [T-overlay-orientation-position] Portrait keeps the original keys, so
+     * the one position earlier builds stored is read as the portrait one
+     * without a migration, and an older build reading this file still finds
+     * a position. Landscape gets its own pair.
+     */
+    private fun overlayKeys(landscape: Boolean): Pair<String, String> =
+        if (landscape) KEY_BG_OVERLAY_LAND_X to KEY_BG_OVERLAY_LAND_Y else KEY_BG_OVERLAY_X to KEY_BG_OVERLAY_Y
+
     companion object {
-        private const val PREFS_NAME = "background_settings"
-        private const val KEY_TASK_NOTIFICATIONS = "taskNotificationsEnabled"
-        private const val DEFAULT_TASK_NOTIFICATIONS = true
+        internal const val PREFS_NAME = "background_settings"
+        internal const val KEY_TASK_NOTIFICATIONS = "taskNotificationsEnabled"
+        internal const val DEFAULT_TASK_NOTIFICATIONS = true
         private const val KEY_BG_OVERLAY_ENABLED = "backgroundOverlayEnabled"
         private const val KEY_BG_OVERLAY_X = "backgroundOverlayX"
         private const val KEY_BG_OVERLAY_Y = "backgroundOverlayY"
-        private const val KEY_DYNAMIC_ISLAND_ENABLED = "dynamicIslandEnabled"
+        private const val KEY_BG_OVERLAY_LAND_X = "backgroundOverlayLandscapeX"
+        private const val KEY_BG_OVERLAY_LAND_Y = "backgroundOverlayLandscapeY"
+        internal const val KEY_DYNAMIC_ISLAND_ENABLED = "dynamicIslandEnabled"
+
+        internal const val KEY_SCHEDULED_COUNTDOWN_LEAD = "scheduledCountdownLead"
+
+        /** minis-config values, in stored-index order. */
+        internal val SCHEDULED_COUNTDOWN_CASES = listOf("off", "1m", "5m", "15m", "always")
+        internal const val DEFAULT_SCHEDULED_COUNTDOWN_LEAD = 1
+
+        internal fun readScheduledCountdownLead(p: SharedPreferences): Int =
+            p.getInt(KEY_SCHEDULED_COUNTDOWN_LEAD, DEFAULT_SCHEDULED_COUNTDOWN_LEAD)
+                .takeIf { it in SCHEDULED_COUNTDOWN_CASES.indices } ?: DEFAULT_SCHEDULED_COUNTDOWN_LEAD
+
+        /**
+         * The lead for a stored index: 0 = never (no wait is shown), [Long.MAX_VALUE] =
+         * the whole wait (the behavior before this setting).
+         */
+        fun scheduledCountdownLeadMs(index: Int): Long = when (index) {
+            0 -> 0L
+            1 -> 60_000L
+            2 -> 5 * 60_000L
+            3 -> 15 * 60_000L
+            else -> Long.MAX_VALUE
+        }
     }
 }

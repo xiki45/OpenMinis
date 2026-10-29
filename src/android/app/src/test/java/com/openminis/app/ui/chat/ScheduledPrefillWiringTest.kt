@@ -31,15 +31,17 @@ class ScheduledPrefillWiringTest {
     @Test
     fun `the headless runner forwards the prefill into the send funnel`() {
         val src = ProductionSources.read("debug/HeadlessChatRunner.kt")
-        assertTrue(src.contains("val outcome = vm.submitPrompt(text, prefill)"))
+        // [T-headless-own-attachments] ...with the prompt's own files beside it.
+        assertTrue(src.contains("val outcome = vm.submitPrompt(text, prefill, attachments)"))
     }
 
     @Test
     fun `every way a prompt can reach the loop keeps its prefill`() {
         // Idle session: straight into the loop it starts.
-        assertTrue(vm.contains("sendMessage(text, skipContextCheck = false, headless = true, prefill = prefill)"))
+        assertTrue(vm.contains("sendMessage(text, skipContextCheck = false, headless = true, prefill = prefill, headlessAttachments = attachments)"))
         // Busy session: rides the queue.
-        assertTrue(vm.contains("QueuedPromptOrigin.USER, prefill)"))
+        // [T-user-ask-deferred] The call also carries ownsComposer now.
+        assertTrue(vm.contains("QueuedPromptOrigin.USER,\n                prefill,\n                ownsComposer = !headless,"))
         assertTrue(vm.contains("prefill = queued.flatMap { it.prefill },"))
         // Mid-loop injection re-arms the one-shot for the next turn.
         assertTrue(vm.contains("return InjectedTurn(newAssistantId, queued.flatMap { it.prefill })"))
@@ -48,7 +50,8 @@ class ScheduledPrefillWiringTest {
         assertTrue(vm.contains("pendingSendPrefill = prefill"))
         // f8cb6f989 threads `headless` through the same two calls; what this
         // pins is that the prefill still rides along.
-        assertEquals(2, Regex("""sendMessage\(text, skipContextCheck = true, (headless = headless, )?prefill = prefill\)""").findAll(vm).count())
+        // [T-headless-own-attachments] They now also carry a parked headless prompt's own files.
+        assertEquals(2, Regex("""sendMessage\(text, skipContextCheck = true, (headless = headless, )?prefill = prefill(, headlessAttachments = ownFiles)?\)""").findAll(vm).count())
     }
 
     @Test

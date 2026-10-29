@@ -1,0 +1,110 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "More files"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big.bin\" url=\"minis://attachments/uploads/big.bin\" size=\"67108864\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attach\u2026[922 chars sha256:41075c571452]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "More files"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big.bin\" url=\"minis://attachments/uploads/big.bin\" size=\"67108864\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attach\u2026[922 chars sha256:41075c571452]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "More files<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big.bin\" url=\"minis://attachments/uploads/big.bin\" size=\"67108864\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/mi\u2026[932 chars sha256:b4b12b70edd4]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "More files<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big.bin\" url=\"minis://attachments/uploads/big.bin\" size=\"67108864\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/mi\u2026[932 chars sha256:b4b12b70edd4]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "More files"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big.bin\" url=\"minis://attachments/uploads/big.bin\" size=\"67108864\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attach\u2026[922 chars sha256:41075c571452]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "More files"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big.bin\" url=\"minis://attachments/uploads/big.bin\" size=\"67108864\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attach\u2026[922 chars sha256:41075c571452]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "More files<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big.bin\" url=\"minis://attachments/uploads/big.bin\" size=\"67108864\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/mi\u2026[932 chars sha256:b4b12b70edd4]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "More files<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big.bin\" url=\"minis://attachments/uploads/big.bin\" size=\"67108864\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/mi\u2026[932 chars sha256:b4b12b70edd4]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

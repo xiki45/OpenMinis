@@ -3,17 +3,20 @@ package com.openminis.app.backup
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 /**
- * The archive has to stay readable by iOS's hand-rolled parser, which is
- * stricter than any ZIP library: STORED only, classic 32-bit central directory,
- * no ZIP64. These tests pin the properties that parser depends on.
+ * The archive has to stay readable by iOS's hand-rolled parser
+ * (BackupZipExtractor): large members STORED, and ZIP64 records once the
+ * package passes 4 GB or 65 535 members. These tests pin the properties that
+ * parser depends on.
  */
 class BackupZipTest {
 
@@ -93,27 +96,106 @@ class BackupZipTest {
     }
 
     /**
-     * The ZIP64 guard. Without it, ZipOutputStream promotes the archive on its
-     * own and iOS reads the saturated 0xFFFF entry count as 65 535 — extracting
-     * a subset and calling the restore a success. Refusing up front is the only
-     * safe behaviour, because the damage is invisible on the writing side.
+     * More entries than the classic EOCD can count: the archive goes ZIP64 and
+     * every member comes back.
+     *
+     * This used to be refused, on the grounds that iOS read only the 16-bit
+     * count. iOS has read the ZIP64 EOCD since 91edbde9a, so the refusal only
+     * blocked large backups (OpenMinis#464).
      */
     @Test
-    fun `refuses an archive with more entries than the classic EOCD can count`() {
+    fun `an archive with more entries than the classic EOCD can count goes ZIP64 and round-trips`() {
         val dir = File(tmp, "many").apply { mkdirs() }
-        // Build the file list cheaply — 65 536 empty files, one over the limit.
+        // 65 536 empty files, one past the classic count.
         for (i in 0..65_535) File(dir, "f$i").writeBytes(ByteArray(0))
 
-        var message: String? = null
+        val out = File(tmp, "many.minisbak")
+        BackupZip.archive(dir, out)
+
+        val tail = tailOf(out)
+        assertTrue("a ZIP64 EOCD record must be written", tail.indexOf(ZIP64_EOCD) >= 0)
+        val eocd = tail.lastIndexOf(CLASSIC_EOCD)
+        assertEquals("the classic count is the 0xFFFF sentinel iOS keys on",
+            0xFFFF, u16(tail, eocd + 10))
+
+        val dest = File(tmp, "many-out")
+        BackupZip.extract(out, dest)
+        assertEquals(65_536, dest.listFiles()!!.size)
+    }
+
+    /**
+     * Past 4 GB for real: one member over 4 GB and one that starts past the
+     * 4 GB mark, so both the per-entry ZIP64 sizes and the ZIP64 offset are
+     * exercised. Writes about 9 GB, so it only runs when
+     * `MINIS_ZIP64_BIG_DIR` names a directory with room for it. The package is
+     * left there as `android-big.minisbak` for the iOS reader to check.
+     */
+    @Test
+    fun `a package over 4GB archives and extracts`() {
+        val bigDir = System.getenv("MINIS_ZIP64_BIG_DIR")
+        Assume.assumeTrue("set MINIS_ZIP64_BIG_DIR to run", bigDir != null)
+        val work = File(bigDir!!).apply { mkdirs() }
+        val st = File(work, "android-staging").apply { deleteRecursively(); mkdirs() }
+        val big = 0x1_0000_0000L + 4096
+        // Sparse, so the input costs no disk; the archive and extract do.
+        RandomAccessFile(File(st, "a-big.bin"), "rw").use { it.setLength(big) }
+        File(st, "manifest.json").writeText("""{"format":"minisbak/1"}""")
+
+        val out = File(work, "android-big.minisbak")
+        BackupZip.archive(st, out)
+        assertTrue(out.length() > big)
+        assertTrue("a ZIP64 EOCD record must be written", tailOf(out).indexOf(ZIP64_EOCD) >= 0)
+
+        val dest = File(work, "android-extract").apply { deleteRecursively() }
         try {
-            BackupZip.archive(dir, File(tmp, "too-many.minisbak"))
-        } catch (e: BackupZip.ZipException) {
-            message = e.message
+            BackupZip.extract(out, dest)
+            assertEquals(big, File(dest, "a-big.bin").length())
+            assertEquals("""{"format":"minisbak/1"}""", File(dest, "manifest.json").readText())
+        } finally {
+            dest.deleteRecursively()
+            st.deleteRecursively()
         }
-        assertTrue(
-            "an over-large entry count must be refused before writing, got: $message",
-            message?.contains("65535") == true,
-        )
+    }
+
+    /**
+     * The other direction: a package over 4 GB written by iOS's
+     * BackupZipWriter. Runs only when `MINIS_ZIP64_IOS_PACKAGE` points at one
+     * whose members are `a-big.bin` (4 GB + 4096 bytes of zeros) and
+     * `manifest.json`.
+     */
+    @Test
+    fun `a package over 4GB written by iOS extracts`() {
+        val path = System.getenv("MINIS_ZIP64_IOS_PACKAGE")
+        Assume.assumeTrue("set MINIS_ZIP64_IOS_PACKAGE to run", path != null)
+        val pkg = File(path!!)
+        val dest = File(pkg.parentFile, "ios-extract").apply { deleteRecursively() }
+        try {
+            BackupZip.extract(pkg, dest)
+            assertEquals(0x1_0000_0000L + 4096, File(dest, "a-big.bin").length())
+            assertEquals("""{"format":"minisbak/1"}""", File(dest, "manifest.json").readText())
+        } finally {
+            dest.deleteRecursively()
+        }
+    }
+
+    private fun tailOf(f: File): ByteArray = RandomAccessFile(f, "r").use { raf ->
+        val n = minOf(raf.length(), 65_557L).toInt()
+        raf.seek(raf.length() - n)
+        ByteArray(n).also { raf.readFully(it) }
+    }
+
+    private fun ByteArray.indexOf(sig: ByteArray): Int =
+        (0..size - sig.size).firstOrNull { i -> sig.indices.all { this[i + it] == sig[it] } } ?: -1
+
+    private fun ByteArray.lastIndexOf(sig: ByteArray): Int =
+        (size - sig.size downTo 0).firstOrNull { i -> sig.indices.all { this[i + it] == sig[it] } } ?: -1
+
+    private fun u16(b: ByteArray, at: Int): Int =
+        (b[at].toInt() and 0xFF) or ((b[at + 1].toInt() and 0xFF) shl 8)
+
+    private companion object {
+        val ZIP64_EOCD = byteArrayOf(0x50, 0x4B, 0x06, 0x06)
+        val CLASSIC_EOCD = byteArrayOf(0x50, 0x4B, 0x05, 0x06)
     }
 
     /** §5.5: a malicious package must not write outside the destination. */

@@ -53,7 +53,7 @@ class SubAgentQueueTest {
 
     @Test
     fun `the backlog is bounded and says so rather than silently dropping`() {
-        repeat(AgentJobRegistry.MAX_QUEUED_DELEGATIONS) { i ->
+        repeat(AgentJobRegistry.MAX_QUEUED_DELEGATIONS_PER_PARENT) { i ->
             assertTrue("slot $i should accept", AgentJobRegistry.enqueueDelegation(item("tool-$i")))
         }
         // Past the bound the caller must be told it was NOT queued, so the
@@ -137,9 +137,10 @@ class SubAgentQueueTest {
 
     @Test
     fun `the concurrency limit matches the documented contract`() {
-        // The tool description promises "Only 3 run at once"; if this constant
-        // moves, that text is a lie.
-        assertEquals(3, AgentJobRegistry.MAX_CONCURRENT_CHILD_JOBS)
+        // The tool description promises "Only 3 run at once in this
+        // conversation"; if this constant moves, that text is a lie.
+        // [T-new-limits] The 3 is now per parent conversation.
+        assertEquals(3, AgentJobRegistry.MAX_CONCURRENT_CHILD_JOBS_PER_PARENT)
         assertEquals(3, HelperRunner.MAX_PER_ASSISTANT_TURN)
     }
 

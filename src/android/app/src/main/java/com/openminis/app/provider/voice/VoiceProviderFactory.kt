@@ -23,7 +23,11 @@ object VoiceProviderFactory {
 
     private const val TAG = "VoiceFactory"
 
-    fun make(instance: ProviderInstance, apiKey: String?): VoiceProvider? {
+    /** [T-android-provider-entry-rules] Every voice provider carries the instance's User-Agent. */
+    fun make(instance: ProviderInstance, apiKey: String?): VoiceProvider? =
+        makeVendor(instance, apiKey)?.also { it.customUserAgent = instance.customUserAgent }
+
+    private fun makeVendor(instance: ProviderInstance, apiKey: String?): VoiceProvider? {
         val custom = instance.customBaseURL
         val normalizedBase = (custom ?: "").lowercase()
 

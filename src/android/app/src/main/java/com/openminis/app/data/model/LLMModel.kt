@@ -9,6 +9,14 @@ data class LLMModel(
     val provider: String,
     val contextWindow: Int? = null,
     val maxOutputTokens: Int? = null,
+    // [OpenMinis#438] True when [contextWindow] / [maxOutputTokens] were read
+    // from the provider's own /v1/models answer (a custom OpenAI-compatible
+    // endpoint reporting context_length / max_output_tokens). Such values are
+    // authoritative: models.dev only fills the one the endpoint left out
+    // (see ModelsDevApi.applyDevData). Mirrors iOS
+    // LLMModel.limitsReportedByEndpoint. Nullable so models saved before the
+    // field existed decode as null - "not reported", the previous behaviour.
+    val limitsReportedByEndpoint: Boolean? = null,
     val supportsReasoning: Boolean? = null,
     val interleavedReasoningField: String? = null,
     // [T-reasoning-effort-data-driven] Effort tiers this model accepts, from the
@@ -45,6 +53,16 @@ data class LLMModel(
     // rules. See VoiceRole. Nullable so older persisted models decode as null.
     // Mirrors iOS LLMModel.voiceRole.
     val voiceRole: String? = null,
+    /**
+     * [T-ultrafast-catalog-tiers] Service-tier ids the Codex model catalog
+     * (/backend-api/codex/models `service_tiers[].id`, or the deprecated
+     * `additional_speed_tiers`) declares for this model, e.g. ["priority"].
+     * null = no catalog said anything (a static or models.dev model); an
+     * empty list = the catalog declared none. Read by
+     * SpeedTiers.supportsUltrafast: the official Codex client only sends a
+     * tier the catalog declares.
+     */
+    val serviceTiers: List<String>? = null,
 ) {
     companion object {
         // Anthropic — mirrors iOS LLMTypes.swift allAnthropic.
@@ -100,8 +118,11 @@ data class LLMModel(
         // 9a3b869f, iOS 965ff194d): 1M context, 128K output (not Sonnet 5's
         // 64K), text + image in via the Anthropic provider default, thinking
         // low…max. parseClaudeVersion reads (5,5), so it takes the same Claude-5
-        // wire path as Sonnet 5: no `temperature`, adaptive thinking, and
-        // "thinking off" = no thinking field. Served under the unchanged
+        // wire path as Sonnet 5: no `temperature`, adaptive thinking. "Thinking
+        // off" is `thinking: {"type": "between_tools"}` — the only model that
+        // takes it; `disabled` 400s here, and an absent field thinks at the
+        // default high effort (AnthropicProvider.offThinking answers
+        // BETWEEN_TOOLS, [T-claude5-thinking-off]). Served under the unchanged
         // claude-cli/2.1.280 fingerprint, the same one upstream uses for it.
         val claudeSonnet55 = LLMModel("claude-sonnet-5-5", "Claude Sonnet 5.5", "Anthropic", contextWindow = 1_000_000, maxOutputTokens = 128_000, supportsReasoning = true)
         // [T-anthropic-sonnet5-catalog-android] Claude Sonnet 5 — same 5-series

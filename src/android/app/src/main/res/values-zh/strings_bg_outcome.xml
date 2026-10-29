@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_task_paused_body">任务已暂停。打开会话以继续。</string>
+</resources>

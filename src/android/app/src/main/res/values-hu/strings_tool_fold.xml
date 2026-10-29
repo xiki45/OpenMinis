@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-fold-tools] Fold consecutive tool calls. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="tool_fold_setting_title">Egymást követő eszközhívások összecsukása</string>
+    <string name="tool_fold_section">Eszközhívások</string>
+    <string name="tool_fold_setting_footer">Az egymást követő eszközhívások egy sorban jelennek meg. Koppints rá az egyes hívások megtekintéséhez.</string>
+    <string name="tool_fold_ran_n_tools">%1$d eszköz futtatva</string>
+    <string name="tool_fold_n_failed">%1$d sikertelen</string>
+    <string name="tool_fold_n_cancelled">%1$d megszakítva</string>
+    <string name="tool_fold_expand_hint">Megjeleníti az egyes eszközhívásokat</string>
+    <string name="tool_fold_collapse_hint">Elrejti az eszközhívásokat</string>
+</resources>

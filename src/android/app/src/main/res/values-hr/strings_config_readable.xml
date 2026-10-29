@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">API ključ</string>
+    <string name="cfgr_all_models">Svi modeli</string>
+    <string name="cfgr_allow_minis_config">Dopusti minis-config</string>
+    <string name="cfgr_applies_to">Odnosi se na</string>
+    <string name="cfgr_audio_input">Zvučni ulaz</string>
+    <string name="cfgr_audio_output">Zvučni izlaz</string>
+    <string name="cfgr_automatic">Automatski</string>
+    <string name="cfgr_chinese">Kineski</string>
+    <string name="cfgr_custom">Prilagođeno</string>
+    <string name="cfgr_custom_user_agent">Prilagođeni User-Agent</string>
+    <string name="cfgr_dark">Tamno</string>
+    <string name="cfgr_default">Zadano</string>
+    <string name="cfgr_disabled">Onemogućeno</string>
+    <string name="cfgr_display_name">Prikazani naziv</string>
+    <string name="cfgr_enabled">Omogućeno</string>
+    <string name="cfgr_english">Engleski</string>
+    <string name="cfgr_hidden">Skriveno</string>
+    <string name="cfgr_high">Visoko</string>
+    <string name="cfgr_image_input">Ulaz slike</string>
+    <string name="cfgr_image_output">Izlaz slike</string>
+    <string name="cfgr_label">Oznaka</string>
+    <string name="cfgr_light">Svijetlo</string>
+    <string name="cfgr_low">Nisko</string>
+    <string name="cfgr_max">Maks.</string>
+    <string name="cfgr_med">Sred.</string>
+    <string name="cfgr_medium">Srednje</string>
+    <string name="cfgr_models">Modeli</string>
+    <string name="cfgr_name">Naziv</string>
+    <string name="cfgr_not_set">Nije postavljeno</string>
+    <string name="cfgr_note">Bilješka</string>
+    <string name="cfgr_off">Isključeno</string>
+    <string name="cfgr_on">Uključeno</string>
+    <string name="cfgr_pdf_input">PDF ulaz</string>
+    <string name="cfgr_privacy_mode">Način privatnosti</string>
+    <string name="cfgr_send">Pošalji</string>
+    <string name="cfgr_status">Status</string>
+    <string name="cfgr_system">Sustav</string>
+    <string name="cfgr_theme">Tema</string>
+    <string name="cfgr_ultra">Ultra</string>
+    <string name="cfgr_video_input">Video ulaz</string>
+    <string name="cfgr_video_output">Video izlaz</string>
+    <string name="cfgr_xhigh">XHigh</string>
+    <string name="cfgr_fold_consecutive_tool_calls">Sažmi uzastopne pozive alata</string>
+</resources>

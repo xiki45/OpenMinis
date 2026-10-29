@@ -26,7 +26,12 @@ interface LLMProvider {
     fun effectiveMaxOutputTokens(model: LLMModel): Int =
         model.maxOutputTokens ?: defaultMaxOutputTokens
 
-    /** Provider-level fallback when model.maxOutputTokens is unknown. */
+    /**
+     * Provider-level fallback when model.maxOutputTokens is unknown. 16K is the
+     * iOS default for Gemini and Antigravity; OpenAIProvider (16K Chat
+     * Completions / 32K Responses) and AnthropicProvider (64K) override it,
+     * as their iOS counterparts do. [T-android-max-tokens-default]
+     */
     val defaultMaxOutputTokens: Int get() = 16_384
 
     /**
@@ -115,6 +120,14 @@ interface LLMProvider {
      * default entries above; the catalog ceiling is resolved off the live
      * `model`.
      */
+    /**
+     * [T-ctx-count-reasoning] True when this provider's requests replay past
+     * assistant turns' `reasoningContent` (DeepSeek-style `reasoning_content`
+     * echo, unsigned interleaved thinking). The context meter counts it then,
+     * and the trim ladder may empty it on older turns. Default: not replayed.
+     */
+    fun echoesReasoningContent(thinkingLevel: ThinkingLevel): Boolean = false
+
     fun clampThinkingLevel(level: ThinkingLevel): ThinkingLevel {
         val ceiling = model.catalogMaxThinkingLevel
         return if (level.rank > ceiling.rank) ceiling else level

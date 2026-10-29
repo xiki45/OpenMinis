@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">Ключ API</string>
+    <string name="cfgr_all_models">Все модели</string>
+    <string name="cfgr_allow_minis_config">Разрешить minis-config</string>
+    <string name="cfgr_applies_to">Применяется к</string>
+    <string name="cfgr_audio_input">Аудиовход</string>
+    <string name="cfgr_audio_output">Аудиовыход</string>
+    <string name="cfgr_automatic">Автоматически</string>
+    <string name="cfgr_chinese">Китайский</string>
+    <string name="cfgr_custom">Свой</string>
+    <string name="cfgr_custom_user_agent">Пользовательский User-Agent</string>
+    <string name="cfgr_dark">Тёмная</string>
+    <string name="cfgr_default">По умолчанию</string>
+    <string name="cfgr_disabled">Отключено</string>
+    <string name="cfgr_display_name">Отображаемое имя</string>
+    <string name="cfgr_enabled">Включено</string>
+    <string name="cfgr_english">Английский</string>
+    <string name="cfgr_hidden">Скрыто</string>
+    <string name="cfgr_high">Высокий</string>
+    <string name="cfgr_image_input">Ввод изображений</string>
+    <string name="cfgr_image_output">Вывод изображений</string>
+    <string name="cfgr_label">Метка</string>
+    <string name="cfgr_light">Светлая</string>
+    <string name="cfgr_low">Низкий</string>
+    <string name="cfgr_max">Макс.</string>
+    <string name="cfgr_med">Сред.</string>
+    <string name="cfgr_medium">Средний</string>
+    <string name="cfgr_models">Модели</string>
+    <string name="cfgr_name">Имя</string>
+    <string name="cfgr_not_set">Не задано</string>
+    <string name="cfgr_note">Примечание</string>
+    <string name="cfgr_off">Выкл.</string>
+    <string name="cfgr_on">Включено</string>
+    <string name="cfgr_pdf_input">Ввод PDF</string>
+    <string name="cfgr_privacy_mode">Режим конфиденциальности</string>
+    <string name="cfgr_send">Отправить</string>
+    <string name="cfgr_status">Статус</string>
+    <string name="cfgr_system">Система</string>
+    <string name="cfgr_theme">Тема</string>
+    <string name="cfgr_ultra">Ультра</string>
+    <string name="cfgr_video_input">Видеовход</string>
+    <string name="cfgr_video_output">Вывод видео</string>
+    <string name="cfgr_xhigh">Макс.+</string>
+    <string name="cfgr_fold_consecutive_tool_calls">Сворачивать подряд идущие вызовы инструментов</string>
+</resources>

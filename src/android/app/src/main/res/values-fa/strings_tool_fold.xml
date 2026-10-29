@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- فارسی (fa). Generated from the English base; keep keys in base order. -->
+<resources>
+    <string name="tool_fold_setting_title">جمع کردن فراخوانی‌های پیاپی ابزار</string>
+    <string name="tool_fold_section">فراخوانی‌های ابزار</string>
+    <string name="tool_fold_setting_footer">فراخوانی‌های پیاپی ابزار در یک خط نمایش داده می‌شوند. برای دیدن هر فراخوانی روی آن ضربه بزنید.</string>
+    <string name="tool_fold_ran_n_tools">%1$d ابزار اجرا شد</string>
+    <string name="tool_fold_n_failed">%1$d ناموفق</string>
+    <string name="tool_fold_n_cancelled">%1$d لغوشده</string>
+    <string name="tool_fold_expand_hint">هر فراخوانی ابزار را نشان می‌دهد</string>
+    <string name="tool_fold_collapse_hint">فراخوانی‌های ابزار را پنهان می‌کند</string>
+</resources>

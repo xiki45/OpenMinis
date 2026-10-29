@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">«%1$s» es una carpeta que Minis monta aquí, así que no se puede eliminar desde el explorador de archivos. No se eliminó nada. Para quitar una carpeta externa, ve a Ajustes › Montar carpetas externas.</string>
+</resources>

@@ -7,6 +7,9 @@ import com.openminis.app.config.ConfigField
 import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.ConfigSchema
 import com.openminis.app.config.ConfigValue
+import com.openminis.app.config.readable.ConfigReadable
+import com.openminis.app.config.readable.ConfigValueFormatter
+import com.openminis.app.config.readable.NumberUnit
 
 /**
  * Convenience wrappers for the most common backend (SharedPreferences).
@@ -27,6 +30,7 @@ class PrefsBoolField(
     override val valueSchema: ConfigSchema get() = ConfigSchema.Bool
     override val access: ConfigAccess get() = ConfigAccess.READWRITE
     override val revertable: Boolean get() = true
+    override val readable: ConfigReadable get() = ConfigReadable(ConfigValueFormatter.Bool())
 
     override fun read(): ConfigValue = ConfigValue.Bool(
         if (prefs.contains(key)) prefs.getBoolean(key, defaultValue) else defaultValue
@@ -48,11 +52,15 @@ class PrefsIntField(
     private val minValue: Int? = null,
     private val maxValue: Int? = null,
     override val risk: ConfigRisk = ConfigRisk.NORMAL,
+    /** [T-config-readable] Unit, and the label key shown for 0 (e.g. "Off"). */
+    private val unit: NumberUnit = NumberUnit.PLAIN,
+    private val zeroLabel: String? = null,
 ) : ConfigField {
     override val valueSchema: ConfigSchema
         get() = ConfigSchema.Int(min = minValue, max = maxValue)
     override val access: ConfigAccess get() = ConfigAccess.READWRITE
     override val revertable: Boolean get() = true
+    override val readable: ConfigReadable get() = ConfigReadable(ConfigValueFormatter.Number(unit, zeroLabel))
 
     override fun read(): ConfigValue = ConfigValue.Int(
         if (prefs.contains(key)) prefs.getInt(key, defaultValue) else defaultValue
@@ -74,7 +82,11 @@ class PrefsLongField(
     private val minValue: Long? = null,
     private val maxValue: Long? = null,
     override val risk: ConfigRisk = ConfigRisk.NORMAL,
+    /** [T-config-readable] Unit, and the label key shown for 0. */
+    private val unit: NumberUnit = NumberUnit.PLAIN,
+    private val zeroLabel: String? = null,
 ) : ConfigField {
+    override val readable: ConfigReadable get() = ConfigReadable(ConfigValueFormatter.Number(unit, zeroLabel))
     // Long values are surfaced as Int in the schema (Kotlin's range is
     // wider than the bridge's ConfigValue.Int — for the few sync.maxFileSize
     // -style fields we accept downcasting; the agent never sees > 2^31 here).
@@ -108,6 +120,7 @@ class PrefsDoubleField(
     private val maxValue: Double? = null,
     override val risk: ConfigRisk = ConfigRisk.NORMAL,
 ) : ConfigField {
+    override val readable: ConfigReadable get() = ConfigReadable(ConfigValueFormatter.Number())
     // SharedPreferences has no native Double; persist as Float bits via
     // `Float.toRawBits` packed into a Long for full precision. Most call
     // sites here use small floats (rate / pitch / volume) so the cast is
@@ -142,6 +155,11 @@ class PrefsStringField(
     private val maxLength: Int? = null,
     private val regex: String? = null,
     override val risk: ConfigRisk = ConfigRisk.NORMAL,
+    /**
+     * [T-config-readable] Required: a string field's values can be ids,
+     * language codes, free text… only the registration knows which.
+     */
+    override val readable: ConfigReadable,
 ) : ConfigField {
     override val valueSchema: ConfigSchema
         get() = ConfigSchema.Str(maxLength = maxLength, regex = regex)
@@ -168,9 +186,12 @@ class PrefsEnumField(
     private val prefs: SharedPreferences,
     private val key: String,
     private val cases: List<String>,
+    /** [T-config-readable] Required: raw case → label key, covering every case. */
+    private val valueLabels: Map<String, String>,
     private val defaultValue: String,
     override val risk: ConfigRisk = ConfigRisk.NORMAL,
 ) : ConfigField {
+    override val readable: ConfigReadable get() = ConfigReadable(ConfigValueFormatter.EnumLabels(valueLabels))
     override val valueSchema: ConfigSchema get() = ConfigSchema.StrEnum(cases)
     override val access: ConfigAccess get() = ConfigAccess.READWRITE
     override val revertable: Boolean get() = true
@@ -198,9 +219,12 @@ class PrefsIntCodedEnumField(
     private val prefs: SharedPreferences,
     private val key: String,
     private val cases: List<String>,
+    /** [T-config-readable] Required: raw case → label key, covering every case. */
+    private val valueLabels: Map<String, String>,
     private val defaultIndex: Int,
     override val risk: ConfigRisk = ConfigRisk.NORMAL,
 ) : ConfigField {
+    override val readable: ConfigReadable get() = ConfigReadable(ConfigValueFormatter.EnumLabels(valueLabels))
     override val valueSchema: ConfigSchema get() = ConfigSchema.StrEnum(cases)
     override val access: ConfigAccess get() = ConfigAccess.READWRITE
     override val revertable: Boolean get() = true

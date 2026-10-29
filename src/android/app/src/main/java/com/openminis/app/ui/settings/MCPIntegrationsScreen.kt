@@ -52,6 +52,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.openminis.app.R
 import com.openminis.app.data.repository.MCPRepository
+import com.openminis.app.mcp.oauth.MCPOAuthConfig
+import com.openminis.app.mcp.oauth.MCPOAuthController
+import com.openminis.app.mcp.oauth.MCPOAuthSignInLogic
+import com.openminis.app.mcp.oauth.McpDiscoveryException
 import com.openminis.app.ui.components.DialogTextField
 import com.openminis.app.ui.components.MinisTextButton
 
@@ -72,6 +76,7 @@ fun MCPIntegrationsScreen(
     envVarRepository: com.openminis.app.data.repository.EnvVarRepository? = null,
 ) {
     val servers by mcpRepository.servers.collectAsState()
+    val screenContext = LocalContext.current
 
     // [T-android-mcp-list-reload-on-appear] MCPRepository reads servers.json
     // only in init() (app launch). A server the agent writes via minis-mcp-cli
@@ -192,6 +197,9 @@ fun MCPIntegrationsScreen(
             confirmButton = {
                 MinisTextButton(onClick = {
                     mcpRepository.delete(id)
+                    // [T-mcp-oauth-signin-android] Full cleanup, as iOS purge:
+                    // secret, tokens and the guest's token bridge.
+                    com.openminis.app.mcp.oauth.MCPOAuthController(screenContext, http = mcpOAuthHttp).purge(id)
                     deleteId = null
                 }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) }
             },
@@ -288,6 +296,9 @@ private fun MCPFormTab(
     val appEnvEntries by (envVarRepository?.entries
         ?.collectAsState() ?: remember { mutableStateOf(emptyList<com.openminis.app.data.repository.EnvVarRepository.EnvVarEntry>()) })
     val appEnvKeys = remember(appEnvEntries) { appEnvEntries.map { it.key } }
+    // [T-envvar-disable] Still pickable (the reference is just text and starts
+    // working once the variable is on again), but marked.
+    val disabledEnvKeys = remember(appEnvEntries) { appEnvEntries.filter { !it.enabled }.map { it.key }.toSet() }
     var showEnvVarPicker by remember { mutableStateOf(false) }
     // [T-mcp-http-headers-env-picker-android] Same $$VAR picker offered on the
     // HTTP/SSE Custom Headers and Server URL value fields.
@@ -313,40 +324,162 @@ private fun MCPFormTab(
     var startupTimeout by remember { mutableStateOf(editServer?.startupTimeoutSeconds?.toString() ?: "") }
     var errorText by remember { mutableStateOf<String?>(null) }
 
-    // [T-android-mcp-oauth] Static-OAuth fields for a URL transport. Expanded
-    // automatically when the edited server already has an oauth block. The
-    // client secret is loaded from / saved to MCPOAuthStore (encrypted), never
-    // shown pre-filled from JSON (it isn't stored there).
+    // [T-mcp-oauth-signin-android] Authorization for a URL transport (iOS
+    // MCPFormSheet, GitHub #432): none, a browser sign-in (discovery +
+    // dynamic registration, nothing to type), or the manual fields (Client ID
+    // + endpoints). The client secret is loaded from / saved to MCPOAuthStore
+    // (encrypted), never pre-filled from JSON (it isn't stored there).
     val oauthScope = androidx.compose.runtime.rememberCoroutineScope()
-    var oauthExpanded by remember { mutableStateOf(editServer?.oauth != null) }
-    var oauthClientId by remember { mutableStateOf(editServer?.oauth?.clientId ?: "") }
+    val oauthController = remember { com.openminis.app.mcp.oauth.MCPOAuthController(context, http = mcpOAuthHttp) }
+    var authKind by remember { mutableStateOf(MCPOAuthSignInLogic.authKind(editServer?.oauth)) }
+    val manualOAuth = editServer?.oauth?.takeIf { !it.isDynamic }
+    var oauthClientId by remember { mutableStateOf(manualOAuth?.clientId ?: "") }
     var oauthClientSecret by remember {
         mutableStateOf(
-            editServer?.id?.let {
+            editServer?.takeIf { manualOAuth != null }?.id?.let {
                 com.openminis.app.mcp.oauth.MCPOAuthStore.clientSecret(context, it)
             } ?: "",
         )
     }
-    var oauthAuthEndpoint by remember { mutableStateOf(editServer?.oauth?.authorizationEndpoint ?: "") }
-    var oauthTokenEndpoint by remember { mutableStateOf(editServer?.oauth?.tokenEndpoint ?: "") }
-    var oauthScopes by remember { mutableStateOf(editServer?.oauth?.scopes ?: "") }
+    var oauthAuthEndpoint by remember { mutableStateOf(manualOAuth?.authorizationEndpoint ?: "") }
+    var oauthTokenEndpoint by remember { mutableStateOf(manualOAuth?.tokenEndpoint ?: "") }
+    var oauthScopes by remember { mutableStateOf(manualOAuth?.scopes ?: "") }
     var oauthAuthorized by remember {
-        mutableStateOf(
-            editServer?.id?.let {
-                com.openminis.app.mcp.oauth.MCPOAuthStore.isAuthorized(context, it)
-            } ?: false,
-        )
+        mutableStateOf(editServer?.id?.let { oauthController.isAuthorized(it) } ?: false)
     }
     var oauthBusy by remember { mutableStateOf(false) }
+    // What the last browser sign-in discovered: the `oauth` block the entry
+    // is saved with. `discoveryNote` is a calm line (cancelled, declined,
+    // "enter the Client ID yourself"); `errorText` stays for failures.
+    var browserOAuth by remember { mutableStateOf(editServer?.oauth?.takeIf { it.isDynamic }) }
+    var signInPhase by remember { mutableStateOf<MCPOAuthController.SignInPhase?>(null) }
+    var needsSignInAgain by remember { mutableStateOf(false) }
+    var confirmResetSignIn by remember { mutableStateOf(false) }
+    var discoveryNote by remember { mutableStateOf<String?>(null) }
+    // Why the form left the browser sign-in for the manual fields; drawn
+    // right where those fields start.
+    var manualFallbackNote by remember { mutableStateOf<String?>(null) }
 
-    fun currentOAuthConfig(): com.openminis.app.mcp.oauth.MCPOAuthConfig? {
-        val cfg = com.openminis.app.mcp.oauth.MCPOAuthConfig(
+    fun currentOAuthConfig(): MCPOAuthConfig? = when (authKind) {
+        MCPOAuthSignInLogic.AuthKind.NONE -> null
+        MCPOAuthSignInLogic.AuthKind.BROWSER -> MCPOAuthSignInLogic.browserBlock(browserOAuth)
+        MCPOAuthSignInLogic.AuthKind.MANUAL -> MCPOAuthConfig(
             clientId = oauthClientId.trim(),
             authorizationEndpoint = oauthAuthEndpoint.trim(),
             tokenEndpoint = oauthTokenEndpoint.trim(),
             scopes = oauthScopes.trim().ifBlank { null },
+            redirectUri = manualOAuth?.redirectUri,
+        ).takeIf { it.isConfigured }
+    }
+
+    /** Save the URL entry with [oauth] now: a sign-in persists the entry
+     *  before the page opens, because the guest reads the saved one. */
+    fun persistUrlEntry(oauth: MCPOAuthConfig) {
+        mcpRepository.add(
+            MCPRepository.MCPServerConfig(
+                id = name.trim(),
+                note = note.trim().ifBlank { null },
+                enabled = editServer?.enabled ?: true,
+                url = url.trim(),
+                headers = parseKeyValueLines(headers, ':'),
+                oauth = oauth,
+                createdAt = editServer?.createdAt ?: System.currentTimeMillis(),
+            ),
         )
-        return cfg.takeIf { it.isConfigured }
+    }
+
+    /** What the form shows for a sign-in that ended without one. */
+    fun showNotSignedIn(result: MCPOAuthController.Result, browser: Boolean) {
+        when (result) {
+            MCPOAuthController.Result.Success -> {}
+            // Closing the page or pressing Deny is a decision, not an error.
+            MCPOAuthController.Result.Cancelled ->
+                discoveryNote = context.getString(R.string.mcp_signin_not_completed)
+            MCPOAuthController.Result.Denied ->
+                discoveryNote = context.getString(R.string.mcp_signin_denied)
+            MCPOAuthController.Result.TimedOut ->
+                discoveryNote = context.getString(R.string.mcp_signin_timed_out)
+            MCPOAuthController.Result.GrantRejected -> {
+                needsSignInAgain = true
+                errorText = context.getString(R.string.mcp_signin_grant_rejected)
+            }
+            // Registered again once already, and still refused.
+            MCPOAuthController.Result.ClientRejected -> errorText = context.getString(
+                if (browser) R.string.mcp_signin_registration_rejected else R.string.mcp_signin_client_rejected,
+            )
+            is MCPOAuthController.Result.Failed -> errorText = result.message
+        }
+    }
+
+    fun runBrowserSignIn() {
+        errorText = null
+        discoveryNote = null
+        manualFallbackNote = null
+        val sid = name.trim()
+        val serverUrl = url.trim()
+        if (sid.isEmpty() || serverUrl.isEmpty()) {
+            errorText = context.getString(R.string.mcp_signin_need_name_url)
+            return
+        }
+        oauthBusy = true
+        oauthScope.launch {
+            val outcome = oauthController.signIn(
+                server = sid,
+                serverUrl = serverUrl,
+                persist = { discovered ->
+                    browserOAuth = discovered
+                    persistUrlEntry(MCPOAuthSignInLogic.browserBlock(discovered))
+                },
+                progress = { phase -> oauthScope.launch { signInPhase = phase } },
+            )
+            when (outcome) {
+                is MCPOAuthController.SignInOutcome.SignedIn -> needsSignInAgain = false
+                is MCPOAuthController.SignInOutcome.DiscoveryFailed ->
+                    if (outcome.error.kind == McpDiscoveryException.Kind.DCR_UNSUPPORTED) {
+                        // The documented fallback: switch to the manual form
+                        // and say why, rather than report a failure.
+                        authKind = MCPOAuthSignInLogic.AuthKind.MANUAL
+                        manualFallbackNote = context.getString(R.string.mcp_signin_manual_fallback)
+                    } else {
+                        errorText = mcpDiscoveryMessage(context, outcome.error)
+                    }
+                is MCPOAuthController.SignInOutcome.NotSignedIn -> showNotSignedIn(outcome.result, browser = true)
+            }
+            oauthBusy = false
+            signInPhase = null
+            // A failed sign-in after an earlier one has not signed the user
+            // out, unless the tokens were cleared on the way.
+            oauthAuthorized = oauthController.isAuthorized(sid)
+        }
+    }
+
+    fun resetBrowserSignIn() {
+        val sid = name.trim()
+        oauthController.resetSignIn(sid, browserOAuth?.clientId ?: "")
+        browserOAuth = null
+        oauthAuthorized = false
+        needsSignInAgain = false
+        errorText = null
+        discoveryNote = context.getString(R.string.mcp_signin_reset_done)
+        // The entry keeps its mode, without the client just forgotten.
+        if (isEdit || mcpRepository.servers.value.any { it.id == sid }) {
+            persistUrlEntry(MCPOAuthSignInLogic.browserBlock(null))
+        }
+    }
+
+    // A saved sign-in the service has dropped shows as "Sign-in expired", not
+    // "Signed in": an expired token is renewed here, a refused renewal signs
+    // the entry out.
+    LaunchedEffect(Unit) {
+        val server = editServer ?: return@LaunchedEffect
+        val oauth = server.oauth ?: return@LaunchedEffect
+        if (oauth.tokenEndpoint.isBlank() || !oauthController.isAuthorized(server.id)) return@LaunchedEffect
+        if (oauthController.freshness(server.id, oauth, server.url) ==
+            MCPOAuthController.Freshness.NEEDS_SIGN_IN
+        ) {
+            oauthAuthorized = false
+            needsSignInAgain = true
+        }
     }
     // [T-mcp-env-var-delete-confirm-android] Drives the confirm dialog before
     // clearing a non-empty env field. (Empty field clears with no confirm.)
@@ -432,34 +565,111 @@ private fun MCPFormTab(
                 modifier = Modifier.height(72.dp),
                 textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             )
+            DisabledEnvRefWarning(disabledEnvRefs(url + "\n" + headers, disabledEnvKeys))
 
-            // [T-android-mcp-oauth] Static OAuth section (collapsible). When
-            // configured, the server authorizes via PKCE and the issued bearer
-            // token is attached at connect time (in-guest wiring is a later
-            // phase; here the user can configure + complete the auth handshake).
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { oauthExpanded = !oauthExpanded },
-            ) {
-                FieldLabel(stringResource(R.string.mcp_form_oauth_section))
-                Spacer(Modifier.weight(1f))
-                if (oauthAuthorized) {
-                    Text(
-                        stringResource(R.string.mcp_form_oauth_authorized),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
+            // [T-mcp-oauth-signin-android] Authorization: none, a browser
+            // sign-in, or the manual fields (iOS MCPFormSheet oauthSection).
+            FieldLabel(stringResource(R.string.mcp_form_auth_mode))
+            for ((kind, label) in listOf(
+                MCPOAuthSignInLogic.AuthKind.NONE to R.string.mcp_form_auth_none,
+                MCPOAuthSignInLogic.AuthKind.BROWSER to R.string.mcp_form_auth_browser,
+                MCPOAuthSignInLogic.AuthKind.MANUAL to R.string.mcp_form_auth_manual,
+            )) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !oauthBusy) {
+                            authKind = kind
+                            errorText = null
+                            discoveryNote = null
+                        },
+                ) {
+                    androidx.compose.material3.RadioButton(
+                        selected = authKind == kind,
+                        onClick = null,
+                        enabled = !oauthBusy,
                     )
                     Spacer(Modifier.width(8.dp))
+                    Text(stringResource(label), style = MaterialTheme.typography.bodyMedium)
                 }
-                Icon(
-                    imageVector = if (oauthExpanded) Icons.Default.KeyboardArrowUp
-                    else Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                )
             }
-            if (oauthExpanded) {
+
+            if (authKind == MCPOAuthSignInLogic.AuthKind.BROWSER) {
+                // One line of explanation, the state, and ONE button that finds
+                // the service, registers this app, opens the sign-in page and
+                // stores the result (#432: no confirmation card in between).
+                Text(
+                    stringResource(R.string.mcp_signin_intro),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(
+                            when {
+                                oauthAuthorized -> R.string.mcp_signin_signed_in
+                                needsSignInAgain -> R.string.mcp_signin_expired
+                                else -> R.string.mcp_signin_not_signed_in
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = when {
+                            oauthAuthorized -> MaterialTheme.colorScheme.primary
+                            needsSignInAgain -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    Spacer(Modifier.weight(1f))
+                    MinisTextButton(
+                        enabled = MCPOAuthSignInLogic.canSignIn(name, url, oauthBusy),
+                        onClick = { runBrowserSignIn() },
+                    ) {
+                        Text(
+                            stringResource(
+                                if (oauthAuthorized || needsSignInAgain) R.string.mcp_signin_sign_in_again
+                                else R.string.mcp_signin_sign_in,
+                            ),
+                        )
+                    }
+                }
+                signInPhase?.let { phase ->
+                    Text(
+                        stringResource(
+                            when (phase) {
+                                MCPOAuthController.SignInPhase.DISCOVERING -> R.string.mcp_signin_phase_discovering
+                                MCPOAuthController.SignInPhase.REGISTERING_AGAIN -> R.string.mcp_signin_phase_registering_again
+                                MCPOAuthController.SignInPhase.WAITING_FOR_BROWSER -> R.string.mcp_signin_phase_waiting
+                                MCPOAuthController.SignInPhase.FINISHING -> R.string.mcp_signin_phase_finishing
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (!oauthBusy && (oauthAuthorized || needsSignInAgain || !browserOAuth?.clientId.isNullOrEmpty())) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        if (oauthAuthorized) {
+                            MinisTextButton(onClick = {
+                                oauthController.signOut(name.trim())
+                                oauthAuthorized = false
+                                discoveryNote = null
+                            }) {
+                                Text(stringResource(R.string.mcp_form_oauth_sign_out), color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        MinisTextButton(onClick = { confirmResetSignIn = true }) {
+                            Text(stringResource(R.string.mcp_signin_reset), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+
+            if (authKind == MCPOAuthSignInLogic.AuthKind.MANUAL) {
+                manualFallbackNote?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 FieldLabel(stringResource(R.string.mcp_form_oauth_client_id))
                 DialogTextField(
                     value = oauthClientId,
@@ -497,12 +707,17 @@ private fun MCPFormTab(
                 )
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     if (oauthAuthorized) {
+                        Text(
+                            stringResource(R.string.mcp_form_oauth_authorized),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                         MinisTextButton(
                             enabled = !oauthBusy,
                             onClick = {
                                 val sid = name.trim()
                                 if (sid.isNotEmpty()) {
-                                    com.openminis.app.mcp.oauth.MCPOAuthStore.signOut(context, sid)
+                                    oauthController.signOut(sid)
                                     oauthAuthorized = false
                                 }
                             },
@@ -519,6 +734,7 @@ private fun MCPFormTab(
                         onClick = {
                             val sid = name.trim()
                             val cfg = currentOAuthConfig()
+                            discoveryNote = null
                             when {
                                 sid.isEmpty() ->
                                     errorText = context.getString(R.string.mcp_form_error_no_name)
@@ -533,25 +749,22 @@ private fun MCPFormTab(
                                     com.openminis.app.mcp.oauth.MCPOAuthStore.setClientSecret(
                                         context, sid, oauthClientSecret.trim().ifBlank { null },
                                     )
+                                    persistUrlEntry(cfg)
                                     oauthBusy = true
                                     oauthScope.launch {
-                                        val result = com.openminis.app.mcp.oauth.MCPOAuthController(context)
-                                            .authorize(sid, url.trim(), cfg)
+                                        val result = oauthController.authorize(sid, url.trim(), cfg)
                                         oauthBusy = false
-                                        when (result) {
-                                            is com.openminis.app.mcp.oauth.MCPOAuthController.Result.Success -> {
-                                                oauthAuthorized = true
-                                                android.widget.Toast.makeText(
-                                                    context,
-                                                    context.getString(R.string.mcp_form_oauth_authorized),
-                                                    android.widget.Toast.LENGTH_SHORT,
-                                                ).show()
-                                            }
-                                            is com.openminis.app.mcp.oauth.MCPOAuthController.Result.Cancelled -> {}
-                                            is com.openminis.app.mcp.oauth.MCPOAuthController.Result.Failed -> {
-                                                errorText = result.message
-                                            }
+                                        if (result == MCPOAuthController.Result.Success) {
+                                            needsSignInAgain = false
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                context.getString(R.string.mcp_form_oauth_authorized),
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        } else {
+                                            showNotSignedIn(result, browser = false)
                                         }
+                                        oauthAuthorized = oauthController.isAuthorized(sid)
                                     }
                                 }
                             }
@@ -564,6 +777,14 @@ private fun MCPFormTab(
                             ),
                         )
                     }
+                }
+            }
+
+            // Under either mode: the note that sent the user from the browser
+            // sign-in to the manual form must not vanish with the switch.
+            if (authKind != MCPOAuthSignInLogic.AuthKind.NONE) {
+                discoveryNote?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         } else {
@@ -627,6 +848,7 @@ private fun MCPFormTab(
                 modifier = Modifier.height(72.dp),
                 textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             )
+            DisabledEnvRefWarning(disabledEnvRefs(env, disabledEnvKeys))
             FieldLabel(stringResource(R.string.mcp_form_startup_timeout))
             DialogTextField(
                 value = startupTimeout,
@@ -725,15 +947,48 @@ private fun MCPFormTab(
                 // store (keyed by server id) — it never goes into servers.json.
                 // Cleared when the OAuth section is emptied.
                 if (isUrlTransport) {
-                    com.openminis.app.mcp.oauth.MCPOAuthStore.setClientSecret(
-                        context, server.id,
-                        if (server.oauth != null) oauthClientSecret.trim().ifBlank { null } else null,
-                    )
+                    when (authKind) {
+                        MCPOAuthSignInLogic.AuthKind.MANUAL -> {
+                            com.openminis.app.mcp.oauth.MCPOAuthStore.setClientSecret(
+                                context, server.id,
+                                if (server.oauth != null) oauthClientSecret.trim().ifBlank { null } else null,
+                            )
+                            // An edited secret / endpoint reaches the guest's
+                            // refresh path.
+                            server.oauth?.let { oauthController.refreshBridgeIfAuthorized(server.id, it, server.url) }
+                        }
+                        // A browser sign-in keeps its own secret (the
+                        // registration's, if any); only the guest's copy is
+                        // brought up to date with an edited URL.
+                        MCPOAuthSignInLogic.AuthKind.BROWSER ->
+                            server.oauth?.takeIf { it.clientId.isNotEmpty() }
+                                ?.let { oauthController.refreshBridgeIfAuthorized(server.id, it, server.url) }
+                        MCPOAuthSignInLogic.AuthKind.NONE ->
+                            com.openminis.app.mcp.oauth.MCPOAuthStore.setClientSecret(context, server.id, null)
+                    }
                 }
                 if (isEdit) mcpRepository.update(server) else mcpRepository.add(server)
                 onDone()
             }) { Text(stringResource(R.string.mcp_form_save)) }
         }
+    }
+
+    // [T-mcp-oauth-signin-android] "Reset Sign-In…" confirmation (iOS).
+    if (confirmResetSignIn) {
+        AlertDialog(
+            onDismissRequest = { confirmResetSignIn = false },
+            title = { Text(stringResource(R.string.mcp_signin_reset_title)) },
+            text = { Text(stringResource(R.string.mcp_signin_reset_message)) },
+            confirmButton = {
+                MinisTextButton(onClick = {
+                    confirmResetSignIn = false
+                    resetBrowserSignIn()
+                }) { Text(stringResource(R.string.mcp_signin_reset_confirm), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                MinisTextButton(onClick = { confirmResetSignIn = false }) { Text(stringResource(R.string.cancel)) }
+            },
+        )
     }
 
     // [T-mcp-env-var-picker-android] App env var picker. Appends a
@@ -742,6 +997,7 @@ private fun MCPFormTab(
     if (showEnvVarPicker) {
         MCPEnvVarPickerSheet(
             keys = appEnvKeys,
+            disabledKeys = disabledEnvKeys,
             onPick = { key ->
                 // [T-mcp-env-picker-insert-android] APPEND, don't replace
                 // (reverses #719, aligns with iOS #728 8f90f2a8). Picking a var
@@ -766,6 +1022,7 @@ private fun MCPFormTab(
     if (showHeaderVarPicker) {
         MCPEnvVarPickerSheet(
             keys = appEnvKeys,
+            disabledKeys = disabledEnvKeys,
             onPick = { key ->
                 val ref = "$\$$key"
                 headers = if (headers.isEmpty() || headers.last().isWhitespace()) {
@@ -781,6 +1038,7 @@ private fun MCPFormTab(
     if (showUrlVarPicker) {
         MCPEnvVarPickerSheet(
             keys = appEnvKeys,
+            disabledKeys = disabledEnvKeys,
             onPick = { key ->
                 val ref = "$\$$key"
                 url = if (url.isEmpty() || url.last().isWhitespace()) url + ref else "$url$ref"
@@ -818,10 +1076,36 @@ private fun MCPFormTab(
  * keys. Picking one inserts a `$$KEY` reference into the MCP server's env (via
  * the caller's [onPick]). Shows an empty-state hint when there are none.
  */
+
+/**
+ * [T-mcp-oauth-signin-android] The line the form shows for a discovery that
+ * produced no client (iOS `MCPOAuthDiscovery.DiscoveryError` texts).
+ */
+internal fun mcpDiscoveryMessage(context: android.content.Context, e: McpDiscoveryException): String =
+    when (e.kind) {
+        McpDiscoveryException.Kind.DCR_UNSUPPORTED -> context.getString(R.string.mcp_signin_manual_fallback)
+        McpDiscoveryException.Kind.NOT_PROTECTED -> context.getString(R.string.mcp_dcr_not_protected)
+        McpDiscoveryException.Kind.BAD_SERVER_URL -> context.getString(R.string.mcp_dcr_bad_server_url)
+        McpDiscoveryException.Kind.NO_AUTHORIZATION_SERVER -> context.getString(R.string.mcp_dcr_no_auth_server)
+        McpDiscoveryException.Kind.BAD_AUTHORIZATION_SERVER_URL -> context.getString(R.string.mcp_dcr_bad_auth_server_url)
+        McpDiscoveryException.Kind.METADATA_INCOMPLETE -> context.getString(R.string.mcp_dcr_metadata_incomplete)
+        McpDiscoveryException.Kind.METADATA_UNREADABLE -> context.getString(R.string.mcp_dcr_metadata_unreadable)
+        McpDiscoveryException.Kind.NO_PKCE -> context.getString(R.string.mcp_dcr_no_pkce)
+        McpDiscoveryException.Kind.BAD_REGISTRATION_ENDPOINT -> context.getString(R.string.mcp_dcr_bad_registration_endpoint)
+        // The server's own words are actionable ("invalid_redirect_uri").
+        McpDiscoveryException.Kind.REGISTRATION_REJECTED ->
+            e.detail ?: context.getString(R.string.mcp_dcr_registration_refused, e.status)
+        McpDiscoveryException.Kind.REGISTRATION_UNREADABLE -> context.getString(R.string.mcp_dcr_registration_unreadable)
+        McpDiscoveryException.Kind.HTTP_STATUS -> context.getString(R.string.mcp_dcr_http_status, e.detail.orEmpty(), e.status)
+        McpDiscoveryException.Kind.UNREADABLE -> context.getString(R.string.mcp_dcr_unreadable, e.detail.orEmpty())
+        McpDiscoveryException.Kind.NETWORK -> e.detail ?: e.kind.name
+    }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MCPEnvVarPickerSheet(
     keys: List<String>,
+    disabledKeys: Set<String> = emptySet(),
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -829,6 +1113,9 @@ private fun MCPEnvVarPickerSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                // Scrolls: with more variables than fit on screen the rest of
+                // the list (e.g. everything added recently) was unreachable.
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -853,16 +1140,49 @@ private fun MCPEnvVarPickerSheet(
                             .padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        val disabled = key in disabledKeys
                         Text(
                             "$\$$key",
                             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = if (disabled) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                            else MaterialTheme.colorScheme.onSurface,
                         )
+                        if (disabled) {
+                            Text(
+                                "  " + stringResource(R.string.env_var_status_disabled),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * [T-envvar-disable] Names referenced as `$VAR` / `${VAR}` / `$$VAR` / `$${VAR}`
+ * in [text] (the same pattern minis-mcp-cli expands) that are disabled App
+ * variables. They are passed as empty strings when the server starts.
+ */
+internal fun disabledEnvRefs(text: String, disabledKeys: Set<String>): List<String> {
+    if (disabledKeys.isEmpty()) return emptyList()
+    return Regex("""\$\$?\{?([A-Za-z_][A-Za-z0-9_]*)\}?""").findAll(text)
+        .map { it.groupValues[1] }
+        .filter { it in disabledKeys }
+        .distinct()
+        .toList()
+}
+
+@Composable
+private fun DisabledEnvRefWarning(names: List<String>) {
+    if (names.isEmpty()) return
+    Text(
+        stringResource(R.string.mcp_form_env_disabled_warning, names.joinToString(", ") { "$\$$it" }),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.error,
+    )
 }
 
 @Composable
@@ -979,4 +1299,21 @@ private fun parseKeyValueLines(text: String, sep: Char): Map<String, String> {
         if (key.isNotEmpty()) out[key] = value
     }
     return out
+}
+
+/**
+ * [FEAT-261021-08, iOS MCPOAuthController] MCP sign-in's token exchange and
+ * refresh follow the "MCP" route in Settings > Network, like its discovery
+ * already did: one client for the controller's lifetime that asks the
+ * current route on every request (same timeouts as the controller's own
+ * default client).
+ */
+internal val mcpOAuthHttp: okhttp3.OkHttpClient by lazy {
+    com.openminis.app.network.NetworkHttp.following(
+        com.openminis.app.network.NetworkScope.MCP.tag,
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build(),
+    )
 }

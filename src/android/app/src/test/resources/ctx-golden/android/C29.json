@@ -1,0 +1,846 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "normal"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/a.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/g.gif]"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a.jpg\" url=\"minis://attachments/uploads/a.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachments/u\u2026[325 chars sha256:31f56168ac5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "ok"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "queued"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/a_1.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/g_1.gif]"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g_1.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a_1.jpg\" url=\"minis://attachments/uploads/a_1.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[333 chars sha256:fa1affd20328]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "normal"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/a.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/g.gif]"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a.jpg\" url=\"minis://attachments/uploads/a.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachments/u\u2026[325 chars sha256:31f56168ac5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "ok"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "queued"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/a_1.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/g_1.gif]"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g_1.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a_1.jpg\" url=\"minis://attachments/uploads/a_1.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[333 chars sha256:fa1affd20328]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "normal"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/a.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/g.gif]"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a.jpg\" url=\"minis://attachments/uploads/a.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachments/u\u2026[325 chars sha256:31f56168ac5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "ok"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "queued"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/a_1.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/g_1.gif]"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g_1.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a_1.jpg\" url=\"minis://attachments/uploads/a_1.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[333 chars sha256:fa1affd20328]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "normal"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/a.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/g.gif]"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a.jpg\" url=\"minis://attachments/uploads/a.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachments/u\u2026[325 chars sha256:31f56168ac5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "ok"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "queued"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/a_1.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/g_1.gif]"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g_1.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a_1.jpg\" url=\"minis://attachments/uploads/a_1.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[333 chars sha256:fa1affd20328]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "normal"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a.jpg\" url=\"minis://attachments/uploads/a.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachments/u\u2026[325 chars sha256:31f56168ac5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "ok"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "queued"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g_1.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a_1.jpg\" url=\"minis://attachments/uploads/a_1.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[333 chars sha256:fa1affd20328]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "normal"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a.jpg\" url=\"minis://attachments/uploads/a.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachments/u\u2026[325 chars sha256:31f56168ac5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "ok"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "queued"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g_1.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a_1.jpg\" url=\"minis://attachments/uploads/a_1.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[333 chars sha256:fa1affd20328]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "normal"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a.jpg\" url=\"minis://attachments/uploads/a.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachments/u\u2026[325 chars sha256:31f56168ac5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "ok"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "queued"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g_1.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a_1.jpg\" url=\"minis://attachments/uploads/a_1.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[333 chars sha256:fa1affd20328]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "normal"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a.jpg\" url=\"minis://attachments/uploads/a.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachments/u\u2026[325 chars sha256:31f56168ac5e]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "ok"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "queued"
+          },
+          {
+            "image": {
+              "base64Len": 57584,
+              "bytes": 43187,
+              "decodable": true,
+              "h": 1000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d294cc0879806b4b",
+              "w": 1500
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 116584,
+              "bytes": 87436,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "b8a0528e27ba7d61",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 2400×1800 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/g_1.gif.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/a_1.jpg\" url=\"minis://attachments/uploads/a_1.jpg\" size=\"43187\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[333 chars sha256:fa1affd20328]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

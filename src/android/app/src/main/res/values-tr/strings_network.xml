@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Ağ</string>
+    <string name="network_status">Durum</string>
+    <string name="network_status_starting">Başlatılıyor…</string>
+    <string name="network_status_connecting">Bağlanılıyor…</string>
+    <string name="network_status_off">Kapalı</string>
+    <string name="network_device_name">Aygıt Adı</string>
+    <string name="network_device_name_automatic">Otomatik</string>
+    <string name="network_exit_node_none">Yok</string>
+    <string name="network_sign_out">Oturumu Kapat</string>
+    <string name="network_scope_shell">Kabuk</string>
+    <string name="network_scope_browser">Tarayıcı</string>
+    <string name="network_scope_backup">Yedek</string>
+    <string name="network_proxy_type">Tür</string>
+    <string name="network_proxy_server">Sunucu</string>
+    <string name="network_proxy_authentication">Kimlik Doğrulama</string>
+    <string name="network_proxy_password">Parola</string>
+    <string name="network_proxy_bypass">Atla</string>
+    <string name="network_proxy_test">Bağlantıyı Sına</string>
+    <string name="network_cancel">İptal</string>
+    <string name="network_save">Kaydet</string>
+    <string name="network_provider_route">Ağ</string>
+</resources>

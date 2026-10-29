@@ -377,16 +377,28 @@ class MainActivity : ComponentActivity() {
         // Bridge: in-app "open settings" dialog. Used for already-denied
         // runtime permissions AND for special-access capabilities like
         // Notification Access.
+        //
+        // [T-settings-gate-stale-dialog] The dialog lives exactly as long as its
+        // request: when the request times out (5 min) or another one takes
+        // its place, the shown dialog is dismissed, and an answer is only
+        // taken for the request it was shown for.
         lifecycleScope.launch {
+            var shown: AlertDialog? = null
             OffloadPermissionManager.pendingSettingsGate
-                .filterNotNull()
                 .collect { gate ->
-                    AlertDialog.Builder(this@MainActivity)
+                    shown?.dismiss()
+                    shown = null
+                    if (gate == null) return@collect
+                    shown = AlertDialog.Builder(this@MainActivity)
                         .setTitle(gate.title)
                         .setMessage(gate.message)
                         .setCancelable(false)
                         .setPositiveButton(gate.positiveLabel) { d, _ ->
                             d.dismiss()
+                            if (!OffloadPermissionManager.respondToSettingsGate(
+                                    gate, OffloadPermissionManager.SettingsGateDecision.OPEN,
+                                )
+                            ) return@setPositiveButton
                             val intent = Intent(gate.settingsAction).apply {
                                 if (gate.requiresPackageUri) {
                                     data = Uri.fromParts("package", packageName, null)
@@ -399,14 +411,11 @@ class MainActivity : ComponentActivity() {
                                 // Some OEMs don't expose every settings panel.
                                 // Fall through — the polling loop will time out.
                             }
-                            OffloadPermissionManager.respondToSettingsGate(
-                                OffloadPermissionManager.SettingsGateDecision.OPEN
-                            )
                         }
                         .setNegativeButton(gate.negativeLabel) { d, _ ->
                             d.dismiss()
                             OffloadPermissionManager.respondToSettingsGate(
-                                OffloadPermissionManager.SettingsGateDecision.CANCEL
+                                gate, OffloadPermissionManager.SettingsGateDecision.CANCEL,
                             )
                         }
                         .show()
@@ -614,6 +623,7 @@ class MainActivity : ComponentActivity() {
                             // [T-android-hang-caller-attribution] Let a stall
                             // sample name the screen it happened on.
                             com.openminis.app.diagnostics.HangDetector.noteScreen(entry.destination.route)
+                            com.openminis.app.diagnostics.JankDiag.setScreen(entry.destination.route)
                             val isChatRoute = entry.destination.route == Routes.CHAT
                             val sid = entry.arguments?.getString("sessionId").takeIf { isChatRoute }
                             val previous = currentChatSessionId
@@ -650,6 +660,10 @@ class MainActivity : ComponentActivity() {
                 // agent triggers a change. Mirrors iOS MinisApp.swift
                 // root-level `.sheet(item: gate.pending)`.
                 com.openminis.app.ui.settings.ConfigConfirmDialogHost()
+
+                // [FEAT-261021-05] A proxy or Tailscale that keeps failing:
+                // a floating banner over every screen (iOS ContentView).
+                com.openminis.app.ui.settings.NetworkAlertBannerHost(navController)
             }
         }
     }

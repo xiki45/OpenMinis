@@ -69,6 +69,15 @@ object SessionDeleter {
             // would otherwise start into a session that no longer exists.
             AgentJobRegistry.dropQueuedDelegations(id, "parent-deleted:$reason")
             AgentJobRegistry.cancelAll(id, "parent-deleted:$reason")
+            // [T-scheduled-active-session-android] Turn off the scheduled tasks
+            // this chat created (iOS cancels them in both delete funnels).
+            // Left on, a loop would keep firing into a deleted chat, and its
+            // follow-up hold would keep that chat "processing" - and the
+            // foreground service up - forever.
+            runCatching {
+                com.openminis.app.scheduled.ScheduledTaskManager(context.applicationContext)
+                    .disableAllCreatedBy(id, "session-deleted:$reason")
+            }
             runCatching { HeadlessChatRunner.cancel(context, id) }
             // 2. Drop the live ViewModel (cancels its scope) — on Main, it owns
             //    a ViewModelStore.

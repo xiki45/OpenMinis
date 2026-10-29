@@ -35,7 +35,8 @@ class ProgrammaticPromptKeepsDraftTest {
     @Test
     fun `the send after compaction stays headless`() {
         val compactAndSend = branch("fun compactAndSendPending(", "fun sendPendingWithoutCompacting(")
-        assertTrue(compactAndSend.contains("sendMessage(text, skipContextCheck = true, headless = headless, prefill = prefill)"))
+        // [T-headless-own-attachments] ...and takes its own files, never the composer's.
+        assertTrue(compactAndSend.contains("sendMessage(text, skipContextCheck = true, headless = headless, prefill = prefill, headlessAttachments = ownFiles)"))
         val sendWithout = branch("fun sendPendingWithoutCompacting(", "fun cancelCompactBeforeSend(")
         assertTrue(sendWithout.contains("headless = headless"))
     }

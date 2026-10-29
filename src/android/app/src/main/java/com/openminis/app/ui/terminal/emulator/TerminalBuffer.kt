@@ -223,7 +223,44 @@ class TerminalBuffer(
     private fun clampCol(c: Int) = maxOf(0, minOf(c, cols - 1))
     private fun clampRow(r: Int) = maxOf(0, minOf(r, rows - 1))
 
+    // ── Export ─────────────────────────────────────────────────────────────
+    /**
+     * [#451 Copy All] The whole buffer as plain text: scrollback, then the
+     * screen. Each row loses its trailing blanks, and the empty rows under the
+     * last line of output are dropped. A wide character's trailer cell is not
+     * text, so CJK and emoji come out without the padding space the grid
+     * stores after them. Soft-wrapped lines stay split: the grid does not
+     * record where a line wrapped (same as iOS `plainText`).
+     */
+    fun plainText(): String {
+        val sb = StringBuilder((scrollback.size + rows) * (cols / 2 + 1))
+        for (row in scrollback) { appendRowText(sb, row); sb.append('\n') }
+        for (row in grid) { appendRowText(sb, row); sb.append('\n') }
+        var end = sb.length
+        while (end > 0 && sb[end - 1] == '\n') end--
+        sb.setLength(end)
+        return sb.toString()
+    }
+
     companion object {
+        /**
+         * Append the text of [row] in `[from, to)` to [sb] with its trailing
+         * spaces trimmed. Wide-character trailers and empty (0) cells are
+         * skipped — shared by [plainText] and the selection copy, which used
+         * to put a space after every CJK character ("中 文").
+         */
+        fun appendRowText(sb: StringBuilder, row: Array<TerminalCell>, from: Int = 0, to: Int = row.size) {
+            val start = sb.length
+            for (c in from until to) {
+                val cell = row[c]
+                if (cell.isWideTrailer || cell.char == 0) continue
+                sb.appendCodePoint(cell.char)
+            }
+            var end = sb.length
+            while (end > start && sb[end - 1] == ' ') end--
+            sb.setLength(end)
+        }
+
         /** Return 2 for CJK / emoji fullwidth characters, else 1. */
         fun characterWidth(cp: Int): Int {
             // Emoji pictographic ranges (simplified from iOS — covers common cases)

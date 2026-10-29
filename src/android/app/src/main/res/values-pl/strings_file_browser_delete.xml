@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">„%1$s” to folder podłączany tutaj przez Minis, więc nie można go usunąć w przeglądarce plików. Nic nie zostało usunięte. Aby usunąć folder zewnętrzny, przejdź do Ustawienia › Podłącz foldery zewnętrzne.</string>
+</resources>

@@ -389,26 +389,31 @@ class ThinkingPassbackMatrixTest {
     }
 
     /**
-     * Claude 5 at OFF. iOS 69be65763: Claude 5 rejects `thinking.type=disabled`
-     * outright ("defaults to adaptive mode when not specified"), so OFF must send
-     * NO thinking field.
-     *
-     * WAS A KNOWN GAP: Android used `modelUsesAdaptiveThinking` — true for 4.6+
-     * AND 5+ — to decide whether to emit the literal, so every thinking-OFF
-     * request on a Claude 5 model carried the value the API rejects. FIXED by
-     * porting iOS's `modelAcceptsExplicitThinkingDisabled` split (4.6-4.x only)
-     * and gating both emission sites on it. Now a hard assertion; the 4.6-4.x
-     * half (which DOES need the literal) is the control below.
+     * Claude at OFF, per model. [T-claude5-thinking-off] (iOS ef86ed890) An
+     * absent thinking field is NOT off on Claude 5 — it is adaptive thinking at
+     * the model's default effort (the iOS report: voice correction on
+     * claude-sonnet-5-5 spent its whole 5 s budget thinking). And the literal
+     * `disabled` 400s on Sonnet 5.5 / Opus 5.5 / Fable (iOS 69be65763). So each
+     * model gets the lowest setting it accepts, from Anthropic's per-model table:
+     * never a literal it 400s on, never an absent field on Claude 5.
      */
     @Test
-    fun `claude 5 off does not send the disabled literal`() {
-        for (id in listOf("claude-sonnet-5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1")) {
-            val body = captureAnthropic(model(id, supportsReasoning = true), ThinkingLevel.OFF)
-            assertNull(
-                "Claude 5 OFF must omit the thinking field entirely, or the API 400s: $id -> $body",
-                body.optJSONObject("thinking")?.optString("type"),
-            )
+    fun `claude off is encoded per model`() {
+        fun off(id: String) = captureAnthropic(model(id, supportsReasoning = true), ThinkingLevel.OFF)
+
+        assertEquals("disabled", off("claude-sonnet-4-6").getJSONObject("thinking").getString("type"))
+        assertEquals("disabled", off("claude-sonnet-5").getJSONObject("thinking").getString("type"))
+        val s55 = off("claude-sonnet-5-5")
+        assertEquals("between_tools", s55.getJSONObject("thinking").getString("type"))
+        assertFalse("between_tools carries no effort: $s55", s55.has("output_config"))
+        for (id in listOf("claude-fable-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1")) {
+            val body = off(id)
+            val thinking = body.getJSONObject("thinking")
+            assertEquals("$id: adaptive + low, never the disabled literal -> $body", "adaptive", thinking.getString("type"))
+            assertEquals("summarized", thinking.getString("display"))
+            assertEquals("low", body.getJSONObject("output_config").getString("effort"))
         }
+        assertFalse("legacy 4.5 writes nothing (off is its default)", off("claude-sonnet-4-5").has("thinking"))
     }
 
     /** Control: 4.6-4.x thinks by default, so OFF MUST stay explicit there. */

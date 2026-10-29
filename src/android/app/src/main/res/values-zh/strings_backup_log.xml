@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-backup-log-sanitize / T-android-backup-log-fold] Backup history
+     detail log: the note that stands for earlier lines folded away, and the
+     button that shows a long log in full. Languages without a confident
+     translation keep the English text. -->
+<resources>
+    <string name="backup_history_log_omitted">已省略较早的日志：%1$d 行</string>
+    <string name="backup_history_log_show_all">显示全部（共 %1$d 行）</string>
+</resources>

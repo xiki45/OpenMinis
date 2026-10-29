@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-keystore-no-cascade] Keep the encrypted credential stores (and
+     their plain-text fallbacks) out of system backup and device transfer.
+     Their Tink keysets are wrapped by an AndroidKeystore key, which is never
+     backed up: a restored copy can only fail to decrypt on the new install,
+     and the fallbacks hold secrets in plain text. Every store opened through
+     EncryptedPrefsFactory.safeCreate must be listed here
+     (EncryptedPrefsBackupRulesTest enforces it). -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="provider_secrets.xml" />
+    <exclude domain="sharedpref" path="provider_secrets_plain_fallback.xml" />
+    <exclude domain="sharedpref" path="env_var_values.xml" />
+    <exclude domain="sharedpref" path="env_var_values_plain_fallback.xml" />
+    <exclude domain="sharedpref" path="oauth_prefs.xml" />
+    <exclude domain="sharedpref" path="oauth_prefs_plain_fallback.xml" />
+    <exclude domain="sharedpref" path="mcp_oauth_secrets.xml" />
+    <exclude domain="sharedpref" path="mcp_oauth_secrets_plain_fallback.xml" />
+    <exclude domain="sharedpref" path="minis_device_identity.xml" />
+    <exclude domain="sharedpref" path="minis_device_identity_plain_fallback.xml" />
+    <exclude domain="sharedpref" path="backup_rclone_secrets.xml" />
+    <exclude domain="sharedpref" path="backup_rclone_secrets_plain_fallback.xml" />
+    <exclude domain="sharedpref" path="minis_network_secrets.xml" />
+    <exclude domain="sharedpref" path="minis_network_secrets_plain_fallback.xml" />
+</full-backup-content>

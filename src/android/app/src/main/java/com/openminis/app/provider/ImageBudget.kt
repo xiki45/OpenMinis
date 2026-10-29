@@ -2,6 +2,8 @@ package com.openminis.app.provider
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.openminis.app.data.model.AgentContentPart
+import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.logging.AppLogger
 import java.io.ByteArrayOutputStream
 
@@ -95,6 +97,40 @@ object ImageBudget {
     private const val TAG = "ImageBudget"
 
     /**
+     * [T-image-real-tests] Every Android graphics call the image functions
+     * make — here, in ReadImageTool and in [resizeJpegToMaxEdge] — goes
+     * through this seam, so a JVM test can plug in a real decoder (the unit-test
+     * android.jar decodes nothing). Production always uses [AndroidImageCodec],
+     * which forwards each call to exactly the BitmapFactory / Bitmap call the
+     * code made before the seam existed.
+     */
+    @Volatile
+    internal var codec: ImageCodec = AndroidImageCodec
+
+    /**
+     * Resize a JPEG so its longest edge is at most `maxEdge` px. Returns null
+     * if already within bounds. Mirrors iOS AIChatViewModel.resizedImageData.
+     *
+     * [T-image-real-tests] Moved verbatim from ChatViewModel (browser_use
+     * screenshots), graphics calls through [codec].
+     */
+    fun resizeJpegToMaxEdge(data: ByteArray, maxEdge: Int): ByteArray? {
+        val codec = codec
+        val bmp = codec.decode(data) ?: return null
+        val longest = maxOf(codec.width(bmp), codec.height(bmp))
+        if (longest <= maxEdge) { codec.recycle(bmp); return null }
+        val scale = maxEdge.toFloat() / longest
+        val w = (codec.width(bmp) * scale).toInt()
+        val h = (codec.height(bmp) * scale).toInt()
+        val resized = codec.scale(bmp, w, h)
+        codec.recycle(bmp)
+        val out = java.io.ByteArrayOutputStream()
+        codec.compress(resized, png = false, quality = 85, out = out)
+        codec.recycle(resized)
+        return out.toByteArray()
+    }
+
+    /**
      * (maxEdge, quality) candidates the per-image compressor walks until the
      * output fits under [MAX_PER_IMAGE_RAW_BYTES]. Mirrors the iOS ladder from
      * AIChatViewModel.swift compressedImageDataUnderBudget(...).
@@ -120,33 +156,29 @@ object ImageBudget {
             // Two-pass decode mirroring PhotosOffloadHandler.copyResized — sampled
             // bounds first to keep the in-memory bitmap proportional to maxEdge,
             // then scaled to the exact target after decode.
-            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(input, 0, input.size, boundsOpts)
-            val w0 = boundsOpts.outWidth
-            val h0 = boundsOpts.outHeight
+            val codec = codec
+            val (w0, h0) = codec.bounds(input)
             if (w0 <= 0 || h0 <= 0) return input
             var sample = 1
             while (w0 / sample > maxEdge * 2 || h0 / sample > maxEdge * 2) sample *= 2
-            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
-            val decoded = BitmapFactory.decodeByteArray(input, 0, input.size, decodeOpts)
+            val decoded = codec.decode(input, sample)
                 ?: return input
             val scale = minOf(
-                maxEdge.toFloat() / decoded.width,
-                maxEdge.toFloat() / decoded.height,
+                maxEdge.toFloat() / codec.width(decoded),
+                maxEdge.toFloat() / codec.height(decoded),
                 1f,
             )
             val out = if (scale < 1f) {
-                Bitmap.createScaledBitmap(
+                codec.scale(
                     decoded,
-                    (decoded.width * scale).toInt().coerceAtLeast(1),
-                    (decoded.height * scale).toInt().coerceAtLeast(1),
-                    true,
+                    (codec.width(decoded) * scale).toInt().coerceAtLeast(1),
+                    (codec.height(decoded) * scale).toInt().coerceAtLeast(1),
                 )
             } else decoded
             val baos = ByteArrayOutputStream()
-            out.compress(Bitmap.CompressFormat.JPEG, q.coerceIn(1, 100), baos)
-            if (out !== decoded) out.recycle()
-            decoded.recycle()
+            codec.compress(out, png = false, quality = q.coerceIn(1, 100), out = baos)
+            if (out !== decoded) codec.recycle(out)
+            codec.recycle(decoded)
             baos.toByteArray()
         } catch (t: Throwable) {
             AppLogger.warning(TAG, "compressBytes failed (${input.size}B → keeping original): ${t.message}")
@@ -203,22 +235,18 @@ object ImageBudget {
     fun downscaleForModel(input: ByteArray, maxEdge: Int = MAX_EDGE_PX): Downscaled? {
         if (input.isEmpty()) return null
         return try {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(input, 0, input.size, bounds)
-            val w0 = bounds.outWidth
-            val h0 = bounds.outHeight
+            val codec = codec
+            val (w0, h0) = codec.bounds(input)
             val (tw, th) = fitWithin(w0, h0, maxEdge) ?: return null
             var sample = 1
             while (w0 / (sample * 2) >= tw && h0 / (sample * 2) >= th) sample *= 2
-            val decoded = BitmapFactory.decodeByteArray(
-                input, 0, input.size, BitmapFactory.Options().apply { inSampleSize = sample },
-            ) ?: return null
-            val scaled = Bitmap.createScaledBitmap(decoded, tw, th, true)
+            val decoded = codec.decode(input, sample) ?: return null
+            val scaled = codec.scale(decoded, tw, th)
             val png = sniffFormat(input) == ImageFormat.PNG
             val baos = ByteArrayOutputStream()
-            scaled.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 85, baos)
-            if (scaled !== decoded) scaled.recycle()
-            decoded.recycle()
+            codec.compress(scaled, png = png, quality = 85, out = baos)
+            if (scaled !== decoded) codec.recycle(scaled)
+            codec.recycle(decoded)
             Downscaled(
                 baos.toByteArray(),
                 if (png) ImageFormat.PNG.mimeType!! else ImageFormat.JPEG.mimeType!!,
@@ -552,6 +580,13 @@ object ImageBudget {
         val data: ByteArray,
         val linuxPath: String?,
         val mimeType: String,
+        /**
+         * [T-request-budget-post-gate] Base64 size of what the provider will
+         * actually send for this image (the [prepareForUpload] output; 0 when
+         * it goes out as a text placeholder). Null = not measured: the planner
+         * falls back to the raw size clamped to [MAX_PER_IMAGE_BYTES].
+         */
+        val wireBytes: Long? = null,
     )
 
     /**
@@ -570,6 +605,13 @@ object ImageBudget {
         val droppedCount: Int,
         /** Total images considered (kept + dropped). */
         val totalCount: Int,
+        /**
+         * [T-request-budget-post-gate] Positions in the planned list that must
+         * not be inlined. Unlike [droppedIds] (array identity, which can
+         * collide and treats one array listed twice as one image) this names
+         * each occurrence exactly.
+         */
+        val droppedIndices: Set<Int> = emptySet(),
     ) {
         val mutated: Boolean get() = droppedCount > 0
     }
@@ -593,21 +635,26 @@ object ImageBudget {
         }
         val dropped = HashSet<ImagePartId>()
         val droppedPaths = HashMap<ImagePartId, String?>()
+        val droppedIndices = HashSet<Int>()
         var kept = 0L
         var elided = 0L
         // Walk latest → eldest so most-recent images win the budget.
-        for (img in images.asReversed()) {
+        for (index in images.indices.reversed()) {
+            val img = images[index]
             val id = ImagePartId.of(img.data)
             // Per-image cap-clamped size, measured as base64 because that is
             // what [maxBytes] budgets. [T-image-budget-base64] The clamp is
             // applied after the conversion so it lands on the same ceiling a
             // provider-boundary `compressUnderBudget` would have produced.
-            val effectiveSize = minOf(estimatedBase64Length(img.data.size), MAX_PER_IMAGE_BYTES)
+            // [T-request-budget-post-gate] A measured wire size wins: it is what
+            // the request really carries.
+            val effectiveSize = img.wireBytes ?: minOf(estimatedBase64Length(img.data.size), MAX_PER_IMAGE_BYTES)
             if (kept + effectiveSize <= maxBytes) {
                 kept += effectiveSize
             } else {
                 dropped.add(id)
                 droppedPaths[id] = img.linuxPath
+                droppedIndices.add(index)
                 elided += effectiveSize
             }
         }
@@ -622,9 +669,125 @@ object ImageBudget {
             droppedPaths = droppedPaths,
             keptBytes = kept,
             elidedBytes = elided,
-            droppedCount = dropped.size,
+            droppedCount = droppedIndices.size,
             totalCount = images.size,
+            droppedIndices = droppedIndices,
         )
+    }
+
+    /** [T-image-real-tests] Result of [applyRequestBudget]: [plan] is null when nothing was elided. */
+    class RequestBudgetApplied(val messages: List<LLMMessage>, val plan: RequestBudgetPlan?)
+
+    /**
+     * [T-image-real-tests] Request-level image budget over a whole outgoing
+     * history: elide the eldest images past [MAX_REQUEST_BYTES] to text
+     * placeholders, spilling path-less ones under [resolveAttachmentsRoot]
+     * (called only when something is dropped). Moved verbatim from
+     * ChatViewModel.applyRequestImageBudget, which keeps the event and the log.
+     */
+    fun applyRequestBudget(
+        messages: List<LLMMessage>,
+        resolveAttachmentsRoot: () -> java.io.File?,
+    ): RequestBudgetApplied {
+        // Collect every image in chronological order so the planner can
+        // walk in reverse and protect the most recent images.
+        data class ImageRef(val msgIdx: Int, val partIdx: Int, val image: ImageBudget.BudgetImage)
+        // [T-request-budget-post-gate] Each image is measured by what the
+        // provider will send: the same gate every serializer inlines through
+        // (format → fit → per-image byte ladder; its decodes are cached per
+        // array, so the serializer reuses them). Measuring the raw bytes
+        // instead dropped images the gate shrinks: six ~3.6 MB BMPs counted
+        // ~29 MB and lost one, for a request that left at ~236 KB.
+        fun measured(data: ByteArray, mime: String, path: String?) = ImageBudget.BudgetImage(
+            data, path, mime,
+            wireBytes = prepareForUpload(data, mime)?.let { estimatedBase64Length(it.bytes.size) } ?: 0L,
+        )
+        val images = mutableListOf<ImageRef>()
+        messages.forEachIndexed { mi, msg ->
+            msg.contentParts.forEachIndexed { pi, part ->
+                when (part) {
+                    is AgentContentPart.ImageData -> {
+                        images.add(
+                            ImageRef(
+                                mi, pi,
+                                measured(part.data, part.mimeType, part.linuxPath),
+                            )
+                        )
+                    }
+                    is AgentContentPart.ToolResult -> {
+                        val img = part.imageData
+                        if (img != null) {
+                            images.add(
+                                ImageRef(
+                                    mi, pi,
+                                    measured(img, part.imageMimeType ?: "image/jpeg", part.imageLinuxPath),
+                                )
+                            )
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        if (images.isEmpty()) return RequestBudgetApplied(messages, null)
+
+        val plan = ImageBudget.planRequestBudget(images.map { it.image })
+        if (!plan.mutated) return RequestBudgetApplied(messages, null)
+
+        // For dropped images without a linuxPath, lazily spill to disk so
+        // the placeholder still gives the model an addressable reference.
+        val attachmentsRoot = resolveAttachmentsRoot()
+        // [T-request-budget-post-gate] Keyed by position (message index + part
+        // index via the planned list), not by array identity.
+        val resolvedPaths = HashMap<Int, String?>()
+        for ((id, ref) in images.withIndex()) {
+            if (id !in plan.droppedIndices) continue
+            val existing = ref.image.linuxPath
+            if (existing != null) {
+                resolvedPaths[id] = existing
+            } else if (attachmentsRoot != null) {
+                resolvedPaths[id] = ImageBudget.ensureSpillover(
+                    attachmentsRoot, ref.image.data, ref.image.mimeType,
+                )
+            } else {
+                resolvedPaths[id] = null
+            }
+        }
+
+        // Build a new message list with dropped image parts replaced by
+        // text placeholders. Same-message multiple drops collapse cleanly
+        // because we never touch parts whose ids weren't in droppedIds.
+        val byMsg = images.withIndex().groupBy { it.value.msgIdx }
+        val mutated = messages.toMutableList()
+        for ((mi, refs) in byMsg) {
+            val msg = mutated[mi]
+            val newParts = msg.contentParts.toMutableList()
+            for ((id, ref) in refs) {
+                if (id !in plan.droppedIndices) continue
+                val path = resolvedPaths[id]
+                val placeholder = AgentContentPart.Text(ImageBudget.elidedImagePlaceholder(path))
+                val originalPart = newParts[ref.partIdx]
+                newParts[ref.partIdx] = when (originalPart) {
+                    is AgentContentPart.ImageData -> placeholder
+                    is AgentContentPart.ToolResult -> originalPart.copy(
+                        // Strip the bytes but keep the structural ToolResult
+                        // role; append the elision marker into content so
+                        // the model sees it next to the rest of the tool
+                        // output. linux path remains in the part for any
+                        // subsequent diagnostic round-trip.
+                        imageData = null,
+                        imageMimeType = null,
+                        content = originalPart.content +
+                            (if (originalPart.content.isEmpty()) "" else "\n") +
+                            ImageBudget.elidedImagePlaceholder(path),
+                    )
+                    else -> originalPart
+                }
+            }
+            mutated[mi] = msg.copy(contentParts = newParts)
+        }
+
+        return RequestBudgetApplied(mutated, plan)
     }
 
     /**
@@ -698,5 +861,67 @@ object ImageBudget {
         }
         // Mirrors uploads mount (see ChatViewModel.prepareUserAttachments).
         return "/var/minis/attachments/spillover/$sha.$ext"
+    }
+}
+
+/**
+ * [T-image-real-tests] The graphics operations behind [ImageBudget.codec].
+ * Bitmaps are opaque handles (`Any`) so a JVM implementation needs no
+ * android.graphics types.
+ */
+internal interface ImageCodec {
+    /** Bounds-only decode: (outWidth, outHeight) as BitmapFactory reports them. */
+    fun bounds(input: ByteArray): Pair<Int, Int>
+
+    /** Full decode at [inSampleSize]; null when it cannot be decoded. */
+    fun decode(input: ByteArray, inSampleSize: Int): Any?
+
+    /** Full decode with default options; null when it cannot be decoded. */
+    fun decode(input: ByteArray): Any?
+
+    /** Full decode of a file with default options; null when it cannot be decoded. */
+    fun decodeFile(path: String): Any?
+
+    fun width(bitmap: Any): Int
+
+    fun height(bitmap: Any): Int
+
+    /** Filtered scale to exactly [width]×[height]; may return [bitmap] itself. */
+    fun scale(bitmap: Any, width: Int, height: Int): Any
+
+    /** Encode as PNG when [png], else JPEG at [quality], into [out]. */
+    fun compress(bitmap: Any, png: Boolean, quality: Int, out: java.io.OutputStream)
+
+    fun recycle(bitmap: Any)
+}
+
+/** [T-image-real-tests] Production [ImageCodec]: the BitmapFactory / Bitmap calls, unchanged. */
+internal object AndroidImageCodec : ImageCodec {
+    override fun bounds(input: ByteArray): Pair<Int, Int> {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(input, 0, input.size, opts)
+        return Pair(opts.outWidth, opts.outHeight)
+    }
+
+    override fun decode(input: ByteArray, inSampleSize: Int): Any? =
+        BitmapFactory.decodeByteArray(input, 0, input.size, BitmapFactory.Options().apply { this.inSampleSize = inSampleSize })
+
+    override fun decode(input: ByteArray): Any? = BitmapFactory.decodeByteArray(input, 0, input.size)
+
+    override fun decodeFile(path: String): Any? = BitmapFactory.decodeFile(path)
+
+    override fun width(bitmap: Any): Int = (bitmap as Bitmap).width
+
+    override fun height(bitmap: Any): Int = (bitmap as Bitmap).height
+
+    override fun scale(bitmap: Any, width: Int, height: Int): Any =
+        Bitmap.createScaledBitmap(bitmap as Bitmap, width, height, true)
+
+    override fun compress(bitmap: Any, png: Boolean, quality: Int, out: java.io.OutputStream) {
+        (bitmap as Bitmap).compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, quality, out)
+    }
+
+    override fun recycle(bitmap: Any) {
+        (bitmap as Bitmap).recycle()
     }
 }

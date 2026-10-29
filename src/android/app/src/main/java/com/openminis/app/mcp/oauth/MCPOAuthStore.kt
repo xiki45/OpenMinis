@@ -88,4 +88,25 @@ object MCPOAuthStore {
     fun purge(context: Context, server: String) {
         prefs(context).edit().remove(tokensKey(server)).remove(secretKey(server)).apply()
     }
+
+    // -- registration secret [T-mcp-oauth-signin-android] --
+
+    private fun registrationSecretKey(issuer: String) = "dcr::$issuer::secret"
+
+    /** The `client_secret` a dynamic registration came with, kept per
+     *  authorization server (the identity the registration belongs to) so a
+     *  second server behind the same issuer gets it too. Null or blank deletes.
+     *  Mirrors iOS `MCPOAuthController.setRegistrationSecret`. */
+    fun setRegistrationSecret(context: Context, issuer: String, secret: String?) {
+        val p = prefs(context)
+        val trimmed = secret?.trim().orEmpty()
+        if (trimmed.isEmpty()) {
+            p.edit().remove(registrationSecretKey(issuer)).apply()
+        } else {
+            p.edit().putString(registrationSecretKey(issuer), trimmed).apply()
+        }
+    }
+
+    fun registrationSecret(context: Context, issuer: String): String? =
+        prefs(context).getString(registrationSecretKey(issuer), null)?.takeIf { it.isNotEmpty() }
 }

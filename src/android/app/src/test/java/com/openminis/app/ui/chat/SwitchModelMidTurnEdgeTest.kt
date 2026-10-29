@@ -42,7 +42,9 @@ class SwitchModelMidTurnEdgeTest {
     private val vmSrc by lazy { src("src/main/java/com/openminis/app/ui/chat/ChatViewModel.kt") }
 
     private val agentLoop by lazy {
-        vmSrc.substringAfter("private suspend fun runAgentLoop(")
+        // [T-android-stop-late-write] runAgentLoop is a thin wrapper that holds
+        // the turn token; the loop itself is runAgentLoopBody.
+        vmSrc.substringAfter("private suspend fun runAgentLoopBody(")
             .substringBefore("\n    private suspend fun ")
             .substringBefore("\n    private fun ")
             .substringBefore("\n    fun ")

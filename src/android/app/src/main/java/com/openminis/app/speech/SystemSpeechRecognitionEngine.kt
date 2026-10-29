@@ -123,25 +123,9 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
             // re-validates the saved locale against, leaving the raw default
             // here made the broken locale look "supported" and the fallback
             // never fired.
-            Locale.forLanguageTag(recognizerLanguageTag(Locale.getDefault())),
-            Locale.forLanguageTag("en-US"),
-            Locale.forLanguageTag("zh-CN"),
-            Locale.forLanguageTag("zh-TW"),
-            Locale.forLanguageTag("ja-JP"),
-            Locale.forLanguageTag("ko-KR"),
-            Locale.forLanguageTag("es-ES"),
-            Locale.forLanguageTag("fr-FR"),
-            Locale.forLanguageTag("de-DE"),
-            Locale.forLanguageTag("it-IT"),
-            Locale.forLanguageTag("pt-BR"),
-            Locale.forLanguageTag("ru-RU"),
-            Locale.forLanguageTag("ar-SA"),
-            Locale.forLanguageTag("hi-IN"),
-            Locale.forLanguageTag("id-ID"),
-            Locale.forLanguageTag("th-TH"),
-            Locale.forLanguageTag("vi-VN"),
-            Locale.forLanguageTag("tr-TR"),
-        ).distinctBy { it.toLanguageTag() }
+            Locale.forLanguageTag(RecognizerLocales.recognizerTag(Locale.getDefault())),
+        ).plus(RecognizerLocales.BUILTIN_TAGS.map { Locale.forLanguageTag(it) })
+            .distinctBy { it.toLanguageTag() }
     }
 
     override fun start(locale: Locale, listener: SpeechRecognitionEngine.Listener) {
@@ -149,6 +133,7 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
         bufferedPartial = null
         heardSpeech = false
         sessionCommitted = false
+        stopRequested = false
         heldSpokenSeconds = 0f
         holdFlushRunnable?.let { mainHandler.removeCallbacks(it) }
         holdFlushRunnable = null
@@ -231,6 +216,15 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
      */
     @Volatile
     private var sessionCommitted = false
+
+    /**
+     * [T-voice-fallback-after-stop] The user ended this dictation (stop()).
+     * Errors a recognizer raises while finalising a stopped take - ERROR_CLIENT
+     * after stopListening on a closed stream is common - are not a reason to
+     * start another recognizer, which would open the microphone again.
+     */
+    @Volatile
+    private var stopRequested = false
 
     /**
      * [T-android-vad-merge-segments] Speech seconds handed to the recognizer
@@ -571,8 +565,8 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
                 // S+, which silently overrode the panel's "System Recognition
                 // (Online)" choice — and on a device with no on-device pack for
                 // the locale (e.g. a zh-CN Pixel 4a) SODA fails every session
-                // with "Failed to get language pack" / ERROR_LANGUAGE_
-                // UNAVAILABLE(12), so the mic opened and closed instantly.
+                // with "Failed to get language pack" / ERROR_LANGUAGE_NOT_
+                // SUPPORTED(12), so the mic opened and closed instantly.
                 val wantOnDevice = preferOffline &&
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                     allowOnDeviceRetry
@@ -617,6 +611,7 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
             // another segment.
             continuousSession = false
             continuousLocale = null
+            stopRequested = true
 
             // Stop feeding first, THEN ask the recogniser to finalise.
             //
@@ -751,6 +746,7 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
             // is a failure (kept, asked again), not "you said nothing".
             heardSpeech = true
             sessionCommitted = false
+            stopRequested = false
             heldSpokenSeconds = 0f
             segmentTranscript.setLength(0)
             continuousSession = false
@@ -860,44 +856,11 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
      */
     @Volatile var preferOffline: Boolean = false
 
-    /**
-     * [T-android-asr-script-subtag] Strip the SCRIPT subtag from a language tag
-     * before handing it to the recognizer.
-     *
-     * `Locale.getDefault()` on a Simplified-Chinese device is `zh-Hans-CN`, and
-     * `toLanguageTag()` faithfully returns "zh-Hans-CN". Google's recognizer
-     * matches its language packs on plain `language-REGION` tags, so the script
-     * subtag makes it report "Locale not supported" / "Failed to get language
-     * pack of required locale" and fail the session with ERROR_LANGUAGE_
-     * UNAVAILABLE (12) — the mic opens and immediately closes. Observed on a
-     * Pixel 4a whose system locale is zh-Hans-CN.
-     *
-     * Reducing to language(+region) keeps the meaningful part ("zh-CN") and is
-     * safe for every other locale: tags without a script subtag are unchanged.
-     */
-    private fun recognizerLanguageTag(locale: Locale): String {
-        val lang = locale.language
-        var region = locale.country
-        // A script-only locale carries no region ("zh-Hans"), and a bare "zh"
-        // is just as unresolvable to the recognizer as "zh-Hans" — it needs a
-        // concrete language pack. Derive the region from the script, which is
-        // exactly the information the script subtag encodes.
-        if (region.isNullOrEmpty() && lang == "zh") {
-            region = if (locale.script == "Hant") "TW" else "CN"
-        }
-        // Last resort for any other script-only/region-less locale: ask ICU to
-        // fill in the likely region (zh-Hans -> zh-Hans-CN, etc.).
-        if (region.isNullOrEmpty()) {
-            region = runCatching { Locale.Builder().setLocale(locale).build() }
-                .getOrNull()?.country.orEmpty()
-        }
-        return if (region.isEmpty()) lang else "$lang-$region"
-    }
 
     private fun buildIntent(locale: Locale): Intent {
         return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognizerLanguageTag(locale))
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, RecognizerLocales.recognizerTag(locale))
             // [T-android-vad] Partials are still REQUESTED but never surfaced —
             // see onPartialResults. iOS does exactly this: its
             // SFSpeechURLRecognitionRequest sets shouldReportPartialResults =
@@ -1141,9 +1104,24 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
             // recognizer, not of the device's speech support — the cloud one
             // usually handles the same locale fine. Restart once against the
             // regular recognizer instead of surfacing a dead end to the user.
+            // [T-431-fallback] The rule is shared with the android-speech CLI:
+            // both language codes (12, 13; 13 used to be missed) and a lost
+            // connection to the on-device service (5, 11) restart on the
+            // regular recognizer. This engine never falls back the other way:
+            // it starts on-device only when the user chose offline.
             val retryLocale = pendingLocale
-            if (err == RecognitionError.LANGUAGE_UNSUPPORTED && usingOnDevice && retryLocale != null) {
-                Log.i(TAG, "on-device recognizer lacks a pack for the locale — retrying via the default recognizer")
+            // [T-voice-fallback-after-stop] A language error is a start-time
+            // property of the recognizer and always switches. A lost or
+            // confused client (5, 11) switches only before this dictation has
+            // anything to lose: not after stop, not once speech or text exists,
+            // not after the session committed - a restart then wiped the
+            // transcript and reopened the mic the user had just closed. A
+            // replay restarts on its saved audio, so it may always switch.
+            val beforeAnything = !sessionCommitted && !stopRequested && !heardSpeech &&
+                segmentTranscript.isEmpty() && bufferedPartial.isNullOrEmpty()
+            val mayFallBack = RecognizerErrorCodes.isLanguageError(errorCode) || replayPcm != null || beforeAnything
+            if (RecognizerFallback.shouldSwitch(errorCode) && mayFallBack && usingOnDevice && retryLocale != null) {
+                Log.i(TAG, "on-device recognizer failed (${RecognizerErrorCodes.name(errorCode)}) — retrying via the default recognizer")
                 usingOnDevice = false
                 // [T-voice-asr-failure-retry-prompt] A replay must restart on
                 // its saved audio — a bare restart would open the microphone.
@@ -1273,42 +1251,11 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
         /** Pipe write granularity when replaying kept audio. */
         private const val REPLAY_CHUNK_BYTES = 8_192
 
-        private fun mapError(code: Int): RecognitionError = when (code) {
-            SpeechRecognizer.ERROR_NO_MATCH,
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> RecognitionError.NO_MATCH
-            SpeechRecognizer.ERROR_NETWORK,
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> RecognitionError.NETWORK
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> RecognitionError.PERMISSION_DENIED
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> RecognitionError.RECOGNIZER_BUSY
-            SpeechRecognizer.ERROR_AUDIO -> RecognitionError.AUDIO_ERROR
-            SpeechRecognizer.ERROR_CLIENT -> RecognitionError.OEM_NO_SERVICE
-            SpeechRecognizer.ERROR_SERVER -> RecognitionError.NETWORK
-            // Codes added in API 33; referenced by literal for compatibility.
-            11 /* ERROR_LANGUAGE_NOT_SUPPORTED */,
-            12 /* ERROR_LANGUAGE_UNAVAILABLE   */ -> RecognitionError.LANGUAGE_UNSUPPORTED
-            else -> RecognitionError.UNKNOWN
-        }
+        // [T-431-error-codes] The codes and their meaning live in one table
+        // shared with the android-speech CLI (it used to label 11/12 one slot
+        // off, so 13 was UNKNOWN and 11 read as a language problem).
+        private fun mapError(code: Int): RecognitionError = RecognizerErrorCodes.classify(code)
 
-        private fun errorMessage(code: Int): String = when (code) {
-            SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
-            SpeechRecognizer.ERROR_CLIENT -> "Client error (no recognition service?)"
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "RECORD_AUDIO required"
-            SpeechRecognizer.ERROR_NETWORK -> "Network error"
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-            SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized"
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
-            SpeechRecognizer.ERROR_SERVER -> "Server error"
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Speech timeout"
-            // [T-android-asr-script-subtag] mapError already classifies 11/12 as
-            // LANGUAGE_UNSUPPORTED, but this function built the user-visible
-            // string and had no case for them — so a language-pack problem
-            // surfaced as the useless "Unknown error (12)". Name the actual
-            // cause, and point at the fix the user can act on.
-            11 /* ERROR_LANGUAGE_NOT_SUPPORTED */ ->
-                "Language not supported by the recognizer"
-            12 /* ERROR_LANGUAGE_UNAVAILABLE */ ->
-                "Language pack unavailable — download it in the system speech settings"
-            else -> "Unknown error ($code)"
-        }
+        private fun errorMessage(code: Int): String = RecognizerErrorCodes.describe(code)
     }
 }

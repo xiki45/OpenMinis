@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- فارسی (fa). Generated from the English base; keep keys in base order. -->
+<resources>
+    <string name="bg_service_notification_text_completed_no_count">در %1$s تکمیل شد</string>
+</resources>

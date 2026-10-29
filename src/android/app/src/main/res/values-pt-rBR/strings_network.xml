@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Rede</string>
+    <string name="network_default_route">Rota padrão</string>
+    <string name="network_default_route_footer">Usada por todas as partes do app configuradas como “Seguir padrão”. Com o Tailscale ativado, os endereços da sua tailnet sempre passam pelo Tailscale, seja qual for a rota.</string>
+    <string name="network_tailscale_footer">Funciona dentro do Minis, sem perfil de VPN: só as conexões do próprio Minis chegam à sua tailnet, e só enquanto o Minis está em execução. “Usar rotas de sub-rede” faz os endereços compartilhados por outros dispositivos (como uma rede doméstica) passarem pelo Tailscale.</string>
+    <string name="network_status">Status</string>
+    <string name="network_status_starting">Iniciando…</string>
+    <string name="network_status_connected">Conectado</string>
+    <string name="network_status_not_logged_in">Não conectado</string>
+    <string name="network_status_connecting">Conectando…</string>
+    <string name="network_status_off">Desligado</string>
+    <string name="network_login_browser">Entrar pelo navegador</string>
+    <string name="network_copy_login_link">Copiar link de login</string>
+    <string name="network_login_auth_key">Entrar com Auth Key</string>
+    <string name="network_device_name">Nome do dispositivo</string>
+    <string name="network_device_name_automatic">Automático</string>
+    <string name="network_use_subnet_routes">Usar rotas de sub-rede</string>
+    <string name="network_exit_node">Nó de saída</string>
+    <string name="network_exit_node_none">Nenhum</string>
+    <string name="network_peer_offline">%1$s (offline)</string>
+    <string name="network_devices">Dispositivos</string>
+    <string name="network_sign_out">Sair</string>
+    <string name="network_sign_out_clear_ellipsis">Sair e apagar…</string>
+    <string name="network_sign_out_clear_title">Sair e remover este dispositivo do Tailscale?</string>
+    <string name="network_sign_out_clear">Sair e apagar</string>
+    <string name="network_sign_out_clear_message">A chave do dispositivo é apagada. Ao ativar o Tailscale de novo, este dispositivo entra como uma nova máquina.</string>
+    <string name="network_proxies">Proxies</string>
+    <string name="network_add_proxy">Adicionar proxy</string>
+    <string name="network_edit_proxy">Editar proxy</string>
+    <string name="network_used_by">Usado por</string>
+    <string name="network_scope_shell">Shell</string>
+    <string name="network_scope_browser">Navegador</string>
+    <string name="network_scope_backup">Backup</string>
+    <string name="network_route_follow_default">Seguir padrão</string>
+    <string name="network_route_direct">Direta</string>
+    <string name="network_proxy_name">Nome (opcional)</string>
+    <string name="network_proxy_type">Tipo</string>
+    <string name="network_proxy_server">Servidor</string>
+    <string name="network_proxy_authentication">Autenticação</string>
+    <string name="network_proxy_password">Senha</string>
+    <string name="network_proxy_bypass">Ignorar</string>
+    <string name="network_proxy_bypass_footer">Esses hosts se conectam diretamente. Separe as entradas com vírgulas ou quebras de linha; “*.example.com” também inclui subdomínios. Endereços locais nunca passam pelo proxy.</string>
+    <string name="network_proxy_test">Testar conexão</string>
+    <string name="network_proxy_test_ok">Conectado em %1$d ms</string>
+    <string name="network_proxy_delete">Apagar proxy</string>
+    <string name="network_cancel">Cancelar</string>
+    <string name="network_save">Salvar</string>
+    <string name="network_auth_key_footer">Crie uma Auth Key no console de administração do Tailscale, em Configurações &gt; Chaves. Ela é usada uma única vez para adicionar este dispositivo e não é salva.</string>
+    <string name="network_log_in">Entrar</string>
+    <string name="network_provider_route">Rede</string>
+    <string name="network_provider_route_footer">Como as solicitações deste provedor se conectam. Configure o Tailscale e os proxies em Ajustes &gt; Rede.</string>
+    <!-- [FEAT-261021-04] Settings > Network section -->
+    <string name="network_routing_title">Roteamento de rede</string>
+</resources>

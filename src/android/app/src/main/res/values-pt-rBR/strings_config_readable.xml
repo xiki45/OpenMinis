@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">Chave de API</string>
+    <string name="cfgr_all_models">Todos os modelos</string>
+    <string name="cfgr_allow_minis_config">Permitir o minis-config</string>
+    <string name="cfgr_applies_to">Aplica-se a</string>
+    <string name="cfgr_audio_input">Entrada de áudio</string>
+    <string name="cfgr_audio_output">Saída de áudio</string>
+    <string name="cfgr_automatic">Automático</string>
+    <string name="cfgr_chinese">Chinês</string>
+    <string name="cfgr_custom">Personalizado</string>
+    <string name="cfgr_custom_user_agent">User-Agent personalizado</string>
+    <string name="cfgr_dark">Escuro</string>
+    <string name="cfgr_default">Padrão</string>
+    <string name="cfgr_disabled">Desativado</string>
+    <string name="cfgr_display_name">Nome de exibição</string>
+    <string name="cfgr_enabled">Ativado</string>
+    <string name="cfgr_english">English</string>
+    <string name="cfgr_hidden">Oculto</string>
+    <string name="cfgr_high">Alto</string>
+    <string name="cfgr_image_input">Entrada de imagem</string>
+    <string name="cfgr_image_output">Saída de imagem</string>
+    <string name="cfgr_label">Rótulo</string>
+    <string name="cfgr_light">Claro</string>
+    <string name="cfgr_low">Baixo</string>
+    <string name="cfgr_max">Máximo</string>
+    <string name="cfgr_med">Méd</string>
+    <string name="cfgr_medium">Médio</string>
+    <string name="cfgr_models">Modelos</string>
+    <string name="cfgr_name">Nome</string>
+    <string name="cfgr_not_set">Não definido</string>
+    <string name="cfgr_note">Observação</string>
+    <string name="cfgr_off">Desligado</string>
+    <string name="cfgr_on">Ligado</string>
+    <string name="cfgr_pdf_input">Entrada de PDF</string>
+    <string name="cfgr_privacy_mode">Modo de privacidade</string>
+    <string name="cfgr_send">Enviar</string>
+    <string name="cfgr_status">Status</string>
+    <string name="cfgr_system">Do sistema</string>
+    <string name="cfgr_theme">Tema</string>
+    <string name="cfgr_ultra">Ultra</string>
+    <string name="cfgr_video_input">Entrada de vídeo</string>
+    <string name="cfgr_video_output">Saída de vídeo</string>
+    <string name="cfgr_xhigh">Muito alto</string>
+    <string name="cfgr_fold_consecutive_tool_calls">Agrupar chamadas de ferramentas consecutivas</string>
+</resources>

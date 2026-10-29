@@ -57,4 +57,20 @@
          plural rather than a fallback. Diacritics are č ć đ š ž only; the
          validator rejects Polish/Czech/Romanian look-alikes. -->
     <locale android:name="hr"/>
+    <!-- Italian. CLDR 42+ (ICU 72+, Android 14+) adds a `many` category for
+         exact millions; older devices (e.g. Android 13, ICU 70) never select
+         it, so the plurals carry one/many/other with many == other. -->
+    <locale android:name="it"/>
+    <!-- Dutch. Two CLDR plural categories (one/other). -->
+    <locale android:name="nl"/>
+    <!-- Hungarian. one/other, but a noun after a numeral stays singular, so
+         flat "%d <noun>" strings read correctly for every count. -->
+    <locale android:name="hu"/>
+    <!-- Czech. one/few/many/other: few = 2..4, other = 5+, many = decimals
+         only. Flat count strings use the count-neutral "Label: %d" form. -->
+    <locale android:name="cs"/>
+    <!-- Persian (Iran). one/other; a noun after a numeral stays singular.
+         Right-to-left text, but the app keeps its left-to-right layout
+         (LocaleWrap.forceLtr), so no screen is mirrored. -->
+    <locale android:name="fa"/>
 </locale-config>

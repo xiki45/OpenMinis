@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">Ipakita ang buong pag-iisip</string>
+    <string name="thinking_full_title">Buong pag-iisip</string>
+    <string name="thinking_full_char_count">%1$s karakter</string>
+    <string name="thinking_full_load_more">Mag-load pa</string>
+    <string name="thinking_full_copy_failed">Masyadong mahaba para kopyahin</string>
+</resources>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Fut</string>
+    <string name="sched_pill_waiting">Várakozik</string>
+    <string name="sched_pill_run_now">Futtatás most</string>
+    <string name="sched_pill_hide">Visszaszámlálás elrejtése</string>
+    <string name="sched_pill_cancel_all">Összes ütemezett feladat megszakítása</string>
+    <string name="sched_pill_cancel_all_title">Megszakítod az összes ütemezett feladatot?</string>
+    <string name="sched_pill_cancel_all_confirm">Összes megszakítása</string>
+    <string name="sched_pill_not_now">Most nem</string>
+    <string name="sched_pill_cancel_all_message">A beszélgetésben még tervezett összes feladat megszakad.</string>
+    <string name="sched_pill_a11y_title">Következő ütemezett feladat</string>
+    <string name="sched_pill_a11y_running">Futtatás folyamatban</string>
+    <string name="sched_pill_a11y_waiting">Várakozás egy másik feladat befejezésére</string>
+    <string name="sched_pill_a11y_upcoming_left">Következő futtatás · még %1$d van hátra</string>
+    <string name="sched_pill_a11y_upcoming">Következő futtatás</string>
+    <string name="sched_pill_a11y_run_of">Futtatás: %1$d / %2$d</string>
+    <string name="sched_pill_a11y_run">%1$d. futtatás</string>
+    <string name="sched_pill_a11y_next_in">Következő futtatás ennyi idő múlva: %1$s</string>
+    <string name="sched_pill_a11y_more">+%1$d további</string>
+    <string name="sched_pill_a11y_hint">Megnyitja a feladat részleteit</string>
+</resources>

@@ -37,10 +37,10 @@ export UV_LINK_MODE=symlink
 # openminis/openminis#375: same failure family as UV_LINK_MODE above, via Git.
 # `git gc` / `repack` / `clone --local` create objects with link(), which
 # link2symlink turns into .l2s.* sentinels written INTO .git/objects/pack/.
-# Git chmods that directory to 0555, so the sentinel bookkeeping (which runs
-# as the real uid, not the faked root) fails and the pack files become
-# undeletable. Copying instead of hardlinking keeps Git off that path
-# entirely. Costs disk on a local clone; sandbox repos are small.
-#
-# Only affects NEW operations -- it cannot repair already-stuck files.
-git config --system core.createObject copy 2>/dev/null || true
+# openminis/openminis#409: this used to run
+# `git config --system core.createObject copy`, but `copy` is not a valid
+# value (only `link` and `rename` are), so every git command died with
+# "invalid mode for object creation". Git is now told
+# core.createObject=rename through GIT_CONFIG_COUNT / GIT_CONFIG_KEY_0 /
+# GIT_CONFIG_VALUE_0, injected by PRootKernel into every shell (login or
+# not), and RootfsManager removes the invalid line from /etc/gitconfig at boot.

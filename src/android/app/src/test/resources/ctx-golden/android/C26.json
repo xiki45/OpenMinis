@@ -1,0 +1,450 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "q1"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read the file"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolUse",
+            "text": "file_read"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolResult",
+            "text": "file contents"
+          },
+          {
+            "kind": "text",
+            "text": "<context-summary>\nThe following is a summary of the earlier conversation that was compacted to save context space.\nTreat it as background context only. The user's most recent message (below or in the \u2026[583 chars sha256:2a14328095e4]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "q1"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a1"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read the file"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:file_read",
+            "kind": "toolUse",
+            "text": "file_read"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:file_read",
+            "kind": "toolResult",
+            "text": "file contents"
+          },
+          {
+            "kind": "text",
+            "text": "<context-summary>\nThe following is a summary of the earlier conversation that was compacted to save context space.\nTreat it as background context only. The user's most recent message (below or in the \u2026[583 chars sha256:2a14328095e4]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "q1"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read the file"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolUse",
+            "text": "file_read"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolResult",
+            "text": "file contents"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "<context-summary>\nThe following is a summary of the earlier conversation that was compacted to save context space.\nTreat it as background context only. The user's most recent message (below or in the \u2026[583 chars sha256:2a14328095e4]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "q1"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read the file"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolUse",
+            "text": "file_read"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolResult",
+            "text": "file contents"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "<context-summary>\nThe following is a summary of the earlier conversation that was compacted to save context space.\nTreat it as background context only. The user's most recent message (below or in the \u2026[583 chars sha256:2a14328095e4]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "q1"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read the file"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolUse",
+            "text": "file_read"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolResult",
+            "text": "file contents"
+          },
+          {
+            "kind": "text",
+            "text": "<context-summary>\nThe following is a summary of the earlier conversation that was compacted to save context space.\nTreat it as background context only. The user's most recent message (below or in the \u2026[583 chars sha256:2a14328095e4]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "q1"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a1"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read the file"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:file_read",
+            "kind": "toolUse",
+            "text": "file_read"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:file_read",
+            "kind": "toolResult",
+            "text": "file contents"
+          },
+          {
+            "kind": "text",
+            "text": "<context-summary>\nThe following is a summary of the earlier conversation that was compacted to save context space.\nTreat it as background context only. The user's most recent message (below or in the \u2026[583 chars sha256:2a14328095e4]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "q1"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read the file"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolUse",
+            "text": "file_read"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolResult",
+            "text": "file contents"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "<context-summary>\nThe following is a summary of the earlier conversation that was compacted to save context space.\nTreat it as background context only. The user's most recent message (below or in the \u2026[583 chars sha256:2a14328095e4]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "q1"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "a1"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Read the file"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolUse",
+            "text": "file_read"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_f",
+            "kind": "toolResult",
+            "text": "file contents"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "<context-summary>\nThe following is a summary of the earlier conversation that was compacted to save context space.\nTreat it as background context only. The user's most recent message (below or in the \u2026[583 chars sha256:2a14328095e4]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

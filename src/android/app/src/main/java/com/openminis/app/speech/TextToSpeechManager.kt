@@ -127,6 +127,13 @@ class TextToSpeechManager : TextToSpeech.OnInitListener {
         }
 
     /**
+     * [T-readaloud-volume-boost] Audio session the engine plays each utterance
+     * on (KEY_PARAM_SESSION_ID), so the caller can attach effects to it; 0 =
+     * the engine's own session.
+     */
+    var audioSessionId: Int = 0
+
+    /**
      * Initializes the TTS engine. Must be called before speaking.
      */
     fun init(context: Context) {
@@ -488,6 +495,7 @@ class TextToSpeechManager : TextToSpeech.OnInitListener {
     private fun buildSpeechParams(): android.os.Bundle {
         return android.os.Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, speechVolume)
+            if (audioSessionId > 0) putInt(TextToSpeech.Engine.KEY_PARAM_SESSION_ID, audioSessionId)
         }
     }
 

@@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.outlined.EventBusy
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -56,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -204,16 +207,23 @@ internal fun ScheduledTaskDetailSheet(
 
                 HistoryCard(history)
 
-                // Actions
-                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                // Actions: full-width card buttons, icon + label, as iOS
+                // ScheduledTaskDetailView.actions (Label on the card background).
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (task != null && task.enabled) {
-                        TextButton(onClick = { confirmingCancel = true }) {
-                            Text(stringResource(R.string.scheduled_card_cancel), color = StatusRed, fontSize = 15.sp)
-                        }
+                        ActionCardButton(
+                            icon = Icons.Outlined.EventBusy,
+                            label = stringResource(R.string.scheduled_card_cancel),
+                            color = StatusRed,
+                            onClick = { confirmingCancel = true },
+                        )
                     }
-                    TextButton(onClick = { copy(context, prompt) }) {
-                        Text(stringResource(R.string.scheduled_detail_copy_prompt), color = ScheduledAccent, fontSize = 15.sp)
-                    }
+                    ActionCardButton(
+                        icon = Icons.Outlined.ContentCopy,
+                        label = stringResource(R.string.scheduled_detail_copy_prompt),
+                        color = ChatColors.primaryText,
+                        onClick = { copy(context, prompt) },
+                    )
                 }
             }
         }
@@ -242,6 +252,29 @@ internal fun ScheduledTaskDetailSheet(
 }
 
 // ── cards ────────────────────────────────────────────────────────────────
+
+/**
+ * A bottom action of the detail page: the whole card is the button, with the icon and
+ * label centred in [color]. Same card shape and fill as [SectionCard], so the actions
+ * read as part of the page rather than as bare links (iOS draws them the same way).
+ */
+@Composable
+private fun ActionCardButton(icon: ImageVector, label: String, color: Color, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(ChatColors.secondaryBg)
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = color, fontSize = 16.sp)
+    }
+}
 
 @Composable
 private fun SectionCard(title: String? = null, badge: String? = null, content: @Composable () -> Unit) {

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">运行中</string>
+    <string name="sched_pill_waiting">等待中</string>
+    <string name="sched_pill_run_now">立即执行</string>
+    <string name="sched_pill_hide">不显示本次倒计时</string>
+    <string name="sched_pill_cancel_all">取消接下来所有定时任务</string>
+    <string name="sched_pill_cancel_all_title">取消所有定时任务？</string>
+    <string name="sched_pill_cancel_all_confirm">全部取消</string>
+    <string name="sched_pill_not_now">暂不</string>
+    <string name="sched_pill_cancel_all_message">本会话中尚未执行的定时任务都将被取消。</string>
+    <string name="sched_pill_a11y_title">即将执行的定时任务</string>
+    <string name="sched_pill_a11y_running">正在执行</string>
+    <string name="sched_pill_a11y_waiting">等待上游任务完成</string>
+    <string name="sched_pill_a11y_upcoming_left">即将执行 · 剩余 %1$d 次</string>
+    <string name="sched_pill_a11y_upcoming">即将执行</string>
+    <string name="sched_pill_a11y_run_of">第 %1$d 次，共 %2$d 次</string>
+    <string name="sched_pill_a11y_run">第 %1$d 次</string>
+    <string name="sched_pill_a11y_next_in">%1$s后执行</string>
+    <string name="sched_pill_a11y_more">另有 %1$d 个</string>
+    <string name="sched_pill_a11y_hint">打开任务详情</string>
+</resources>

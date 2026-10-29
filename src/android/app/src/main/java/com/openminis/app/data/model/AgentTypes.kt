@@ -79,3 +79,100 @@ fun sanitizeToolId(id: String): String = buildString(id.length) {
         append(if (ch.isLetterOrDigit() || ch == '_' || ch == '-') ch else '-')
     }
 }
+
+/** [B02] Longest tool id any request carries (strict gateways such as DeepSeek). */
+const val WIRE_TOOL_ID_MAX = 40
+
+/**
+ * [B02] The tool id a request carries for a stored id. Used only when a request
+ * is encoded; the stored history keeps the raw id, so a session switched back to
+ * the Responses API still splits `call_…|fc_…` into its two halves.
+ *
+ * Same rule as iOS `wireToolId`, pinned by src/shared/tool-id vectors:
+ *  1. keep the part before the first `|` (the call_id);
+ *  2. replace every code point outside `[A-Za-z0-9_-]` with `-`;
+ *  3. if that is empty or longer than [WIRE_TOOL_ID_MAX], use `call_` + the first
+ *     35 hex chars of SHA-256 of the WHOLE raw id (UTF-8), 40 chars in all.
+ * Deterministic, so a tool_use and its tool_result, encoded separately, pair up.
+ * Two raw ids can map to one wire id (same call_id, different fc_id); a request
+ * tells them apart with [WireToolIdMap].
+ */
+fun wireToolId(raw: String): String {
+    val head = raw.substringBefore('|')
+    val clean = buildString(head.length) {
+        var i = 0
+        while (i < head.length) {
+            val cp = head.codePointAt(i)
+            val ok = cp in 'a'.code..'z'.code || cp in 'A'.code..'Z'.code ||
+                cp in '0'.code..'9'.code || cp == '_'.code || cp == '-'.code
+            append(if (ok) cp.toChar() else '-')
+            i += Character.charCount(cp)
+        }
+    }
+    if (clean.isNotEmpty() && clean.length <= WIRE_TOOL_ID_MAX) return clean
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+    val hex = digest.joinToString("") { "%02x".format(it) }
+    return "call_" + hex.take(WIRE_TOOL_ID_MAX - "call_".length)
+}
+
+/**
+ * [T-kimi-native-tool-id] Kimi's own tool-call id shape, `functions.<name>:<idx>`.
+ * K2's chat template puts the id into the prompt verbatim and Moonshot's
+ * tool-call guidance has the parser read the function name from it, so a
+ * request to Kimi sends these ids unchanged instead of [wireToolId]'s
+ * `functions-<name>-<idx>`. Anything else (a Responses-origin `call_…|fc_…`,
+ * another provider's id) still goes through [wireToolId].
+ */
+private val KIMI_NATIVE_TOOL_ID = Regex("^functions\\.[A-Za-z0-9_-]+:[0-9]+$")
+
+/** Longest Kimi-native id kept as is (tool names are at most 64 chars). */
+const val KIMI_NATIVE_TOOL_ID_MAX = 80
+
+fun isKimiNativeToolId(raw: String): Boolean =
+    raw.length <= KIMI_NATIVE_TOOL_ID_MAX && KIMI_NATIVE_TOOL_ID.matches(raw)
+
+/** [B02] [base] with `-n` appended, the base shortened so the whole stays within [WIRE_TOOL_ID_MAX]. */
+fun wireToolIdWithSuffix(base: String, n: Int): String {
+    val suffix = "-$n"
+    return base.take((WIRE_TOOL_ID_MAX - suffix.length).coerceAtLeast(0)) + suffix
+}
+
+/**
+ * [B02] The wire ids of one request. Each raw id gets [wireToolId]; when a
+ * DIFFERENT raw id already holds that wire id in this request, it gets a `-N`
+ * suffix instead, so calls that share a call_id stay distinct while a call and
+ * its result (the same raw id) always get the same id. Order-independent per raw
+ * id, deterministic for a given history.
+ */
+class WireToolIdMap(
+    /** [T-kimi-native-tool-id] Raw ids sent unchanged (see [isKimiNativeToolId]). */
+    private val keepAsIs: (String) -> Boolean = { false },
+) {
+    private val byRaw = HashMap<String, String>()
+    private val taken = HashSet<String>()
+
+    fun idFor(raw: String): String = byRaw.getOrPut(raw) {
+        val base = if (keepAsIs(raw)) raw else wireToolId(raw)
+        var id = base
+        var n = 2
+        while (!taken.add(id)) id = wireToolIdWithSuffix(base, n++)
+        id
+    }
+
+    /** Raw ids whose wire id differs from the raw id (sanitised, shortened or renamed). */
+    fun changed(): List<Pair<String, String>> = byRaw.filter { (raw, wire) -> raw != wire }.toList()
+}
+
+/**
+ * [B02] Diagnostic line when a request rewrote tool ids: lengths and the
+ * protocol only, never the ids (they can carry session details).
+ */
+fun logWireToolIds(protocol: String, ids: WireToolIdMap) {
+    val changed = ids.changed()
+    if (changed.isEmpty()) return
+    android.util.Log.i(
+        "ToolId",
+        "[ToolId] protocol=$protocol rewritten=${changed.size} " +
+            "rawLen=${changed.maxOf { it.first.length }} wireLen=${changed.maxOf { it.second.length }}",
+    )
+}

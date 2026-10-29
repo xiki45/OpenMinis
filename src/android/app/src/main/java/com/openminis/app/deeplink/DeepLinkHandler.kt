@@ -208,6 +208,16 @@ object DeepLinkHandler {
             "appearance" -> DeepLinkAction.OpenSettingsScreen(Routes.APPEARANCE)
             "background" -> DeepLinkAction.OpenSettingsScreen(Routes.BACKGROUND)
             "about" -> DeepLinkAction.OpenSettingsScreen(Routes.ABOUT)
+            "network" -> DeepLinkAction.OpenSettingsScreen(Routes.NETWORK)
+            // [FEAT-261021-04] Same paths and aliases as iOS DeepLinkRouter.
+            "tailscale" -> DeepLinkAction.OpenSettingsScreen(Routes.NETWORK_TAILSCALE)
+            "proxy", "proxies" -> {
+                // ?id=<proxy id> opens that proxy's editor (iOS FIX-261019-30).
+                uri.getQueryParameter("id")?.takeIf { it.isNotBlank() }
+                    ?.let { com.openminis.app.network.NetworkHub.pendingProxyEditor.value = it }
+                DeepLinkAction.OpenSettingsScreen(Routes.NETWORK_PROXIES)
+            }
+            "dns", "container-dns", "container_dns" -> DeepLinkAction.OpenSettingsScreen(Routes.CONTAINER_DNS)
             "permissions" -> DeepLinkAction.OpenPermissionSettings
             // mirrors live as a section inside Rootfs management — no
             // standalone destination, so route both /mirrors and /rootfs

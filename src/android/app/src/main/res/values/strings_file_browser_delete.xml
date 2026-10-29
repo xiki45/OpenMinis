@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- [T-filebrowser-delete-symlink-target] Delete refused on a folder PRoot binds over (iOS add538cd0). -->
+    <string name="filebrowser_delete_mount_point_refused">\"%1$s\" is a folder Minis mounts here, so it can\'t be deleted from the file browser. Nothing was deleted. To remove an external folder, use Settings › Mount External Folders.</string>
+</resources>

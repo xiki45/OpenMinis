@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- فارسی (fa). Generated from the English base; keep keys in base order. -->
+<resources>
+    <string name="config_audit_summary_header">خلاصهٔ تغییرات تأییدشده</string>
+    <string name="config_audit_detail_title">جزئیات تغییر</string>
+    <string name="config_audit_detail_status">وضعیت</string>
+    <string name="config_audit_detail_changed_by">تغییر توسط</string>
+    <string name="config_audit_detail_requested">زمان درخواست</string>
+    <string name="config_audit_detail_resolved">زمان رسیدگی</string>
+    <string name="config_audit_detail_note">یادداشت دستیار</string>
+    <string name="config_audit_detail_what_changed">چه چیزی تغییر کرد</string>
+    <string name="config_audit_detail_predates">این سابقه مربوط به پیش از توضیحات خوانا است، بنابراین فقط تغییر خام نمایش داده می‌شود.</string>
+    <string name="config_audit_detail_raw">تغییر خام</string>
+    <string name="config_audit_detail_setting">تنظیم</string>
+    <string name="config_audit_detail_before">قبل</string>
+    <string name="config_audit_detail_after">بعد</string>
+    <string name="config_audit_detail_revert">برگرداندن این تغییر</string>
+    <string name="config_audit_detail_reverted">برگردانده شد</string>
+    <string name="config_audit_revert_undoes">این کار موارد زیر را لغو می‌کند:</string>
+    <string name="config_audit_actor_assistant">دستیار</string>
+    <string name="config_audit_actor_you">شما</string>
+    <string name="config_audit_actor_assistant_revert">دستیار (برگرداندن)</string>
+    <string name="config_audit_actor_you_revert">شما (برگرداندن)</string>
+</resources>

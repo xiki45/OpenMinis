@@ -475,7 +475,7 @@ ACTIONS:
   find_elements   --selector <css>
   hover           --selector <css>
   get_readable
-  set_user_agent  --user-agent mobile_chrome|desktop_chrome|custom
+  set_user_agent  --user-agent mobile_chrome|desktop_chrome   (this tab only; aliases mobile, desktop)
   set_viewport    --width <n> --height <n> | --reset
   get_backbone    [--max-depth <n>]
   fetch           --url <url>

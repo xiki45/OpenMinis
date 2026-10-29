@@ -172,8 +172,11 @@ class ImageUploadFormatTest {
 
     @Test fun `first send labels the part by its encoded bytes`() {
         val vm = ProductionSources.read("ui/chat/ChatViewModel.kt")
-        assertTrue(vm.contains("val inferenceMime = ImageBudget.sniffFormat(inferenceBytes).mimeType ?: attachment.mimeType"))
+        // [T-image-real-tests] The per-image ingest moved into ChatAttachmentIngest.ingestImage
+        // (same file), where the attachment's MIME is the `mimeType` parameter.
+        assertTrue(vm.contains("val inferenceMime = ImageBudget.sniffFormat(inferenceBytes).mimeType ?: mimeType"))
         assertTrue(vm.contains("LLMMessage.ImagePart(inferenceBytes, inferenceMime, linuxPath = linuxPath)"))
         assertFalse(vm.contains("LLMMessage.ImagePart(inferenceBytes, attachment.mimeType"))
+        assertFalse(vm.contains("LLMMessage.ImagePart(inferenceBytes, mimeType"))
     }
 }

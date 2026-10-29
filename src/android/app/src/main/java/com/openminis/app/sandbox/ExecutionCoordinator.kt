@@ -3,6 +3,9 @@ package com.openminis.app.sandbox
 import android.content.Context
 import android.util.Log
 import com.openminis.app.data.repository.EnvVarRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -67,6 +70,8 @@ object ExecutionCoordinator {
         timeout: Long,
         lineCallback: ((String) -> Unit)?,
         fsSessionId: String?,
+        stopEpoch: Long,
+        spawned: java.util.concurrent.atomic.AtomicBoolean,
     ): CommandResult {
         val startTime = System.currentTimeMillis()
         val bindMounts = buildSessionBindMounts(fsSessionId ?: sessionId)
@@ -92,6 +97,19 @@ object ExecutionCoordinator {
             freshShells.compute(sessionId) { _, existing ->
                 (existing ?: newFreshShellSet()).also { it.add(shell) }
             }
+            // [FIX-261025-05] Registered first, then checked: a Stop from here
+            // on finds this shell and kills it (stop() before spawn makes it
+            // return at once), and a Stop that came while the command was still
+            // waiting (queue, boot, start-retry backoff, the seccomp retry gap)
+            // moved the epoch, so it is not started at all.
+            if (stoppedSince(sessionId, stopEpoch)) {
+                freshShells.computeIfPresent(sessionId) { _, set ->
+                    set.remove(shell)
+                    if (set.isEmpty()) null else set
+                }
+                return Pair(NOT_STARTED_OUTPUT, FreshProcessShell.CANCELLED_EXIT)
+            }
+            spawned.set(true)
             return try {
                 shell.execute(
                     command = command,
@@ -226,7 +244,17 @@ object ExecutionCoordinator {
          *  binds (a helper's PARENT). The shell process itself stays keyed by
          *  [sessionId], so stop / cleanup never reach the parent's shell. */
         fsSessionId: String? = null,
+        /**
+         * [FIX-261025-05] The session's [stopEpoch] when the CALLER's tool call
+         * began. A tool that waits before running its command (a `delay`
+         * countdown, a bash install) passes the value it took at its start,
+         * so a Stop during that wait still keeps the command from starting.
+         * Null = taken here.
+         */
+        stopEpoch: Long? = null,
     ): CommandResult {
+        val epoch = stopEpoch ?: stopEpoch(sessionId)
+        if (stoppedSince(sessionId, epoch)) return notStarted(sessionId, "before it was queued")
         // [T-android-concurrent-shell] Pick a FREE shell from this session's
         // pool instead of queueing behind its one shell.
         //
@@ -299,15 +327,58 @@ object ExecutionCoordinator {
         // [T-android-shell-process-budget] The queue does not eat the
         // command's timeout: once admitted it runs with its full budget. A
         // fresh spawn that failed ran nothing, so it re-queues and retries.
-        val outcome = GlobalShellThrottle.run(
-            tag = sessionId,
-            isStartFailure = ::isStartFailure,
-        ) {
-            if (executionStrategy == ShellExecutionStrategy.FRESH_PROCESS) {
-                executeFresh(sessionId, command, timeout, lineCallback, fsSessionId)
-            } else {
-                executeWarm(sessionId, command, timeout, lineCallback, fsSessionId)
+        // [FIX-261025-05] "Stop Current Tool Only" does not cancel a shell
+        // call (it kills the call's process group so the call returns its
+        // partial output). Before a process exists there is nothing to kill,
+        // so a command waiting in the throttle's queue or start-retry backoff
+        // used to wait out the Stop and then run anyway. The watcher cancels
+        // that wait as soon as this session is stopped, as long as nothing
+        // has been spawned yet; once it has, the ordinary group kill applies.
+        val spawned = java.util.concurrent.atomic.AtomicBoolean(false)
+        val outcome = try {
+            kotlinx.coroutines.coroutineScope {
+                val work = async {
+                    GlobalShellThrottle.run(
+                        tag = sessionId,
+                        isStartFailure = ::isStartFailure,
+                    ) {
+                        if (stoppedSince(sessionId, epoch)) {
+                            CommandResult(output = NOT_STARTED_OUTPUT, exitCode = FreshProcessShell.CANCELLED_EXIT, durationMs = 0L)
+                        } else if (executionStrategy == ShellExecutionStrategy.FRESH_PROCESS) {
+                            executeFresh(sessionId, command, timeout, lineCallback, fsSessionId, epoch, spawned)
+                        } else {
+                            spawned.set(true)
+                            executeWarm(sessionId, command, timeout, lineCallback, fsSessionId)
+                        }
+                    }
+                }
+                val watcher = launch {
+                    while (isActive && !spawned.get()) {
+                        // Re-read spawned: it may have been set since the loop
+                        // check, and a spawned command is the group kill's job -
+                        // cancelling it here would report "nothing was run"
+                        // for a command that already started.
+                        if (stoppedSince(sessionId, epoch) && !spawned.get()) {
+                            work.cancel(StoppedBeforeStart())
+                            break
+                        }
+                        kotlinx.coroutines.delay(STOP_WATCH_MS)
+                    }
+                }
+                try { work.await() } finally { watcher.cancel() }
             }
+        } catch (e: StoppedBeforeStart) {
+            return notStarted(sessionId, "while waiting to start")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Only our own watcher's cancel becomes a result; a cancellation
+            // from above (the whole turn was stopped) propagates.
+            if (e.cause is StoppedBeforeStart && kotlinx.coroutines.currentCoroutineContext().isActive) {
+                return notStarted(sessionId, "while waiting to start")
+            }
+            throw e
+        }
+        if (outcome is GlobalShellThrottle.Outcome.Ran && outcome.value.output == NOT_STARTED_OUTPUT) {
+            return notStarted(sessionId, "when it was admitted")
         }
         return when (outcome) {
             is GlobalShellThrottle.Outcome.Ran -> {
@@ -591,6 +662,7 @@ object ExecutionCoordinator {
      * Called when a session is closed. Stops and removes the shell.
      */
     fun sessionDidTerminate(sessionId: String) {
+        bumpStopEpoch(sessionId)
         val shell = removeSessionShells(sessionId)
         mutexes.remove(sessionId)
         // T124a: drop the snapshot too — a future shell for the same id
@@ -616,6 +688,11 @@ object ExecutionCoordinator {
      * The shell process is killed; next command will recreate it.
      */
     fun stopCurrentCommand(sessionId: String? = null) {
+        // [FIX-261025-05] Only a Stop aimed at a session moves its epoch. The
+        // session-less form is the shell restart after a mount change
+        // (MinisApp), not a user Stop: moving every epoch there told the
+        // commands still waiting in every chat "stopped by the user".
+        if (sessionId != null) bumpStopEpoch(sessionId)
         if (sessionId != null) {
             // [T-android-concurrent-shell] Stop EVERY shell in the session's
             // pool, not one. A session now holds several, and Stop must mean
@@ -624,8 +701,15 @@ object ExecutionCoordinator {
             // they cancelled still executing, with no way to reach them.
             val shell = removeSessionShells(sessionId)
             shell?.stop()
-            stopFreshShells(sessionId)
-            Log.i(TAG, "[$sessionId] Shells stopped by user")
+            val fresh = stopFreshShells(sessionId)
+            // [T-android-stop-late-write] Through AppLogger, so a field log
+            // shows that Stop reached the shell and what it killed; Log.i never
+            // reaches the exported log file.
+            com.openminis.app.logging.AppLogger.info(
+                TAG,
+                "[StopLate] [$sessionId] stopped by user, command killed: " +
+                    "persistentShell=${shell != null} freshCommands=$fresh",
+            )
         } else {
             // Stop all sessions (legacy/fallback)
             shells.values.forEach { it.stop() }
@@ -636,6 +720,65 @@ object ExecutionCoordinator {
             ShellExecutor.destroyCurrent()
         }
     }
+
+    /**
+     * [T-stop-choice] "Stop Current Tool Only": end the commands [sessionId] is
+     * running right now, and only those. Unlike [stopCurrentCommand] the pool
+     * is kept, so background processes the agent started (`setsid`/`nohup`
+     * servers, watchers) survive; each pooled shell kills its foreground
+     * process group ([PersistentShell.interruptForeground]), and a
+     * fresh-process command is stopped the way it always is - by its group,
+     * leaving proot alive for anything it detached.
+     *
+     * @return how many commands were signalled.
+     */
+    fun interruptForegroundCommands(sessionId: String): Int {
+        bumpStopEpoch(sessionId)
+        val prefix = "$sessionId#"
+        var pooled = 0
+        for ((key, shell) in shells.entries.toList()) {
+            if (key != sessionId && !key.startsWith(prefix)) continue
+            if (shell.interruptForeground()) pooled++
+        }
+        val fresh = stopFreshShells(sessionId)
+        com.openminis.app.logging.AppLogger.info(
+            TAG,
+            "[stop-tool] [$sessionId] foreground commands interrupted, pool kept: " +
+                "pooled=$pooled freshCommands=$fresh",
+        )
+        return pooled + fresh
+    }
+
+    /**
+     * [FIX-261025-05] Bumped by every Stop that reaches [sessionId]'s commands
+     * ([stopCurrentCommand] with a session, [interruptForegroundCommands],
+     * [sessionDidTerminate]). A command compares it with the value its tool
+     * call began with, so a Stop that came while it was still waiting - a
+     * `delay` countdown, the process-budget queue, PRoot boot, a bash install,
+     * a start retry - keeps it from starting, even though no process existed
+     * for the Stop to kill.
+     */
+    private val stopEpochs = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+
+    fun stopEpoch(sessionId: String): Long = stopEpochs[sessionId]?.get() ?: 0L
+
+    fun stoppedSince(sessionId: String, epoch: Long): Boolean = stopEpoch(sessionId) != epoch
+
+    private fun bumpStopEpoch(sessionId: String) {
+        stopEpochs.computeIfAbsent(sessionId) { java.util.concurrent.atomic.AtomicLong() }.incrementAndGet()
+    }
+
+    private class StoppedBeforeStart : kotlinx.coroutines.CancellationException("stopped by the user before the command started")
+
+    private fun notStarted(sessionId: String, phase: String): CommandResult {
+        com.openminis.app.logging.AppLogger.info(TAG, "[stop-tool] [$sessionId] command stopped $phase - not run")
+        return CommandResult(output = NOT_STARTED_OUTPUT, exitCode = FreshProcessShell.CANCELLED_EXIT, durationMs = 0L)
+    }
+
+    /** What a command stopped before it started answers. Read by the model. */
+    const val NOT_STARTED_OUTPUT = "[Cancelled] Stopped by the user before the command started; nothing was run."
+
+    private const val STOP_WATCH_MS = 200L
 
     /**
      * Stop every fresh-process command running for [sessionId].
@@ -688,9 +831,19 @@ object ExecutionCoordinator {
      *
      * Safe to call before PRoot has booted — it's a no-op in that case.
      */
-    suspend fun broadcastProxyChange() {
+    suspend fun broadcastProxyChange(cleared: Set<String> = emptySet()) {
         if (!PRootKernel.isBooted) return
-        val env = PRootKernel.updateProxy(appContext)
+        // [T-net-android-phase3] A Settings > Network "Shell" route wins over
+        // the system proxy, as it does when a shell is spawned; without one
+        // (the default) the block is exactly the system proxy's, as before.
+        // [FEAT-261021-10] [cleared] names keys the Network module set before
+        // and no longer does (ALL_PROXY is not in the system block): a shell
+        // route turned back to direct must not leave the entry's SOCKS URL
+        // behind in a running shell. Cleared keys go first so the system
+        // proxy's own HTTP(S)_PROXY / NO_PROXY, when set, take their place.
+        val env = cleared.associateWith { "" } +
+            PRootKernel.updateProxy(appContext) +
+            com.openminis.app.network.NetworkShellEnvironment.proxyVariables()
         for ((_, shell) in shells) {
             if (shell.isAlive) shell.applyEnvironment(env)
         }

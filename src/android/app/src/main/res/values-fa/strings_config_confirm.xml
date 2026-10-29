@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- فارسی (fa). Generated from the English base; keep keys in base order. -->
+<resources>
+    <string name="config_confirm_title_one">تأیید تغییر</string>
+    <string name="config_confirm_title_many">تأیید %1$d تغییر</string>
+    <string name="config_confirm_cancel">لغو</string>
+    <string name="config_confirm_apply">اعمال</string>
+    <string name="config_confirm_reject_all">رد همه</string>
+    <string name="config_confirm_risk_destructive">این ممکن است بر فراخوانی‌های بعدی ابزار اثر بگذارد.</string>
+    <string name="config_confirm_risk_sensitive">برگشت‌پذیر است، اما ارزش یک نگاه سریع را دارد.</string>
+</resources>

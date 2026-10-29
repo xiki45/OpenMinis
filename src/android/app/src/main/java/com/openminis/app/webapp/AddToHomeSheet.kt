@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import com.openminis.app.MinisApp
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.MinisOutlinedButton
+import com.openminis.app.ui.components.safeLaunchPicker
 import com.openminis.app.R
 import com.openminis.app.data.repository.WebAppShortcutRepository
 import kotlinx.coroutines.Dispatchers
@@ -305,8 +306,10 @@ fun AddToHomeSheet(
                     IconOption(
                         selected = selectedIcon is IconChoice.Gallery,
                         onClick = {
-                            galleryLauncher.launch(
+                            galleryLauncher.safeLaunchPicker(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                context,
+                                "AddToHome",
                             )
                         },
                         contentDescription = stringResource(R.string.webapp_sheet_icon_pick),

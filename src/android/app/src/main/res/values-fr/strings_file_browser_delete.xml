@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">« %1$s » est un dossier que Minis monte ici ; il ne peut donc pas être supprimé depuis le navigateur de fichiers. Rien n’a été supprimé. Pour retirer un dossier externe, allez dans Réglages › Monter des dossiers externes.</string>
+</resources>

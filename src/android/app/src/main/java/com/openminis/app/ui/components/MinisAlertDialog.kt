@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -49,6 +50,12 @@ fun MinisAlertDialog(
      */
     neutralText: String? = null,
     onNeutral: (() -> Unit)? = null,
+    /**
+     * The neutral action's color; null keeps the confirm button's. Lets a
+     * dialog put a safe primary choice beside a destructive confirm
+     * ([T-stop-choice]: "Stop Current Tool Only" next to a red "Stop All").
+     */
+    neutralColor: Color? = null,
 ) {
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -98,7 +105,7 @@ fun MinisAlertDialog(
                             Text(text = confirmText, color = confirmColor)
                         }
                         MinisTextButton(onClick = onNeutral) {
-                            Text(text = neutralText, color = confirmColor)
+                            Text(text = neutralText, color = neutralColor ?: confirmColor)
                         }
                     }
                 } else {

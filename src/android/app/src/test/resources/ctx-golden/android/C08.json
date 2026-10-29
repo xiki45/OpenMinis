@@ -1,0 +1,1414 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Small ones"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif1.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "da727828d559cbf6",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif2.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "017962e9af1f11d7",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif3.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "9a8829abac1ed15b",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif4.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5ee7a3e09e2c32c3",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif5.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "6cd97db8df72993f",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif6.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "3c720f5b2f174733",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif7.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d6c154168fa269ea",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif8.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "c5485365bcf5f274",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/exif1.jpg\" url=\"minis://attachments/uploads/exif1.jpg\" size=\"30665\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attac\u2026[1228 chars sha256:f59d1af292bb]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "OK"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Big one"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/big_exif6.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/big_exif6.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big_exif6.jpg\" url=\"minis://attachments/uploads/big_exif6.jpg\" size=\"191177\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Small ones"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif1.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "da727828d559cbf6",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif2.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "017962e9af1f11d7",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif3.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "9a8829abac1ed15b",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif4.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5ee7a3e09e2c32c3",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif5.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "6cd97db8df72993f",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif6.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "3c720f5b2f174733",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif7.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d6c154168fa269ea",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif8.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "c5485365bcf5f274",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/exif1.jpg\" url=\"minis://attachments/uploads/exif1.jpg\" size=\"30665\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attac\u2026[1228 chars sha256:f59d1af292bb]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "OK"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Big one"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/big_exif6.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/big_exif6.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big_exif6.jpg\" url=\"minis://attachments/uploads/big_exif6.jpg\" size=\"191177\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Small ones"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif1.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "da727828d559cbf6",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif2.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "017962e9af1f11d7",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif3.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "9a8829abac1ed15b",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif4.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5ee7a3e09e2c32c3",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif5.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "6cd97db8df72993f",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif6.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "3c720f5b2f174733",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif7.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d6c154168fa269ea",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif8.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "c5485365bcf5f274",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/exif1.jpg\" url=\"minis://attachments/uploads/exif1.jpg\" size=\"30665\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attac\u2026[1228 chars sha256:f59d1af292bb]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "OK"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Big one"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/big_exif6.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/big_exif6.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big_exif6.jpg\" url=\"minis://attachments/uploads/big_exif6.jpg\" size=\"191177\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Small ones"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif1.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "da727828d559cbf6",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif2.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "017962e9af1f11d7",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif3.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "9a8829abac1ed15b",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif4.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5ee7a3e09e2c32c3",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif5.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "6cd97db8df72993f",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif6.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "3c720f5b2f174733",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif7.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d6c154168fa269ea",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/exif8.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "c5485365bcf5f274",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/exif1.jpg\" url=\"minis://attachments/uploads/exif1.jpg\" size=\"30665\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attac\u2026[1228 chars sha256:f59d1af292bb]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "OK"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Big one"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/big_exif6.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/big_exif6.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big_exif6.jpg\" url=\"minis://attachments/uploads/big_exif6.jpg\" size=\"191177\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Small ones"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "da727828d559cbf6",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "017962e9af1f11d7",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "9a8829abac1ed15b",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5ee7a3e09e2c32c3",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "6cd97db8df72993f",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "3c720f5b2f174733",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d6c154168fa269ea",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "c5485365bcf5f274",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/exif1.jpg\" url=\"minis://attachments/uploads/exif1.jpg\" size=\"30665\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attac\u2026[1228 chars sha256:f59d1af292bb]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "OK"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Big one"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/big_exif6.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big_exif6.jpg\" url=\"minis://attachments/uploads/big_exif6.jpg\" size=\"191177\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Small ones"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "da727828d559cbf6",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "017962e9af1f11d7",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "9a8829abac1ed15b",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5ee7a3e09e2c32c3",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "6cd97db8df72993f",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "3c720f5b2f174733",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d6c154168fa269ea",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "c5485365bcf5f274",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/exif1.jpg\" url=\"minis://attachments/uploads/exif1.jpg\" size=\"30665\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attac\u2026[1228 chars sha256:f59d1af292bb]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "OK"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Big one"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/big_exif6.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big_exif6.jpg\" url=\"minis://attachments/uploads/big_exif6.jpg\" size=\"191177\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Small ones"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "da727828d559cbf6",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "017962e9af1f11d7",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "9a8829abac1ed15b",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5ee7a3e09e2c32c3",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "6cd97db8df72993f",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "3c720f5b2f174733",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d6c154168fa269ea",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "c5485365bcf5f274",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/exif1.jpg\" url=\"minis://attachments/uploads/exif1.jpg\" size=\"30665\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attac\u2026[1228 chars sha256:f59d1af292bb]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "OK"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Big one"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/big_exif6.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big_exif6.jpg\" url=\"minis://attachments/uploads/big_exif6.jpg\" size=\"191177\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Small ones"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "da727828d559cbf6",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "017962e9af1f11d7",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "9a8829abac1ed15b",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5ee7a3e09e2c32c3",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "6cd97db8df72993f",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "3c720f5b2f174733",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "d6c154168fa269ea",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 40888,
+              "bytes": 30665,
+              "decodable": true,
+              "h": 1200,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "c5485365bcf5f274",
+              "w": 1600
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/exif1.jpg\" url=\"minis://attachments/uploads/exif1.jpg\" size=\"30665\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attac\u2026[1228 chars sha256:f59d1af292bb]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "OK"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Big one"
+          },
+          {
+            "image": {
+              "base64Len": 63508,
+              "bytes": 47629,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "819d038fb73b3261",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/big_exif6.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/big_exif6.jpg\" url=\"minis://attachments/uploads/big_exif6.jpg\" size=\"191177\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

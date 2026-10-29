@@ -24,10 +24,10 @@ class AgentJobRegistryTest {
     @Test
     fun `child job limit counts pending and running, not finished`() {
         val a = child(); val b = child(); val c = child()
-        assertFalse("3 live children must block a 4th", AgentJobRegistry.canStartChildJob)
+        assertFalse("3 live children must block a 4th", AgentJobRegistry.canStartChildJob("P"))
         AgentJobRegistry.finish(a.id, AgentJobState.DONE, "ok")
-        assertTrue("a finished child frees its slot", AgentJobRegistry.canStartChildJob)
-        assertEquals(2, AgentJobRegistry.runningChildJobCount)
+        assertTrue("a finished child frees its slot", AgentJobRegistry.canStartChildJob("P"))
+        assertEquals(2, AgentJobRegistry.runningChildJobCount("P"))
         assertEquals(setOf(b.id, c.id), AgentJobRegistry.activeChildren("P").map { it.id }.toSet())
     }
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-confirm-i18n] minis-config approval dialog (ConfigConfirmDialog).
+     Wording and translations copied from iOS Localizable.xcstrings
+     (ConfigConfirmSheet keys); a locale iOS lacks falls back to English. -->
+<resources>
+    <string name="config_confirm_title_one">Potvrdit změnu</string>
+    <string name="config_confirm_title_many">Potvrdit změny (%1$d)</string>
+    <string name="config_confirm_cancel">Zrušit</string>
+    <string name="config_confirm_apply">Použít</string>
+    <string name="config_confirm_reject_all">Zamítnout vše</string>
+    <string name="config_confirm_risk_destructive">Může to ovlivnit pozdější volání nástrojů.</string>
+    <string name="config_confirm_risk_sensitive">Vratné, ale stojí za rychlý pohled.</string>
+</resources>

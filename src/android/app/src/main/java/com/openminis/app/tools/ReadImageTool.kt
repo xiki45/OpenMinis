@@ -1,10 +1,9 @@
 package com.openminis.app.tools
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
+import com.openminis.app.provider.ImageBudget
 import com.openminis.app.sandbox.PRootKernel
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -58,34 +57,80 @@ object ReadImageTool {
                     PRootKernel.resolveSessionHostPath(sessionId, path, context)
                 } else null
             ) ?: PRootKernel.resolveHostPath(path)
-                ?: return ToolExecutionResult("Error: Cannot resolve path: $path", false, toolTitle = toolTitle)
+                ?: return ToolExecutionResult(failureText(path, resolved = false, file = null), false, toolTitle = toolTitle)
 
-            if (!file.exists()) {
-                return ToolExecutionResult("Error: File not found: $path", false, toolTitle = toolTitle)
+            if (!file.exists() || file.isDirectory) {
+                return ToolExecutionResult(failureText(path, resolved = true, file = file), false, toolTitle = toolTitle)
             }
 
-            val original = BitmapFactory.decodeFile(file.absolutePath)
-                ?: return ToolExecutionResult("Error: Cannot decode image: $path", false, toolTitle = toolTitle)
+            imageResult(file, path, toolTitle)
+        } catch (e: Exception) {
+            ToolExecutionResult("Error reading image: ${e.message}", false)
+        }
+    }
+
+    /**
+     * [T-readimage-fail-visible] The tool result (and card text) for a
+     * read_image that could not load its file, saying WHICH failure it was
+     * (iOS readImageFailureText, 1eb3e2bef). The old "File not found" /
+     * "Cannot decode image" gave no size and no hint, and sent models off
+     * guessing at caches and delays when the file simply did not exist yet.
+     * [file] is the resolved host file (null when [resolved] is false).
+     *
+     * Differences from iOS, as on Windows: the format list is what
+     * BitmapFactory decodes here (HEIF only from Android 9, no TIFF), and a
+     * folder gets its own line instead of "not a decodable image".
+     */
+    internal fun failureText(
+        path: String,
+        resolved: Boolean,
+        file: java.io.File?,
+        heif: Boolean = android.os.Build.VERSION.SDK_INT >= 28,
+    ): String {
+        if (!resolved || file == null) {
+            return "Error: '$path' is not a readable Minis path. Use a path under /var/minis/ (e.g. /var/minis/workspace/chart.png) or a minis:// URL."
+        }
+        if (!file.exists()) {
+            return "Error: No file at '$path'. If a command in this same turn creates it, read it in the next turn after that command has finished."
+        }
+        if (file.isDirectory) return "Error: '$path' is a folder, not an image file."
+        val size = file.length()
+        if (size == 0L) return "Error: '$path' exists but is empty (0 bytes) - it may still be being written."
+        val formats = if (heif) "PNG, JPEG, GIF, WebP, BMP, HEIF" else "PNG, JPEG, GIF, WebP, BMP"
+        return "Error: '$path' exists ($size bytes) but is not a decodable image. Supported: $formats."
+    }
+
+    /**
+     * [T-image-real-tests] The "file → model image" half of [execute], split
+     * from path resolution so it can be called on a plain file. Unchanged:
+     * full decode, floor-fit within 2000 px, JPEG q85, metadata with the
+     * original pixel size. Graphics calls go through [ImageBudget.codec].
+     * Exceptions propagate to [execute]'s catch, as before.
+     */
+    internal fun imageResult(file: java.io.File, path: String, toolTitle: String): ToolExecutionResult {
+            val codec = ImageBudget.codec
+            val original = codec.decodeFile(file.absolutePath)
+                ?: return ToolExecutionResult(failureText(path, resolved = true, file = file), false, toolTitle = toolTitle)
 
             val maxEdge = 2000
-            val scaled = if (original.width > maxEdge || original.height > maxEdge) {
-                val scale = maxEdge.toFloat() / maxOf(original.width, original.height)
-                val w = (original.width * scale).toInt()
-                val h = (original.height * scale).toInt()
-                Bitmap.createScaledBitmap(original, w, h, true)
+            val scaled = if (codec.width(original) > maxEdge || codec.height(original) > maxEdge) {
+                val scale = maxEdge.toFloat() / maxOf(codec.width(original), codec.height(original))
+                val w = (codec.width(original) * scale).toInt()
+                val h = (codec.height(original) * scale).toInt()
+                codec.scale(original, w, h)
             } else {
                 original
             }
 
             val out = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            codec.compress(scaled, png = false, quality = 85, out = out)
             val imageBytes = out.toByteArray()
 
-            if (scaled !== original) scaled.recycle()
-            original.recycle()
+            if (scaled !== original) codec.recycle(scaled)
+            codec.recycle(original)
 
-            val metadata = "[$path | ${original.width}x${original.height} | ${file.length()} bytes]"
-            ToolExecutionResult(
+            val metadata = "[$path | ${codec.width(original)}x${codec.height(original)} | ${file.length()} bytes]"
+            return ToolExecutionResult(
                 output = metadata,
                 success = true,
                 imageData = imageBytes,
@@ -95,8 +140,5 @@ object ReadImageTool {
                 // (mirrors iOS ToolLiveSheet.readImageTool case).
                 imageFilePath = file.absolutePath,
             )
-        } catch (e: Exception) {
-            ToolExecutionResult("Error reading image: ${e.message}", false)
-        }
     }
 }

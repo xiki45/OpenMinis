@@ -104,19 +104,30 @@ internal object ContextUsageColors {
 internal fun contextUsageAnnotatedText(hint: ContextUsageHint): AnnotatedString {
     val percent = hint.highlights.getOrNull(0) ?: ""
     val size = hint.highlights.getOrNull(1) ?: ""
-    val full = stringResource(R.string.chat_context_usage_hint, percent, size)
+    val context = stringResource(R.string.chat_context_usage_hint, percent, size)
+    // [T-quota-composer-hint] The quota segment follows the context figures.
+    val full = hint.quotaText?.let { "$context · $it" } ?: context
     val highlight = ContextUsageColors.textHighlight(hint.tier)
+    val quotaHighlight = ContextUsageColors.textHighlight(hint.quotaTier)
     return buildAnnotatedString {
         append(full)
         for (segment in hint.highlights) {
             if (segment.isEmpty()) continue
-            val start = full.indexOf(segment)
+            val start = context.indexOf(segment)
             if (start < 0) continue
             addStyle(
                 SpanStyle(color = highlight, fontWeight = FontWeight.Medium),
                 start,
                 start + segment.length,
             )
+        }
+        // Tinted by the quota's own tier; a normal quota stays plain text.
+        val q = hint.quotaHighlight
+        if (!q.isNullOrEmpty() && hint.quotaTier != ContextUsage.Tier.NORMAL) {
+            val start = full.indexOf(q, startIndex = context.length)
+            if (start >= 0) {
+                addStyle(SpanStyle(color = quotaHighlight, fontWeight = FontWeight.Medium), start, start + q.length)
+            }
         }
     }
 }

@@ -217,27 +217,90 @@ object ContextSizeMeter {
         return kotlin.math.ceil(tokens).toInt()
     }
 
-    const val PER_MESSAGE_OVERHEAD = 4
-    const val PER_TOOL_PART_OVERHEAD = 4
+    // ── Wire framing [T-ctx-count-wire-framing] (port of iOS e48d29ee9) ─────
+    //
+    // A message is not only its text. On the wire every tool call carries its
+    // id (twice: on the call and on the result), its arguments as a JSON
+    // string INSIDE the JSON body (so every quote and backslash is escaped
+    // again), and the keys and punctuation that frame the message.
+    //
+    // Measured on Android's own Chat Completions body (OpenAIProvider
+    // .buildRequestBody, DeepSeek with reasoning echo; ContextWireFramingTest):
+    // with the old 4 + 4 constants the body read 2.02x the estimate for 120
+    // small tool rounds, 1.91x for a trimmed history and 1.08x for large
+    // messages. That share grows with the number of messages, not with their
+    // size, so the calibration ratio jumped at every trim - when the planner
+    // relies on it most. iOS saw the same on a device (1.009 -> 1.194).
+    //
+    // The constants are the estimator applied to the compact Chat Completions
+    // framing, which Android sends byte for byte like iOS; Anthropic's
+    // tool_use / tool_result blocks are about the same size, and what differs
+    // per provider stays with the calibration ratio.
+
+    /** `{"role":"user","content":""}` */
+    const val PER_MESSAGE_OVERHEAD = 8
+    /** `"tool_calls":[{"id":"","type":"function","function":{"name":"","arguments":""}}]` */
+    const val PER_TOOL_USE_OVERHEAD = 22
+    /** What a tool message adds to a plain one: `"tool_call_id":""`. */
+    const val PER_TOOL_RESULT_OVERHEAD = 6
+    /** `"reasoning_content":""` on an assistant turn, sent even when empty. */
+    const val REASONING_FIELD_OVERHEAD = 6
+
+    /**
+     * Extra tokens a string costs once it is a JSON string value: each quote,
+     * backslash and newline / CR / tab gains a backslash (x 0.35, the
+     * estimator's rate for ASCII punctuation). iOS `wireEscapeTokens`.
+     */
+    fun wireEscapeTokens(text: String): Int {
+        var escaped = 0
+        for (c in text) if (c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t') escaped++
+        return kotlin.math.ceil(escaped * 0.35).toInt()
+    }
+
+    /** A string as it is sent: its tokens plus its escaping. iOS `estimateWireTokens`. */
+    fun estimateWireTokens(text: String): Int =
+        if (text.isEmpty()) 0 else estimateTokens(text) + wireEscapeTokens(text)
 
     fun estimateTokens(part: AgentContentPart): Int = when (part) {
-        is AgentContentPart.Text -> estimateTokens(part.text)
+        is AgentContentPart.Text -> estimateWireTokens(part.text)
+        // The arguments travel as a JSON string inside the body: their own
+        // JSON (input.toString()) escaped once more.
         is AgentContentPart.ToolUse ->
-            estimateTokens(part.name) + estimateTokens(part.input.toString()) + PER_TOOL_PART_OVERHEAD
+            estimateTokens(part.name) + estimateTokens(part.id) + estimateWireTokens(part.input.toString()) +
+                PER_TOOL_USE_OVERHEAD
+        // The tool's name is not repeated on the result; its id is.
         is AgentContentPart.ToolResult ->
-            estimateTokens(part.name) + estimateTokens(part.content) + PER_TOOL_PART_OVERHEAD +
+            estimateWireTokens(part.content) + estimateTokens(part.id) + PER_TOOL_RESULT_OVERHEAD +
                 (part.imageData?.let { imageTokens(it) } ?: 0)
         is AgentContentPart.ImageData -> imageTokens(part.data)
     }
 
-    /** Providers serialise `contentParts` when present and `content` otherwise. */
-    fun estimateTokens(message: LLMMessage): Int {
+    /**
+     * Providers serialise `contentParts` when present and `content` otherwise.
+     *
+     * [T-ctx-count-reasoning] [includeReasoning]: the provider replays
+     * `reasoningContent` on every past assistant turn (DeepSeek / Chat
+     * Completions echo, unsigned interleaved thinking), so it is part of the
+     * request and must be counted. Leaving it out made a 341,873-token request
+     * read as 146,874 (field run 2026-10-07): compaction triggered late and
+     * believed it had freed space it had not.
+     */
+    fun estimateTokens(message: LLMMessage, includeReasoning: Boolean = false): Int {
         val body = if (message.contentParts.isNotEmpty()) {
             message.contentParts.sumOf { estimateTokens(it) }
         } else {
-            estimateTokens(message.content)
+            estimateWireTokens(message.content)
         }
-        return PER_MESSAGE_OVERHEAD + body + message.imageParts.sumOf { imageTokens(it.data) }
+        // [T-ctx-count-wire-framing] The field costs even when empty: an
+        // assistant turn with reasoningContent = "" is sent as
+        // `"reasoning_content":""`. Null is not sent. (The estimate cache key
+        // already tells "" from null: `|rc0` vs `|rc-1`.)
+        val reasoning = if (includeReasoning && message.role == LLMMessage.Role.ASSISTANT) {
+            message.reasoningContent?.let { estimateWireTokens(it) + REASONING_FIELD_OVERHEAD } ?: 0
+        } else {
+            0
+        }
+        return PER_MESSAGE_OVERHEAD + body + reasoning + message.imageParts.sumOf { imageTokens(it.data) }
     }
 
     /**
@@ -248,16 +311,21 @@ object ContextSizeMeter {
      * is a new key, so a shrunk message is re-measured. In-flight messages (no
      * dbMessageId yet) are always measured.
      */
-    fun estimateTokens(messages: List<LLMMessage>): Int = messages.sumOf { estimateCached(it) }
+    fun estimateTokens(messages: List<LLMMessage>, includeReasoning: Boolean = false): Int =
+        messages.sumOf { estimateCached(it, includeReasoning) }
 
-    private fun estimateCached(message: LLMMessage): Int {
-        val id = message.dbMessageId ?: return estimateTokens(message)
+    private fun estimateCached(message: LLMMessage, includeReasoning: Boolean = false): Int {
+        val id = message.dbMessageId ?: return estimateTokens(message, includeReasoning)
         val shape = buildString {
             append(id).append('|').append(message.content.length).append('|').append(message.contentParts.size)
+            // [T-ctx-count-reasoning] The trim ladder empties reasoning in place.
+            if (includeReasoning) append("|rc").append(message.reasoningContent?.length ?: -1)
             for (part in message.contentParts) {
                 when (part) {
                     is AgentContentPart.Text -> append("|t").append(part.text.length)
-                    is AgentContentPart.ToolUse -> append("|u").append(part.input.length()).append(if (part.isOffloadedArgument) "o" else "")
+                    // [T-ctx-trim-ladder] Serialized length too: shrinking an argument keeps its key count.
+                    is AgentContentPart.ToolUse -> append("|u").append(part.input.length()).append(':').append(part.input.toString().length)
+                        .append(if (part.isOffloadedArgument) "o" else "")
                     is AgentContentPart.ToolResult -> append("|r").append(part.content.length).append('/').append(part.imageData?.size ?: 0)
                     is AgentContentPart.ImageData -> append("|i").append(part.data.size)
                 }
@@ -265,7 +333,7 @@ object ContextSizeMeter {
             for (img in message.imageParts) append("|p").append(img.data.size)
         }
         synchronized(messageEstimateCache) { messageEstimateCache[shape]?.let { return it } }
-        val tokens = estimateTokens(message)
+        val tokens = estimateTokens(message, includeReasoning)
         synchronized(messageEstimateCache) { messageEstimateCache[shape] = tokens }
         return tokens
     }
@@ -282,6 +350,8 @@ object ContextSizeMeter {
             for ((name, param) in tool.parameters) {
                 total += estimateTokens(name) + estimateTokens(param.description) + 4
                 param.enumValues?.forEach { total += estimateTokens(it) + 1 }
+                // [T-port-nested-schema] A nested schema's text is sent too.
+                param.schema?.let { total += estimateTokens(it.estimationText) + 8 }
             }
         }
         return total
@@ -296,7 +366,10 @@ object ContextSizeMeter {
      * do not measure such as reasoning echoes).
      */
     const val CALIBRATION_MIN = 0.8
-    const val CALIBRATION_MAX = 3.0
+    // [T-ctx-count-reasoning] Was 3.0. With reasoning counted the learned ratio
+    // sits near 1.0-1.3; the wider ceiling only lets a meter that still misses
+    // something converge on the provider's number instead of stopping at 3x.
+    const val CALIBRATION_MAX = 8.0
 
     fun calibrationRatio(reported: Int, estimated: Int): Double? {
         if (reported <= 0 || estimated <= 0) return null
@@ -395,8 +468,28 @@ object ContextSizeMeter {
     }
 
     /** The pair in a usage row's JSON, or null for a row written before the pair existed. */
+    /**
+     * [T-ctx-count-reasoning] Version of the estimate a stored sample was taken
+     * with. v2 counts replayed reasoning; a v1 ratio (reported / an estimate
+     * that missed the reasoning, 3-7x on DeepSeek) multiplied onto a v2
+     * estimate double-counts it - field 2026-10-07: a 22K request read as
+     * 229K and every turn stopped as "context full". Older rows are skipped.
+     *
+     * [T-ctx-estimator-version-exact] Rows with a NEWER version are skipped
+     * too: a ratio is only valid for the estimator that produced it, in
+     * either direction.
+     *
+     * [T-ctx-count-wire-framing] 3 = plus wire framing (call ids, JSON-string
+     * escaping, per-message and per-tool-call keys), the same estimate iOS
+     * stamps 3 since e48d29ee9. A v2 ratio already contains the framing this
+     * estimate now counts (2x for small tool rounds), so v2 rows are skipped
+     * like v1; iOS v3 rows from a synced session are now replayed.
+     */
+    const val ESTIMATOR_VERSION = 3
+
     fun calibrationSample(usageJson: String): CalibrationSample? {
         val o = runCatching { org.json.JSONObject(usageJson) }.getOrNull() ?: return null
+        if (o.optInt("estimatorVersion", 1) != ESTIMATOR_VERSION) return null
         val reported = o.optInt("latestContextTokens", 0)
         val estimated = o.optInt("estimatedRequestTokens", 0)
         if (reported <= 0 || estimated <= 0) return null

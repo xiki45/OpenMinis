@@ -213,19 +213,14 @@ class GPT6SolLunaOpus55Test {
     }
 
     @Test
-    fun `opus 5 5 is never sent the literal thinking disabled`() {
+    fun `opus 5 5 off is adaptive at low effort - never the literal thinking disabled`() {
         // Opus 5.5 answers `thinking.type="disabled"` with a 400
-        // ("not supported for this model") and treats an ABSENT thinking field
-        // as adaptive — which is exactly what OFF wants. The predicate is
-        // version-keyed (`major == 4 && minor >= 6`), so a major=5 id falls
-        // through by construction; this pins that so a future "simplification"
-        // to `>= 4.6` cannot silently re-break it.
-        assertFalse(
-            "claude-opus-5-5 must NOT accept the explicit disabled literal",
-            AnthropicProvider.modelAcceptsExplicitThinkingDisabled("claude-opus-5-5"),
-        )
-        // The 4.6-4.x generation still needs it sent explicitly.
-        assertTrue(AnthropicProvider.modelAcceptsExplicitThinkingDisabled("claude-opus-4-8"))
+        // ("not supported for this model") — thinking is always on — and an
+        // ABSENT field thinks at its default (medium) effort. [T-claude5-thinking-off]
+        // OFF is therefore adaptive + output_config.effort "low" (iOS ef86ed890).
+        assertEquals(AnthropicProvider.OffThinking.LOW_EFFORT, AnthropicProvider.offThinking("claude-opus-5-5"))
+        // The 4.6-4.x generation still gets the explicit disabled literal.
+        assertEquals(AnthropicProvider.OffThinking.DISABLED, AnthropicProvider.offThinking("claude-opus-4-8"))
 
         val body = anthropicBody(opus55, ThinkingLevel.OFF)
         val thinking = body.optJSONObject("thinking")
@@ -235,6 +230,9 @@ class GPT6SolLunaOpus55Test {
             "disabled",
             thinking?.optString("type"),
         )
+        assertEquals("adaptive", thinking?.optString("type"))
+        assertEquals("summarized", thinking?.optString("display"))
+        assertEquals("low", body.optJSONObject("output_config")?.optString("effort"))
     }
 
     @Test

@@ -62,10 +62,12 @@ class HangFalsePositiveTest {
     fun `an implausible gap or an idle main thread is rejected before it is counted`() {
         val watch = src("src/main/java/com/openminis/app/diagnostics/HangDetector.kt")
             .substringAfter("private fun watchLoop()").substringBefore("private fun writeStallSample(")
-        val guard = watch.indexOf("since > MAX_PLAUSIBLE_GAP_MS")
-        val idle = watch.indexOf("isIdleMainStack(mainThreadStack())")
+        // [T-hang-background-freeze] The checks live in notAHangReason now.
+        val guard = watch.indexOf("notAHangReason(since, bg, ::visibleNow) { isIdleMainStack(mainThreadStack()) }")
         val count = watch.indexOf("recordHang(durationMs = since)")
-        assertTrue(guard in 0 until count && idle in 0 until count)
+        assertTrue(guard in 0 until count)
+        assertTrue(HangDetector.notAHangReason(6 * 60_000L, backgrounded = false, { true }) { false } != null)
+        assertTrue(HangDetector.notAHangReason(4_000L, backgrounded = false, { true }) { true } != null)
     }
 
     @Test

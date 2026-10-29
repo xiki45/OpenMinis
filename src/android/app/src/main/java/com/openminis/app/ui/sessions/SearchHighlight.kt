@@ -6,42 +6,43 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import com.openminis.app.data.repository.SessionSearch
 
 /**
  * Build an [AnnotatedString] that highlights every case-insensitive
- * occurrence of [query] inside [text] with the theme's tertiaryContainer
- * background. Blank query returns the plain string with no spans.
+ * occurrence of every keyword of [query] inside [text] with the theme's
+ * tertiaryContainer background. Blank query returns the plain string with no
+ * spans.
  *
  * Used by the home session-list search results to point the user at the
- * exact span that matched their query, in both the session title and the
+ * exact spans that matched their query, in both the session title and the
  * extracted message snippet.
+ *
+ * [T-search-multi-keyword] (iOS b09df3824) The query is split into keywords
+ * exactly as the search splits it ([SessionSearch.searchTerms]), so "apple
+ * banana" marks both words wherever they are; overlapping or touching hits
+ * are one span ([SessionSearch.hitRanges]), so "gpt" and "gpt-5" do not fight
+ * over "GPT-5". Splitting on whitespace also keeps the earlier fix
+ * ([T-android-search-visible-only]): a query with a leading space, " GPT",
+ * marks every "GPT", not only those after a space.
  */
 @Composable
 fun highlightedAnnotatedString(text: String, query: String): AnnotatedString {
     if (query.isBlank() || text.isEmpty()) return AnnotatedString(text)
     val highlightBg = MaterialTheme.colorScheme.tertiaryContainer
     val highlightFg = MaterialTheme.colorScheme.onTertiaryContainer
-    val lower = text.lowercase()
-    // [T-android-search-visible-only] Highlight the TRIMMED query, as iOS does
-    // (6b0ee14c1). The search itself trims (ChatRepository.searchSessionsWithHits),
-    // so " GPT" finds every "GPT" — but highlighting the raw text marked only
-    // hits that happened to follow a space. Seen on a Pixel 6: of six results
-    // for " GPT", only "🔧 GPT Image 2" was highlighted.
-    val q = query.trim().lowercase()
+    val ranges = SessionSearch.hitRanges(text, SessionSearch.searchTerms(query))
+    if (ranges.isEmpty()) return AnnotatedString(text)
     return buildAnnotatedString {
         var idx = 0
-        while (idx < text.length) {
-            val match = lower.indexOf(q, idx)
-            if (match < 0) {
-                append(text.substring(idx))
-                break
-            }
-            if (match > idx) append(text.substring(idx, match))
+        for (r in ranges) {
+            if (r.first > idx) append(text.substring(idx, r.first))
             withStyle(SpanStyle(background = highlightBg, color = highlightFg)) {
-                append(text.substring(match, match + q.length))
+                append(text.substring(r.first, r.last + 1))
             }
-            idx = match + q.length
+            idx = r.last + 1
         }
+        if (idx < text.length) append(text.substring(idx))
     }
 }
 

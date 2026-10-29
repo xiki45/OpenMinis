@@ -9,7 +9,7 @@ import java.io.File
 /**
  * [T-android-vm-store-dual-pool] Sub agent sessions and the user's own chats
  * shared one LRU, so they evicted each other. Measured on a Pixel 4a with
- * MAX_CONCURRENT_CHILD_JOBS (=3) saturated: three children allocated inside
+ * the sub agent cap (then a global 3) saturated: three children allocated inside
  * 55ms and the third evicted the FIRST — a child 55 milliseconds old — while
  * also pushing two of the user's own sessions out of the cache.
  *

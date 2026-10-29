@@ -41,6 +41,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.ui.platform.LocalConfiguration
 import android.content.res.Configuration
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -90,6 +96,7 @@ fun TerminalScreen(
     sessionId: String? = null,
 ) {
     val emulator = remember { TerminalEmulator() }
+    val context = LocalContext.current
     val inputController = rememberTerminalInputController()
     val scope = rememberCoroutineScope()
     var ctrlActive by remember { mutableStateOf(false) }
@@ -285,6 +292,7 @@ fun TerminalScreen(
                     if (inputController.isFocused) inputController.clearFocus()
                     else inputController.requestFocus()
                 },
+                onCopyAll = { copyAllToClipboard(context, emulator) },
                 onSendRaw = { bytes ->
                     emulator.scrollOffset = 0
                     terminalSession.sendRawBytes(bytes)
@@ -379,6 +387,33 @@ private fun CircularIconButton(
     }
 }
 
+// ─── Copy All (#451) ──────────────────────────────────────────────────────────
+
+/**
+ * [#451] The terminal's whole output to the clipboard, with a Toast. Runs on
+ * the main thread, which is also where the PTY output is fed, so the buffer
+ * is not changing underneath. A clip goes through Binder (about 1 MB a
+ * transaction), so a very wide, CJK-heavy history can be refused: that is
+ * reported instead of crashing.
+ */
+private fun copyAllToClipboard(context: Context, emulator: TerminalEmulator) {
+    val text = emulator.copyableText()
+    if (text.isEmpty()) return
+    runCatching {
+        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cb.setPrimaryClip(ClipData.newPlainText("Minis Shell", text))
+    }.onSuccess {
+        Toast.makeText(context, R.string.terminal_copied_all, Toast.LENGTH_SHORT).show()
+    }.onFailure {
+        com.openminis.app.logging.AppLogger.error("TerminalScreen", "copy all (${text.length} chars) failed: $it")
+        Toast.makeText(
+            context,
+            context.getString(R.string.image_copy_failed_toast, it.message ?: it.javaClass.simpleName),
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+}
+
 // ─── Keyboard accessory bar ───────────────────────────────────────────────────
 
 @Composable
@@ -387,6 +422,7 @@ private fun KeyboardAccessoryBar(
     keyboardVisible: Boolean,
     onCtrlToggle: () -> Unit,
     onToggleKeyboard: () -> Unit,
+    onCopyAll: () -> Unit,
     onSendRaw: (ByteArray) -> Unit,
     onArrow: (Char) -> Unit,
 ) {
@@ -409,6 +445,13 @@ private fun KeyboardAccessoryBar(
             label = stringResource(if (keyboardVisible) R.string.terminal_hide_keyboard else R.string.terminal_show_keyboard),
             icon = if (keyboardVisible) Icons.Default.KeyboardHide else Icons.Outlined.Keyboard,
             onClick = onToggleKeyboard,
+        )
+        // [#451] Copy the whole output (scrollback + screen). Here rather
+        // than in the top bar, where it would sit next to Clear.
+        QuickCommandButton(
+            label = stringResource(R.string.terminal_copy_all),
+            icon = Icons.Outlined.ContentCopy,
+            onClick = onCopyAll,
         )
         QuickCommandButton("Esc", iconText = "⎋") { onSendRaw(byteArrayOf(0x1B)) }
         QuickCommandButton("Tab", icon = Icons.AutoMirrored.Filled.KeyboardTab) { onSendRaw(byteArrayOf(0x09)) }

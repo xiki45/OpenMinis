@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Nonaktif</string>
+    <string name="env_var_status_duplicate">Nama duplikat</string>
+    <string name="env_var_enabled_toggle">Aktif</string>
+    <string name="env_var_enabled_footer">Saat nonaktif, nilai dan catatan variabel tetap disimpan, tetapi tidak diteruskan ke shell, terminal, atau server MCP.</string>
+    <string name="env_var_disabled_highlight">Variabel ini nonaktif. Aktifkan untuk menggunakannya lagi.</string>
+    <string name="env_var_action_disable">Nonaktifkan</string>
+    <string name="env_var_action_enable">Aktifkan</string>
+    <string name="mcp_form_env_disabled_warning">%1$s nonaktif dan akan diteruskan sebagai nilai kosong.</string>
+</resources>

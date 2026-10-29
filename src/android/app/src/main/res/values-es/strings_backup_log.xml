@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-backup-log-sanitize / T-android-backup-log-fold] Backup history
+     detail log: the note that stands for earlier lines folded away, and the
+     button that shows a long log in full. Languages without a confident
+     translation keep the English text. -->
+<resources>
+    <string name="backup_history_log_omitted">Líneas anteriores omitidas: %1$d</string>
+    <string name="backup_history_log_show_all">Mostrar todo (%1$d líneas)</string>
+</resources>

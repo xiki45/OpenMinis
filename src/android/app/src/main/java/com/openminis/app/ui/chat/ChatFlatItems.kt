@@ -406,6 +406,14 @@ internal sealed class FlatChatItem {
         val messageIsStreaming: Boolean,
         /** Joined raw markdown of the parent message, used by Copy Markdown. */
         val messageMarkdown: String,
+        /**
+         * [T-414-usage-tap-band] This row belongs to the text block that is the
+         * message's LAST block, i.e. the text right before the usage capsule.
+         * Only those rows can reveal the capsule (see [UsageTapBand]). Unlike
+         * [isLastBlockOfMessage], which marks the last fragment of the last
+         * TEXT block even when tool or thinking blocks follow it.
+         */
+        val inFinalTextBlock: Boolean = false,
     ) : FlatChatItem() {
         override val key = "mdblock:$messageId:$parentBlockId:$blockIndex"
         override val contentType = "mdblock"
@@ -418,6 +426,7 @@ internal sealed class FlatChatItem {
                 parentBlockId == other.parentBlockId &&
                 blockIndex == other.blockIndex &&
                 isLastBlockOfMessage == other.isLastBlockOfMessage &&
+                inFinalTextBlock == other.inFinalTextBlock &&
                 messageIsStreaming == other.messageIsStreaming &&
                 rawText.length == other.rawText.length &&
                 messageMarkdown.length == other.messageMarkdown.length
@@ -427,6 +436,7 @@ internal sealed class FlatChatItem {
             h = h * 31 + parentBlockId.hashCode()
             h = h * 31 + blockIndex
             h = h * 31 + isLastBlockOfMessage.hashCode()
+            h = h * 31 + inFinalTextBlock.hashCode()
             h = h * 31 + messageIsStreaming.hashCode()
             h = h * 31 + rawText.length
             h = h * 31 + messageMarkdown.length
@@ -467,6 +477,26 @@ internal sealed class FlatChatItem {
     ) : FlatChatItem() {
         override val key = "tool:$messageId:${block.id}"
         override val contentType = "tool"
+    }
+
+    /**
+     * [T-port-fold-tools] One folded run of consecutive tool calls: the
+     * "Ran N tools · 9s" row. Its members follow it as ordinary rows only
+     * while [expanded]. Inserted by [applyToolFolds] after the build, never by
+     * [buildFlatChatItems] itself.
+     */
+    data class AssistantToolGroup(
+        val messageId: String,
+        /** The run's expanded-state key: its first tool's tool_use id. */
+        val runKey: String,
+        val toolCount: Int,
+        val failedCount: Int,
+        val cancelledCount: Int,
+        val durationMs: Long?,
+        val expanded: Boolean,
+    ) : FlatChatItem() {
+        override val key = "toolgroup:$messageId:$runKey"
+        override val contentType = "toolgroup"
     }
 
     data class AssistantInfo(
@@ -530,6 +560,38 @@ internal sealed class FlatChatItem {
         }
     }
 }
+
+/**
+ * The tool calls the floating tool bar steps through (and its detail sheet
+ * pages): every finished-or-running tool block of the assistant replies, minus
+ * thinking / info rows.
+ *
+ * [T-android-toolbar-after-compaction] Replies above the compaction divider are
+ * left out, as on iOS (AIChatView+MessagesArea.swift floatingToolPreview:
+ * `role == .assistant && !isCompactedHistory`). Before this the bar kept
+ * counting the whole loaded conversation after a compaction — a field session
+ * read "1941/1941" while the model was only sent the summary and ~90 messages.
+ */
+internal fun floatingToolBarBlocks(messages: List<ChatMessage>): List<AssistantBlock> =
+    messages.filter(::feedsFloatingToolBar)
+        .flatMap { it.toolBlocks }
+        .filter(::isFloatingToolBarBlock)
+
+/**
+ * [T-android-toolbar-reserve-compaction] Whether [floatingToolBarBlocks] would
+ * return anything, without building the list. The chat list's bottom reserve
+ * reads this, so the reserve and the bar it clears cannot disagree. It used to
+ * keep its own copy of the filter without the compaction cut, and a compacted
+ * session whose tool calls were all above the divider kept the bar-plus-preview
+ * gap under its last message with no bar on screen.
+ */
+internal fun hasFloatingToolBarBlocks(messages: List<ChatMessage>): Boolean =
+    messages.any { feedsFloatingToolBar(it) && it.toolBlocks.any(::isFloatingToolBarBlock) }
+
+private fun feedsFloatingToolBar(m: ChatMessage) = m.role == "assistant" && !m.isCompactedHistory
+
+private fun isFloatingToolBarBlock(b: AssistantBlock) =
+    b.toolStatus != null && b.kind != "thinking" && b.kind != "info"
 
 /**
  * T-streaming-side-channel: overlay any active [StreamingDelta]s on top of
@@ -635,6 +697,10 @@ internal fun buildFlatChatItems(
     // prefix so the defensive key-collision suffixing behaves exactly as a
     // single full build would.
     seedKeys: Set<String> = emptySet(),
+    // [T-android-row-keys-stable] Ids of messages that keep one row per
+    // paragraph (see LiveMessageTracker). Callers rendering a live list pass
+    // their tracker's set; static callers leave it empty.
+    liveMessageIds: Set<String> = emptySet(),
 ): List<FlatChatItem> {
     val out = mutableListOf<FlatChatItem>()
     val usedKeys = if (seedKeys.isEmpty()) mutableSetOf() else seedKeys.toMutableSet()
@@ -663,9 +729,11 @@ internal fun buildFlatChatItems(
                 isLastBlockOfMessage = item.isLastBlockOfMessage,
                 messageIsStreaming = item.messageIsStreaming,
                 messageMarkdown = item.messageMarkdown,
+                inFinalTextBlock = item.inFinalTextBlock,
             )
             is FlatChatItem.AssistantThinking -> item.copy(messageId = "${item.messageId}#$n")
             is FlatChatItem.AssistantToolUse -> item.copy(messageId = "${item.messageId}#$n")
+            is FlatChatItem.AssistantToolGroup -> item.copy(messageId = "${item.messageId}#$n")
             is FlatChatItem.AssistantInfo -> item.copy(messageId = "${item.messageId}#$n")
             is FlatChatItem.AssistantTyping -> item.copy(messageId = "${item.messageId}#$n")
             is FlatChatItem.AssistantError -> item.copy(messageId = "${item.messageId}#$n")
@@ -756,9 +824,11 @@ internal fun buildFlatChatItems(
         // system, not typed by the person, so it does not restart the
         // speaker sequence: the reply to it sits under the (updated) block
         // or the callback card without a second avatar header.
+        // [T-sched-fire-header] Same for a scheduled-task fire (see
+        // AssistantHeaderRule).
         val prevNonSystem = (idx - 1 downTo 0).asSequence()
             .map { messages[it] }
-            .firstOrNull { it.role != "system" && !com.openminis.app.agent.jobs.AgentCallback.isCallbackText(it.content) }
+            .firstOrNull { it.role != "system" && !AssistantHeaderRule.isSystemWrittenTurn(it) }
         val isResumeContinuation = prevNonSystem?.role == "assistant"
         if (!isSystem && !isResumeContinuation) {
             out.add(dedupe(FlatChatItem.AssistantHeader(message.id)))
@@ -774,6 +844,12 @@ internal fun buildFlatChatItems(
         val lastBlockId = blocks.lastOrNull()?.id
         val lastTextIdx = blocks.indexOfLast { it.kind == "text" }
         val hasAnyTextBlock = lastTextIdx >= 0
+        // [T-414-usage-tap-band] The text block right before the usage capsule:
+        // the message's last block, when it is text. A reply ending with a tool
+        // or thinking block has none (and no response zone).
+        val finalTextIdx = blocks.lastOrNull().let {
+            if (UsageTapBand.endsWithText(it?.kind, it?.content?.isNotEmpty() == true)) blocks.lastIndex else -1
+        }
         // Only the last cancelled tool_use in the message gets the Retry button —
         // retryLast() re-runs the whole turn, so one button is enough.
         val lastCancelledToolId = blocks.lastOrNull { it.kind == "tool_use" && it.toolStatus == ToolBlockStatus.CANCELLED }?.id
@@ -834,41 +910,38 @@ internal fun buildFlatChatItems(
                                 isLastBlockOfMessage = isLastText,
                                 messageIsStreaming = false,
                                 messageMarkdown = joinedMarkdown,
+                                inFinalTextBlock = index == finalTextIdx,
                             )))
                             return@forEachIndexed
                         }
                         val rawFragments = splitMarkdownIntoBlockTexts(block.content)
-                        // [T-android-stream-end-reflow-flicker-v18] Preserve
-                        // per-fragment FlatChatItem keys across the
-                        // streaming→idle boundary. Previously the trailing
-                        // text block kept rawFragments only while
-                        // `message.isStreaming==true`; the moment it flipped
-                        // false the fragments coalesced into fewer rows, all
-                        // mdblock:msgId:parentBlockId:N keys for N >= K
-                        // suddenly vanished from the flatItems list. That
-                        // wipe-and-rebuild was the "整个页面像被重刷" the
-                        // user reported — LazyColumn lost every key it was
-                        // using to anchor the viewport, fell back to numeric
-                        // firstVisibleItemIndex, and parked the viewport on
-                        // whatever row happened to take that numeric slot
-                        // (often the previous assistant message).
+                        // [T-android-row-keys-stable] Whether a message's text
+                        // is one row per paragraph or merged into ~2000-char
+                        // chunks depends ONLY on the message itself, never on
+                        // the messages after it.
                         //
-                        // Fix: keep the live (== last in the list) text block
-                        // on rawFragments regardless of isStreaming. The
-                        // boundary that actually warrants coalesce is "a
-                        // NEWER message exists below this one" — i.e. a
-                        // subsequent user turn pushed this assistant turn
-                        // into history. Until then, the same key set the
-                        // user was scrolled into stays valid.
-                        // [T-android-flatitems-sublist-cme] Index-based scan
-                        // instead of messages.subList(idx+1, size).all{} — a
-                        // subList is a live view sharing the parent's modCount,
-                        // which threw ConcurrentModificationException when the
-                        // backing list changed under it. A plain index loop
-                        // touches no view.
-                        val isLastAssistantTurn = idx == messages.lastIndex ||
-                            (idx + 1 until messages.size).all { messages[it].role != "assistant" }
-                        val fragments = if (isLastText && isLastAssistantTurn) {
+                        // History: v18 (cd08a3344) kept the last assistant
+                        // turn split by looking AHEAD ("is there a newer
+                        // assistant message?") so its keys survived stream
+                        // end. But the incremental pipeline builds its frozen
+                        // prefix from msgs.take(splitIdx), so the previous
+                        // reply's answer to "am I the last assistant?" flipped
+                        // between the full build (placeholder present ->
+                        // merged) and the prefix build once the new turn's
+                        // first output arrived (placeholder cut off -> split),
+                        // and back at stream end. The same mdblock:msg:blk:N
+                        // keys then held different text, so a user reading
+                        // that reply saw the list jump many lines.
+                        //
+                        // Now: a message that is streaming, or that the
+                        // caller saw live in this screen session
+                        // ([liveMessageIds], see LiveMessageTracker), keeps
+                        // every text block split for as long as the screen
+                        // lives; everything else (cold history) is merged.
+                        // Neither answer can change when later messages
+                        // arrive.
+                        val keepSplit = message.isStreaming || message.id in liveMessageIds
+                        val fragments = if (keepSplit) {
                             rawFragments
                         } else {
                             coalesceMarkdownFragments(rawFragments)
@@ -885,6 +958,7 @@ internal fun buildFlatChatItems(
                                 isLastBlockOfMessage = isLastText && message.isStreaming,
                                 messageIsStreaming = message.isStreaming && isLastText,
                                 messageMarkdown = joinedMarkdown,
+                                inFinalTextBlock = index == finalTextIdx,
                             )))
                         } else {
                             fragments.forEachIndexed { fragIdx, raw ->
@@ -897,6 +971,7 @@ internal fun buildFlatChatItems(
                                     isLastBlockOfMessage = isLastText && isLastFragOfText,
                                     messageIsStreaming = message.isStreaming && isLastText,
                                     messageMarkdown = joinedMarkdown,
+                                    inFinalTextBlock = index == finalTextIdx,
                                 )))
                             }
                         }
@@ -979,4 +1054,58 @@ internal fun buildFlatChatItems(
         }
     }
     return out
+}
+
+/**
+ * [T-assistant-header-dedup] [T-sched-fire-header] Which messages restart the
+ * assistant's avatar + name header. iOS CollectionViewMessageListV3 emits the
+ * header only for the first assistant message after a REAL user turn: a
+ * user-role message that is really the system reporting in (`agentCallback !=
+ * nil`) leaves the sequence untouched, and so do dividers / system info.
+ *
+ * On iOS a scheduled fire IS an agent callback (`<agent_callback
+ * kind="scheduled">`), so it never restarted the header there. Android wraps
+ * a fire in its own `<scheduled_task>` envelope, which this rule used not to
+ * know: the fire's card was followed by a second "Pikachu" header in the
+ * middle of one continuous assistant turn. Both envelopes count now.
+ *
+ * Sub-agent cards and tool cards are blocks INSIDE an assistant message, so
+ * they never break the sequence to begin with.
+ */
+internal object AssistantHeaderRule {
+    /** A user-role message the system wrote: it renders as a card, not as a turn. */
+    fun isSystemWrittenTurn(message: ChatMessage): Boolean =
+        com.openminis.app.agent.jobs.AgentCallback.isCallbackText(message.content) ||
+            (message.role == "user" && com.openminis.app.scheduled.ScheduledTaskMarker.parse(message.content) != null)
+}
+
+
+/**
+ * [T-android-row-keys-stable] Remembers which messages were live (streaming)
+ * while a list was on screen, so [buildFlatChatItems] can keep their rows
+ * split for good instead of re-deciding from their position.
+ *
+ * Only ever grows, so a message's row structure is fixed from the moment it
+ * is first seen live. The first [update] also adds the newest assistant
+ * message: it is the one a Resume continues, and seeding it means a resumed
+ * stream does not re-split rows the user is looking at. One tracker per
+ * session screen; a fresh screen (re-open) starts cold and merges history
+ * again.
+ */
+internal class LiveMessageTracker {
+    private val ids = HashSet<String>()
+    private var seeded = false
+
+    /** Records the live messages in [messages] / [streamingIds]; returns a snapshot. */
+    fun update(messages: List<ChatMessage>, streamingIds: Collection<String>): Set<String> {
+        if (!seeded && messages.isNotEmpty()) {
+            seeded = true
+            messages.lastOrNull { it.role == "assistant" }?.let { ids.add(it.id) }
+        }
+        // A new turn's placeholder is the last message and is streaming before
+        // any delta lands in the streaming map.
+        messages.lastOrNull()?.takeIf { it.isStreaming }?.let { ids.add(it.id) }
+        ids.addAll(streamingIds)
+        return HashSet(ids)
+    }
 }

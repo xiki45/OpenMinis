@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- فارسی (fa). Generated from the English base; keep keys in base order. -->
+<resources>
+    <string name="retry_badge_a11y">در حال تلاش دوباره، تلاش %1$d از %2$d. برای دیدن تلاش‌های دوباره ضربه بزنید.</string>
+    <string name="retry_sheet_title">تلاش‌های دوبارهٔ خودکار</string>
+    <string name="retry_sheet_subtitle">درخواست‌هایی که در طول این کار دوباره تلاش شده‌اند. این فهرست با پایان پاسخ پاک می‌شود.</string>
+    <string name="retry_sheet_empty">در این کار تلاش دوباره‌ای انجام نشده است.</string>
+    <string name="retry_record_title">تلاش دوباره %1$d از %2$d</string>
+    <string name="retry_record_error">خطا: %1$s</string>
+    <string name="retry_record_model">مدل: %1$s</string>
+    <string name="retry_record_endpoint">نقطهٔ پایانی: %1$s</string>
+    <string name="retry_record_delay">پیش از تلاش دوباره %1$d ثانیه صبر شد</string>
+    <string name="retry_record_switched">مدلی متفاوت با تلاش دوبارهٔ قبلی</string>
+</resources>

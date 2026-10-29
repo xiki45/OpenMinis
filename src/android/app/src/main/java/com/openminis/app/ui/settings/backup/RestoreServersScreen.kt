@@ -4,6 +4,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -54,12 +57,25 @@ fun RestoreServersScreen(
     val vm: RcloneDestinationsViewModel = viewModel()
     val remotes by vm.remotes.collectAsState()
     var adding by remember { mutableStateOf(false) }
+    // [T-android-backup-dest-edit] A server with a wrong password has to be
+    // fixable from here too — this is where its failure shows up when the
+    // user is trying to restore. The row's info button opens the same detail
+    // page the destinations screen uses; tapping the row still browses.
+    val detail = remember { DestinationDetailNav() }
+    androidx.activity.compose.BackHandler(enabled = detail.isOpen) { detail.back(vm) }
 
     // Re-read on every entry: the user may have just added a server and come
     // back, and a stale list would hide it.
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.refresh() }
 
-    SettingsScaffold(title = stringResource(R.string.backup_server_title), onBack = onBack) {
+    SettingsScaffold(
+        title = detail.title() ?: stringResource(R.string.backup_server_title),
+        onBack = { if (detail.isOpen) detail.back(vm) else onBack() },
+    ) {
+        if (detail.isOpen) {
+            DestinationDetailContent(vm, detail)
+            return@SettingsScaffold
+        }
         // [T-android-connect-and-save] Deliberately NO folder-browser branch
         // here. `connectAndBrowse` still populates `browse` (it is how the
         // connection is verified and how the secret is held until the save),
@@ -103,6 +119,18 @@ fun RestoreServersScreen(
                     enabled = true,
                     onClick = { onPickServer(r.name) },
                     showDivider = true,
+                    trailing = {
+                        IconButton(onClick = {
+                            vm.clearError()
+                            detail.open(r.name)
+                        }) {
+                            Icon(
+                                Icons.Outlined.Info,
+                                contentDescription = stringResource(R.string.backup_dest_details),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    },
                 )
             }
             // ALWAYS last, present in both states. With no servers it is the

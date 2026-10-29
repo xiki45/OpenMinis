@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Dezactivat</string>
+    <string name="env_var_status_duplicate">Nume duplicat</string>
+    <string name="env_var_enabled_toggle">Activat</string>
+    <string name="env_var_enabled_footer">Când este dezactivată, variabila își păstrează valoarea și nota, dar nu este transmisă shell-urilor, terminalelor sau serverelor MCP.</string>
+    <string name="env_var_disabled_highlight">Această variabilă este dezactivată. Activeaz-o pentru a o folosi din nou.</string>
+    <string name="env_var_action_disable">Dezactivează</string>
+    <string name="env_var_action_enable">Activează</string>
+    <string name="mcp_form_env_disabled_warning">%1$s este dezactivată și va fi transmisă ca valoare goală.</string>
+</resources>

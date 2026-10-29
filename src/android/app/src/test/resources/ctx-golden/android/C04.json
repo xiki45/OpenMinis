@@ -1,0 +1,278 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "What is in this photo?"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/IMG_0001.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/IMG_0001.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0001.jpg\" url=\"minis://attachments/uploads/IMG_0001.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "What is in this photo?"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/IMG_0001.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/IMG_0001.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0001.jpg\" url=\"minis://attachments/uploads/IMG_0001.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "What is in this photo?"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/IMG_0001.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/IMG_0001.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0001.jpg\" url=\"minis://attachments/uploads/IMG_0001.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "What is in this photo?"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/IMG_0001.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/IMG_0001.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0001.jpg\" url=\"minis://attachments/uploads/IMG_0001.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "What is in this photo?"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/IMG_0001.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0001.jpg\" url=\"minis://attachments/uploads/IMG_0001.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "What is in this photo?"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/IMG_0001.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0001.jpg\" url=\"minis://attachments/uploads/IMG_0001.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "What is in this photo?"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/IMG_0001.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0001.jpg\" url=\"minis://attachments/uploads/IMG_0001.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "What is in this photo?"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/IMG_0001.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0001.jpg\" url=\"minis://attachments/uploads/IMG_0001.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

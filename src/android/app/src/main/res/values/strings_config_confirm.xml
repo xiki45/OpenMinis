@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-confirm-i18n] minis-config approval dialog (ConfigConfirmDialog).
+     Wording and translations copied from iOS Localizable.xcstrings
+     (ConfigConfirmSheet keys); a locale iOS lacks falls back to English. -->
+<resources>
+    <string name="config_confirm_title_one">Confirm change</string>
+    <string name="config_confirm_title_many">Confirm %1$d changes</string>
+    <string name="config_confirm_cancel">Cancel</string>
+    <string name="config_confirm_apply">Apply</string>
+    <string name="config_confirm_reject_all">Reject All</string>
+    <string name="config_confirm_risk_destructive">This may affect later tool calls.</string>
+    <string name="config_confirm_risk_sensitive">Reversible, but worth a quick look.</string>
+</resources>

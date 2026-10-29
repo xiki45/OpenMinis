@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-confirm-i18n] minis-config approval dialog (ConfigConfirmDialog).
+     Wording and translations copied from iOS Localizable.xcstrings
+     (ConfigConfirmSheet keys); a locale iOS lacks falls back to English. -->
+<resources>
+    <string name="config_confirm_title_one">변경 확인</string>
+    <string name="config_confirm_title_many">%1$d 건의 변경 확인</string>
+    <string name="config_confirm_cancel">취소</string>
+    <string name="config_confirm_apply">적용</string>
+    <string name="config_confirm_reject_all">모두 거부</string>
+    <string name="config_confirm_risk_destructive">이후 도구 호출에 영향을 줄 수 있습니다.</string>
+    <string name="config_confirm_risk_sensitive">되돌릴 수 있지만 한번 확인해 보세요.</string>
+</resources>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">În execuție</string>
+    <string name="sched_pill_waiting">Se așteaptă</string>
+    <string name="sched_pill_run_now">Rulează acum</string>
+    <string name="sched_pill_hide">Ascunde această numărătoare</string>
+    <string name="sched_pill_cancel_all">Anulează toate sarcinile programate</string>
+    <string name="sched_pill_cancel_all_title">Anulezi toate sarcinile programate?</string>
+    <string name="sched_pill_cancel_all_confirm">Anulează tot</string>
+    <string name="sched_pill_not_now">Nu acum</string>
+    <string name="sched_pill_cancel_all_message">Toate sarcinile încă programate în această conversație vor fi anulate.</string>
+    <string name="sched_pill_a11y_title">Sarcină programată următoare</string>
+    <string name="sched_pill_a11y_running">Rulare în curs</string>
+    <string name="sched_pill_a11y_waiting">Așteaptă terminarea altei sarcini</string>
+    <string name="sched_pill_a11y_upcoming_left">Următoarea rulare · mai sunt %1$d</string>
+    <string name="sched_pill_a11y_upcoming">Următoarea rulare</string>
+    <string name="sched_pill_a11y_run_of">Rularea %1$d din %2$d</string>
+    <string name="sched_pill_a11y_run">Rularea %1$d</string>
+    <string name="sched_pill_a11y_next_in">Următoarea rulare peste %1$s</string>
+    <string name="sched_pill_a11y_more">+încă %1$d</string>
+    <string name="sched_pill_a11y_hint">Deschide detaliile sarcinii</string>
+</resources>

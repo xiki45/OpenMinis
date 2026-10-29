@@ -74,6 +74,11 @@ class DebugRPCHandler(private val context: Context) {
         return when (method) {
             "rpc.discover" -> DebugMethodRegistry.discover()
             "debug.appInfo" -> handleAppInfo()
+            // [T-loadtest-limits] Load-test caps and process sampling (DEV_TOOLS).
+            "debug.limits.get" -> LoadTestDebugMethods.limitsGet()
+            "debug.limits.set" -> LoadTestDebugMethods.limitsSet(params)
+            "debug.loadtest.snapshot" -> LoadTestDebugMethods.snapshot(context)
+            "debug.loadtest.seedSession" -> LoadTestDebugMethods.seedSession(context, params)
             "debug.screenshot" -> handleScreenshot(params)
             "debug.ls" -> handleLS(params)
             "debug.rawLs" -> handleRawLS(params)
@@ -85,6 +90,8 @@ class DebugRPCHandler(private val context: Context) {
             "debug.backup.upload" -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { BackupDebugMethods.backupUpload(context, params) }
             "debug.backup.remotes.addWebdav" -> BackupDebugMethods.remotesAddWebdav(context, params)
             "debug.backup.remotes.remove" -> BackupDebugMethods.remotesRemove(context, params)
+            // [T-net-android-phase0] Embedded Tailscale node.
+            in NetDebugMethods.names -> NetDebugMethods.dispatch(context, method, params)
             "debug.subAgents.list" -> BackupDebugMethods.subAgentsList(context)
             "debug.subAgents.upsert" -> BackupDebugMethods.subAgentsUpsert(context, params)
             "debug.subAgents.delete" -> BackupDebugMethods.subAgentsDelete(context, params)
@@ -131,6 +138,7 @@ class DebugRPCHandler(private val context: Context) {
             "debug.browser.getReadable" -> BrowserDebugMethods.getReadable(context, params)
             "debug.browser.getText" -> BrowserDebugMethods.getText(context, params)
             "debug.browser.screenshot" -> BrowserDebugMethods.screenshot(context, params)
+            "debug.browser.cookies" -> BrowserDebugMethods.cookies(params)
 
             // Provider (read)
             "provider.types" -> ProviderDebugMethods.types()
@@ -167,6 +175,8 @@ class DebugRPCHandler(private val context: Context) {
             // Chat (mutate)
             "chat.prompt" -> ChatMutationMethods.prompt(context, params)
             "chat.uiPrompt" -> ChatMutationMethods.uiPrompt(context, params)
+            // [T-port-composer-hint-debug] Composer usage line with chosen figures.
+            "debug.chat.usageHint" -> UsageHintDebugMethods.show(context, params)
             "chat.retry" -> ChatMutationMethods.retry(context, params)
             "chat.rerunFromToolBlock" -> ChatMutationMethods.rerunFromToolBlock(context, params)
             "chat.session.status" -> ChatMutationMethods.status(context, params)
@@ -187,6 +197,20 @@ class DebugRPCHandler(private val context: Context) {
                     throw RPCException(-32601, "Method not found: $method. Call 'rpc.discover' to list available methods.")
                 }
                 handleShizukuExec(params)
+            }
+            // [T-multi-select-share] Share Chat picker / export, served by the
+            // ChatScreen showing the session (iOS parity, DEBUG only).
+            "debug.chatShare.openPicker" -> {
+                if (!BuildConfig.DEV_TOOLS) {
+                    throw RPCException(-32601, "Method not found: $method. Call 'rpc.discover' to list available methods.")
+                }
+                com.openminis.app.ui.chat.share.ChatShareDebugRpc.openPicker(params)
+            }
+            "debug.chatExport.render" -> {
+                if (!BuildConfig.DEV_TOOLS) {
+                    throw RPCException(-32601, "Method not found: $method. Call 'rpc.discover' to list available methods.")
+                }
+                com.openminis.app.ui.chat.share.ChatShareDebugRpc.render(params)
             }
             "debug.modelUse.exec" -> {
                 if (!BuildConfig.DEV_TOOLS) {
@@ -754,6 +778,9 @@ class DebugRPCHandler(private val context: Context) {
     // ── LLM Request Tracking ──────────────────────────────────────────────
 
     private fun handleLLMRequests(params: JSONObject): JSONObject {
+        if (params.optBoolean("fullLast", false)) {
+            return LLMRequestLog.lastFullJSON() ?: JSONObject().put("error", "no request captured yet")
+        }
         val last = if (params.has("last") && !params.isNull("last")) params.optInt("last", -1).takeIf { it > 0 } else null
         val raw = LLMRequestLog.toJSON(last)
         if (!params.optBoolean("formatted", false)) return raw
@@ -1009,11 +1036,14 @@ class DebugRPCHandler(private val context: Context) {
     // ── Update checker (T33) — exposed only via DebugRPC so the e2e flow can
     // be exercised before the production UI entry point lands.
     private suspend fun handleUpdateCheck(): JSONObject {
-        return when (val r = com.openminis.app.data.UpdateChecker.check()) {
+        // [T-update-channels] A manual check: bypasses the throttle, writes the cache.
+        return when (val r = com.openminis.app.data.UpdateChecker.check(context, reason = "rpc")) {
             is com.openminis.app.data.UpdateChecker.CheckResult.UpdateAvailable -> JSONObject()
                 .put("status", "update_available")
                 .put("tag_name", r.tagName)
                 .put("version_name", r.versionName)
+                .put("version_code", r.versionCode ?: JSONObject.NULL)
+                .put("sha256", r.sha256 ?: JSONObject.NULL)
                 .put("release_name", r.releaseName)
                 .put("apk_url", r.apkUrl)
                 .put("apk_size", r.apkSizeBytes)

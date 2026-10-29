@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">Prikaži cijelo razmišljanje</string>
+    <string name="thinking_full_title">Cijelo razmišljanje</string>
+    <string name="thinking_full_char_count">Znakova: %1$s</string>
+    <string name="thinking_full_load_more">Učitaj još</string>
+    <string name="thinking_full_copy_failed">Predugo za kopiranje</string>
+</resources>

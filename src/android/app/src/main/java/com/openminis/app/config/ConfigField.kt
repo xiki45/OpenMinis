@@ -1,5 +1,7 @@
 package com.openminis.app.config
 
+import com.openminis.app.config.readable.ConfigReadable
+
 /**
  * One configurable setting. Concrete kinds: [com.openminis.app.config.fields.PrefsBoolField]
  * etc. for SharedPreferences-backed scalars; [com.openminis.app.config.fields.ClosureField]
@@ -24,6 +26,15 @@ interface ConfigField {
     val revertable: Boolean
 
     /**
+     * [T-config-readable] How a change to this field reads to the person
+     * approving it (confirmation dialog) and reviewing it (Logs → Config
+     * Changes). Deliberately has NO default: a new field does not compile
+     * until it says how its values read. [ConfigReadable.generic] is the
+     * explicit opt-out. Mirrors iOS `ConfigField.readable`.
+     */
+    val readable: ConfigReadable
+
+    /**
      * [T-android-config-feature-unavailable] Non-null when the field's
      * underlying feature does not exist on this device / OS version (e.g. the
      * Android 16 "Live Updates" surface on a device without it). The bridge
@@ -37,6 +48,22 @@ interface ConfigField {
      */
     val unavailableReason: String?
         get() = null
+
+    /**
+     * [FEAT-261021-03] Rewrites a `set` value before validation and the
+     * confirmation dialog (e.g. a proxy's name -> `proxy:<id>`), so the user
+     * approves - and the audit log records - what will be stored. Default:
+     * unchanged. Mirrors iOS `ConfigField.normalize`.
+     */
+    fun normalize(value: ConfigValue): ConfigValue = value
+
+    /**
+     * [FEAT-261021-03] Checks beyond the schema, run on the normalized value
+     * BEFORE the confirmation dialog, so a value that cannot be stored is
+     * refused without asking the user first. Throws [ConfigError]. Mirrors
+     * iOS `ConfigField.validate`.
+     */
+    fun validate(value: ConfigValue) {}
 
     /** Read the current value. May throw [ConfigError] on backend failure. */
     fun read(): ConfigValue

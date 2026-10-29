@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">In esecuzione</string>
+    <string name="sched_pill_waiting">In attesa</string>
+    <string name="sched_pill_run_now">Esegui ora</string>
+    <string name="sched_pill_hide">Nascondi questo conto alla rovescia</string>
+    <string name="sched_pill_cancel_all">Annulla tutte le attività pianificate</string>
+    <string name="sched_pill_cancel_all_title">Annullare tutte le attività pianificate?</string>
+    <string name="sched_pill_cancel_all_confirm">Annulla tutto</string>
+    <string name="sched_pill_not_now">Non ora</string>
+    <string name="sched_pill_cancel_all_message">Tutte le attività ancora in programma in questa conversazione verranno annullate.</string>
+    <string name="sched_pill_a11y_title">Prossima attività pianificata</string>
+    <string name="sched_pill_a11y_running">Esecuzione in corso</string>
+    <string name="sched_pill_a11y_waiting">In attesa che un\'altra attività finisca</string>
+    <string name="sched_pill_a11y_upcoming_left">Prossima esecuzione · ne restano %1$d</string>
+    <string name="sched_pill_a11y_upcoming">Prossima esecuzione</string>
+    <string name="sched_pill_a11y_run_of">Esecuzione %1$d di %2$d</string>
+    <string name="sched_pill_a11y_run">Esecuzione %1$d</string>
+    <string name="sched_pill_a11y_next_in">Prossima esecuzione tra %1$s</string>
+    <string name="sched_pill_a11y_more">+%1$d altre</string>
+    <string name="sched_pill_a11y_hint">Apre i dettagli dell\'attività</string>
+</resources>

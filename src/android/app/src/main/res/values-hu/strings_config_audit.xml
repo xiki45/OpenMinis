@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Config Changes record detail page and the approval
+     dialog's batch summary. Wording and translations mirror iOS
+     ConfigAuditDetailView / ConfigConfirmSheet. -->
+<resources>
+    <string name="config_audit_summary_header">A jóváhagyott változások összegzése</string>
+    <string name="config_audit_detail_title">A változás részletei</string>
+    <string name="config_audit_detail_status">Állapot</string>
+    <string name="config_audit_detail_changed_by">Módosította</string>
+    <string name="config_audit_detail_requested">Kérve</string>
+    <string name="config_audit_detail_resolved">Lezárva</string>
+    <string name="config_audit_detail_note">Az asszisztens megjegyzése</string>
+    <string name="config_audit_detail_what_changed">Mi változott</string>
+    <string name="config_audit_detail_predates">Ez a bejegyzés régebbi az olvasható leírásoknál, ezért csak a nyers változás látható.</string>
+    <string name="config_audit_detail_raw">Nyers változás</string>
+    <string name="config_audit_detail_setting">Beállítás</string>
+    <string name="config_audit_detail_before">Előtte</string>
+    <string name="config_audit_detail_after">Utána</string>
+    <string name="config_audit_detail_revert">Változás visszavonása</string>
+    <string name="config_audit_detail_reverted">Visszavonva</string>
+    <string name="config_audit_revert_undoes">Ez visszavonja:</string>
+    <string name="config_audit_actor_assistant">Asszisztens</string>
+    <string name="config_audit_actor_you">Te</string>
+    <string name="config_audit_actor_assistant_revert">Asszisztens (visszavonás)</string>
+    <string name="config_audit_actor_you_revert">Te (visszavonás)</string>
+</resources>

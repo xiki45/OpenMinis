@@ -1,7 +1,6 @@
 package com.openminis.app.scheduled
 
 import android.app.AlarmManager
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -25,7 +24,7 @@ class ScheduledTaskManager(private val context: Context) {
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     private val store = ScheduledTaskStore(context)
 
-    init { ensureNotificationChannel() }
+    init { removeObsoleteNotificationChannel() }
 
     /** Read-only access to persistence for callers that only need data. */
     fun store(): ScheduledTaskStore = store
@@ -96,6 +95,28 @@ class ScheduledTaskManager(private val context: Context) {
     }
 
     /**
+     * [T-scheduled-active-session-android] Turn off every task [sessionId]
+     * created that would still fire (iOS `cancelScheduled(createdBy:)`): the
+     * user's Stop in that chat, or the chat being deleted. Same meaning as the
+     * card's Cancel - disabled, alarm cancelled, row and run history kept - so
+     * a stopped loop can be turned back on. One atomic pass over the store per
+     * task. Returns how many were turned off.
+     */
+    fun disableAllCreatedBy(sessionId: String, reason: String): Int {
+        val live = createdByEnabled(store.all(), sessionId)
+        var n = 0
+        for (t in live) {
+            val off = store.update(t.id) { cur -> if (cur.enabled) cur.copy(enabled = false) else null }
+            if (off != null) {
+                cancelAlarm(t.id)
+                n++
+            }
+        }
+        if (n > 0) AppLogger.info(TAG, "disabled $n scheduled task(s) created by ${sessionId.take(8)}: $reason")
+        return n
+    }
+
+    /**
      * Re-register every enabled task with AlarmManager. Called from
      * [com.openminis.app.offload.AlarmReceiver]'s BOOT_COMPLETED branch
      * so persisted tasks survive a device reboot.
@@ -129,7 +150,7 @@ class ScheduledTaskManager(private val context: Context) {
      * Returns whether this alarm delivery is a real fire that should run. Only
      * a relative trigger can say no — see [relativeAlarmDue].
      */
-    fun rescheduleNext(taskId: String): Boolean {
+    fun rescheduleNext(taskId: String, firedSlotMs: Long? = null): Boolean {
         val t = store.get(taskId) ?: return false
         // [T-android-scheduled-triggers] Counted HERE, when the alarm fires and
         // before the run starts, so the next slot never depends on a run that
@@ -160,14 +181,68 @@ class ScheduledTaskManager(private val context: Context) {
             if (arm) registerAlarm(stored)
             return true
         }
-        if (t.repeatMode == ScheduledRepeatMode.ONCE) {
+        // [T-sched-run-now] Calendar fires are claimed in the same atomic
+        // step as relative ones now: an alarm for a slot "Run now" already
+        // fired early must not run it a second time. It used to read the row
+        // and write it back unlocked.
+        val now = System.currentTimeMillis()
+        val stored = store.update(taskId) { cur ->
+            if (!cur.enabled || calendarSlotTakenByRunNow(cur, now)) return@update null
             // Mark fired ONCE task as disabled — keep row so the user can
             // see its last result, re-enable if they want to re-run.
-            store.upsert(t.copy(enabled = false))
-            return true
+            if (cur.repeatMode == ScheduledRepeatMode.ONCE) {
+                cur.copy(enabled = false)
+            } else {
+                // [FIX-261025-19] Record the slot as run, as Run now does, so
+                // the in-app timer reaching the same slot after this alarm
+                // finds it taken instead of running it again.
+                firedSlotMs?.let { cur.copy(runNowSlotMs = it) } ?: cur
+            }
         }
-        registerAlarm(t)
+        if (stored == null) {
+            val cur = store.get(taskId)
+            AppLogger.info(TAG, "alarm for task=$taskId: slot already run by Run now (enabled=${cur?.enabled}) — not running")
+            if (cur != null && cur.enabled) registerAlarm(cur)
+            return false
+        }
+        if (stored.enabled) registerAlarm(stored)
         return true
+    }
+
+    /**
+     * [T-sched-run-now] "Run now" from the chat's timer pill: take the task's
+     * PENDING next run and mark it fired, in one atomic store step - the same
+     * lock and the same transition the alarm's own fire uses
+     * ([rescheduleNext]), so the alarm and "Run now" can never both run the
+     * same run. Returns the row to run, or null when there is nothing to
+     * take: disabled, exhausted, an on-completion task, or [isRunning] says a
+     * run of it is already in progress / being started (checked under the
+     * same lock). The next alarm is re-armed for the run after the taken one,
+     * replacing the old registration (same PendingIntent).
+     *
+     * [expectedRunKey] makes it a compare-and-set: the run the menu showed
+     * ([pendingRunKey] when it was drawn) must still be the pending one. If
+     * the alarm fired it in between, the pending run is now the following one
+     * and the claim fails instead of taking that one too.
+     */
+    fun claimRunNow(
+        taskId: String,
+        now: Long = System.currentTimeMillis(),
+        isRunning: (String) -> Boolean = { false },
+        expectedRunKey: String? = null,
+    ): ScheduledTask? {
+        val stored = store.update(taskId) { cur ->
+            if (isRunning(cur.id)) return@update null
+            if (expectedRunKey != null && pendingRunKey(cur, now) != expectedRunKey) return@update null
+            runNowTransition(cur, now)
+        } ?: return null
+        if (stored.enabled && stored.nextTriggerMs(now) != null) registerAlarm(stored) else cancelAlarm(taskId)
+        AppLogger.info(
+            TAG,
+            "run now task=$taskId kind=${stored.triggerKind} count=${stored.triggeredCount} " +
+                "slot=${stored.runNowSlotMs} enabled=${stored.enabled} next=${stored.nextTriggerMs(now)}",
+        )
+        return stored
     }
 
     fun markFired(
@@ -204,7 +279,7 @@ class ScheduledTaskManager(private val context: Context) {
             AppLogger.warning(TAG, "task ${task.id} has no next trigger — skipping register")
             return
         }
-        val pi = buildPendingIntent(task.id)
+        val pi = buildPendingIntent(task.id, triggerAt)
         try {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
             AppLogger.info(TAG, "registered task=${task.id} label=\"${task.label}\" triggerAt=$triggerAt")
@@ -229,28 +304,38 @@ class ScheduledTaskManager(private val context: Context) {
         pi.cancel()
     }
 
-    private fun buildPendingIntent(taskId: String): PendingIntent {
+    private fun buildPendingIntent(taskId: String, triggerAt: Long? = null): PendingIntent {
         val intent = Intent(context, ScheduledTaskAlarmReceiver::class.java).apply {
             action = ACTION_FIRE
             putExtra(EXTRA_TASK_ID, taskId)
+            // [FIX-261025-19] The slot this alarm is for; FLAG_UPDATE_CURRENT
+            // replaces it on every re-registration.
+            if (triggerAt != null) putExtra(EXTRA_TRIGGER_AT, triggerAt)
         }
         val requestCode = taskId.hashCode() and 0x7FFFFFFF
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getBroadcast(context, requestCode, intent, flags)
     }
 
-    private fun ensureNotificationChannel() {
+    /**
+     * [T-port-sched-notif-single] Nothing posts on [OBSOLETE_CHANNEL_ID] any
+     * more: a scheduled run's notification is BackgroundTaskNotifier's (Task
+     * Completion channel), which follows the Task Notifications toggle, skips
+     * the foreground and is cleared when the app opens. The old channel had an
+     * English-only name and would otherwise sit empty in
+     * the system settings, so it is deleted once per process; deleting also
+     * clears any stale entry still posted on it.
+     */
+    private fun removeObsoleteNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (nm.getNotificationChannel(CHANNEL_ID) != null) return
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            CHANNEL_NAME,
-            NotificationManager.IMPORTANCE_DEFAULT,
-        ).apply {
-            description = "Posts when a scheduled task finishes running."
+        if (!obsoleteChannelChecked.compareAndSet(false, true)) return
+        runCatching {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (nm.getNotificationChannel(OBSOLETE_CHANNEL_ID) != null) {
+                nm.deleteNotificationChannel(OBSOLETE_CHANNEL_ID)
+                AppLogger.info(TAG, "deleted obsolete notification channel $OBSOLETE_CHANNEL_ID")
+            }
         }
-        nm.createNotificationChannel(channel)
     }
 
     companion object {
@@ -303,19 +388,89 @@ class ScheduledTaskManager(private val context: Context) {
         }
 
         /**
+         * [T-sched-run-now] Calendar: whether an alarm delivered at [now] is
+         * for the slot "Run now" already fired early. The registration for
+         * that slot is replaced when the run is taken, so this only answers
+         * true for an alarm that was already on its way: delivered within a
+         * late window of the slot (Doze can hold an alarm a few minutes).
+         */
+        internal fun calendarSlotTakenByRunNow(t: ScheduledTask, now: Long): Boolean {
+            val slot = t.runNowSlotMs ?: return false
+            return now >= slot - ALARM_EARLY_SLACK_MS && now <= slot + RUN_NOW_LATE_WINDOW_MS
+        }
+
+        /**
+         * [T-sched-run-now] Identity of the task's pending run, for the
+         * compare-and-set in [claimRunNow]: the run number of a relative
+         * trigger (its time moves with "now" once overdue), the planned slot
+         * of a calendar task. null when nothing is pending.
+         */
+        internal fun pendingRunKey(t: ScheduledTask, now: Long): String? {
+            if (!t.enabled) return null
+            return when (t.triggerKind) {
+                ScheduledTriggerKind.AFTER, ScheduledTriggerKind.INTERVAL ->
+                    if (t.nextTriggerMs(now) == null) null else "run:${t.triggeredCount ?: 0}"
+                ScheduledTriggerKind.CALENDAR -> t.nextTriggerMs(now)?.let { "slot:$it" }
+                ScheduledTriggerKind.ON_COMPLETION -> null
+            }
+        }
+
+        /** [T-sched-run-now] How late an alarm for a taken slot may still arrive. */
+        private const val RUN_NOW_LATE_WINDOW_MS = 30 * 60_000L
+
+        /**
+         * [T-sched-run-now] What [t] becomes when "Run now" takes its pending
+         * run at [now]; null when there is none. Pure, for tests.
+         *  - AFTER / INTERVAL: exactly the alarm's own transition
+         *    ([afterAlarmFire]) - counted once and re-anchored at [now], so the
+         *    next interval runs from the manual run, as from a natural one, and
+         *    --count is used up once.
+         *  - CALENDAR: the pending slot is recorded as run ([runNowSlotMs]);
+         *    ONCE is disabled as its alarm would. The schedule resumes at the
+         *    slot after it.
+         *  - ON_COMPLETION: nothing pending on a clock - null.
+         */
+        internal fun runNowTransition(t: ScheduledTask, now: Long): ScheduledTask? {
+            if (!t.enabled) return null
+            return when (t.triggerKind) {
+                ScheduledTriggerKind.AFTER, ScheduledTriggerKind.INTERVAL -> {
+                    if (t.nextTriggerMs(now) == null) null else afterAlarmFire(t, now)?.first
+                }
+                ScheduledTriggerKind.CALENDAR -> {
+                    val slot = t.nextTriggerMs(now) ?: return null
+                    t.copy(runNowSlotMs = slot, enabled = t.repeatMode != ScheduledRepeatMode.ONCE)
+                }
+                ScheduledTriggerKind.ON_COMPLETION -> null
+            }
+        }
+
+        /**
          * [T-android-scheduled-triggers] [incoming] with the bookkeeping it
          * leaves empty taken from [prev]. Pure, for tests.
          */
+        /**
+         * [T-scheduled-active-session-android] The tasks [disableAllCreatedBy]
+         * turns off: enabled ones [sessionId] created - nothing aimed at it from
+         * elsewhere (a daily task made in the editor survives Stop). Pure.
+         */
+        internal fun createdByEnabled(tasks: List<ScheduledTask>, sessionId: String): List<ScheduledTask> =
+            tasks.filter { it.enabled && it.creatorSessionId == sessionId }
+
         internal fun mergeBookkeeping(incoming: ScheduledTask, prev: ScheduledTask): ScheduledTask =
             incoming.copy(
                 runHistory = incoming.runHistory.ifEmpty { prev.runHistory },
                 fireCount = incoming.fireCount ?: prev.fireCount,
                 anchorMs = incoming.anchorMs ?: prev.anchorMs,
                 triggeredCount = incoming.triggeredCount ?: prev.triggeredCount,
+                // [T-scheduled-active-session-android] The editor does not know
+                // which chat created the task; an edit must not forget it.
+                creatorSessionId = incoming.creatorSessionId ?: prev.creatorSessionId,
             )
         const val ACTION_FIRE = "com.openminis.app.scheduled.FIRE"
         const val EXTRA_TASK_ID = "task_id"
-        const val CHANNEL_ID = "minis_scheduled_tasks"
-        private const val CHANNEL_NAME = "Scheduled Tasks"
+        const val EXTRA_TRIGGER_AT = "trigger_at"
+        /** [T-port-sched-notif-single] The retired per-task completion channel. */
+        const val OBSOLETE_CHANNEL_ID = "minis_scheduled_tasks"
+        private val obsoleteChannelChecked = java.util.concurrent.atomic.AtomicBoolean(false)
     }
 }

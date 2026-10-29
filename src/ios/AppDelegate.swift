@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        if #available(iOS 17.0, *) {
+        if #available(iOS 17.0, *), !BackgroundKeepAliveManager.debugAutoRetractDisabled {
             CLBackgroundActivitySession().invalidate()
         }
 
@@ -62,6 +62,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // the wrong (new) session. The .onAppear registration in MinisApp
         // remains as an idempotent backstop.
         ShortcutNotificationDelegate.shared.register()
+        // [T-user-ask] Register the answer categories and lifecycle observers
+        // before any notification response can arrive, then resume any ask
+        // left behind by a killed process (§12.4).
+        Task { @MainActor in
+            _ = UserAskCenter.shared
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await UserAskCenter.shared.recoverAll()
+        }
 
         // Refresh the dynamic shortcut list every cold launch. The
         // items themselves are stable, but their localized titles

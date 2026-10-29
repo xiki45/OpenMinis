@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Actief</string>
+    <string name="sched_pill_waiting">Wachtend</string>
+    <string name="sched_pill_run_now">Nu uitvoeren</string>
+    <string name="sched_pill_hide">Deze aftelling verbergen</string>
+    <string name="sched_pill_cancel_all">Alle geplande taken annuleren</string>
+    <string name="sched_pill_cancel_all_title">Alle geplande taken annuleren?</string>
+    <string name="sched_pill_cancel_all_confirm">Alles annuleren</string>
+    <string name="sched_pill_not_now">Niet nu</string>
+    <string name="sched_pill_cancel_all_message">Alle taken die in dit gesprek nog gepland staan, worden geannuleerd.</string>
+    <string name="sched_pill_a11y_title">Komende geplande taak</string>
+    <string name="sched_pill_a11y_running">Uitvoering bezig</string>
+    <string name="sched_pill_a11y_waiting">Wachten tot een andere taak klaar is</string>
+    <string name="sched_pill_a11y_upcoming_left">Volgende uitvoering · nog %1$d</string>
+    <string name="sched_pill_a11y_upcoming">Volgende uitvoering</string>
+    <string name="sched_pill_a11y_run_of">Uitvoering %1$d van %2$d</string>
+    <string name="sched_pill_a11y_run">Uitvoering %1$d</string>
+    <string name="sched_pill_a11y_next_in">Volgende uitvoering over %1$s</string>
+    <string name="sched_pill_a11y_more">+%1$d meer</string>
+    <string name="sched_pill_a11y_hint">Opent de taakdetails</string>
+</resources>

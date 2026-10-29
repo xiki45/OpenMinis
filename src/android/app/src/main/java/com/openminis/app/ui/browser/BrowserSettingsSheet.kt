@@ -42,7 +42,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -60,7 +62,10 @@ import com.openminis.app.R
 import com.openminis.app.browser.BrowserTabPool
 import com.openminis.app.browser.UserAgentProfile
 import com.openminis.app.logging.AppLogger
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.openminis.app.browser.SiteCookieCleaner
 import com.openminis.app.ui.components.MinisTextButton
 import com.openminis.app.ui.util.bringIntoViewOnFocus
 
@@ -115,6 +120,18 @@ fun BrowserSettingsSheet(
 
     // Cookie filter (mirrors iOS `.searchable("Filter by domain")`).
     var cookieFilterText by remember { mutableStateOf("") }
+
+    // [ISS-040] The cookie section is STATE, re-read after every clear. It was
+    // a plain `CookieManager.hasCookies()` read during composition: clearing
+    // changed no state, so nothing recomposed and the sheet looked as if the
+    // tap did nothing. Bumping [cookieRevision] reloads it (off the main
+    // thread: the per-site probes are synchronous CookieManager reads).
+    var cookieRevision by remember { mutableIntStateOf(0) }
+    var cookieDeleteFailed by remember { mutableStateOf<String?>(null) }
+    val cookieHistory = remember { com.openminis.app.browser.BrowserHistoryStore.getInstance(context) }
+    val cookieSection by produceState<SiteCookieCleaner.SectionState?>(initialValue = null, cookieRevision) {
+        value = withContext(Dispatchers.IO) { SiteCookieCleaner.loadSection(cookieHistory.uniqueDomains()) }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -339,9 +356,9 @@ fun BrowserSettingsSheet(
             )
             Spacer(Modifier.height(8.dp))
 
-            val hasCookies = CookieManager.getInstance().hasCookies()
-            val historyStore = remember { com.openminis.app.browser.BrowserHistoryStore.getInstance(context) }
-            val allDomains = remember(hasCookies) { historyStore.uniqueDomains() }
+            // Until the first load lands, show nothing rather than a guess.
+            val hasCookies = cookieSection?.hasCookies ?: false
+            val allDomains = cookieSection?.domains ?: emptyList()
             val domains = remember(allDomains, cookieFilterText) {
                 if (cookieFilterText.isBlank()) allDomains
                 else allDomains.filter { it.contains(cookieFilterText.trim(), ignoreCase = true) }
@@ -358,7 +375,9 @@ fun BrowserSettingsSheet(
                 )
             }
 
-            if (domains.isEmpty()) {
+            if (cookieSection == null) {
+                // First load still running (a few ms): no text, not a wrong one.
+            } else if (domains.isEmpty()) {
                 Text(
                     when {
                         cookieFilterText.isNotBlank() -> stringResource(R.string.browser_settings_no_domains_match, cookieFilterText)
@@ -382,9 +401,14 @@ fun BrowserSettingsSheet(
                             )
                             IconButton(
                                 onClick = {
-                                    // Clear cookies for this domain
-                                    CookieManager.getInstance().setCookie(domain, "")
-                                    CookieManager.getInstance().flush()
+                                    // [ISS-040] Expire this site's cookies (setCookie(domain, "")
+                                    // was a no-op), then reload the section. Anything still
+                                    // present is reported below, never silently kept.
+                                    coroutineScope.launch {
+                                        val result = withContext(Dispatchers.IO) { SiteCookieCleaner.clear(domain) }
+                                        cookieDeleteFailed = if (result.cleared) null else domain
+                                        cookieRevision++
+                                    }
                                 },
                                 modifier = Modifier.size(32.dp),
                             ) {
@@ -398,6 +422,15 @@ fun BrowserSettingsSheet(
                         }
                     }
                 }
+            }
+
+            cookieDeleteFailed?.let { failed ->
+                Text(
+                    stringResource(R.string.browser_settings_clear_cookies_for_failed, failed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
 
             Spacer(Modifier.height(8.dp))
@@ -418,9 +451,21 @@ fun BrowserSettingsSheet(
             text = { Text(stringResource(R.string.browser_settings_clear_all_dialog_message)) },
             confirmButton = {
                 MinisTextButton(onClick = {
-                    CookieManager.getInstance().removeAllCookies(null)
-                    WebStorage.getInstance().deleteAllData()
                     showClearConfirm = false
+                    WebStorage.getInstance().deleteAllData()
+                    // [ISS-040] removeAllCookies is asynchronous: refresh the
+                    // section from its callback, not right after the call
+                    // (hasCookies() still reads true at that point). The
+                    // callback arrives on this (main) looper; launching on
+                    // Main keeps the state write there regardless.
+                    CookieManager.getInstance().removeAllCookies { removed ->
+                        CookieManager.getInstance().flush()
+                        AppLogger.info("BrowserSettings", "removeAllCookies done removed=$removed")
+                        coroutineScope.launch(Dispatchers.Main) {
+                            cookieDeleteFailed = null
+                            cookieRevision++
+                        }
+                    }
                 }) {
                     Text(stringResource(R.string.browser_settings_clear), color = MaterialTheme.colorScheme.error)
                 }

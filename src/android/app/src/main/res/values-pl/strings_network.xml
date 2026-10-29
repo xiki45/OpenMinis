@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Sieć</string>
+    <string name="network_status">Stan</string>
+    <string name="network_status_starting">Uruchamianie…</string>
+    <string name="network_status_connecting">Łączenie…</string>
+    <string name="network_status_off">Wyłączone</string>
+    <string name="network_device_name">Nazwa urządzenia</string>
+    <string name="network_device_name_automatic">Automatycznie</string>
+    <string name="network_exit_node_none">Brak</string>
+    <string name="network_sign_out">Wyloguj się</string>
+    <string name="network_scope_shell">Powłoka</string>
+    <string name="network_scope_browser">Przeglądarka</string>
+    <string name="network_scope_backup">Kopia zapasowa</string>
+    <string name="network_proxy_type">Typ</string>
+    <string name="network_proxy_server">Serwer</string>
+    <string name="network_proxy_authentication">Uwierzytelnianie</string>
+    <string name="network_proxy_password">Hasło</string>
+    <string name="network_proxy_bypass">Pomiń</string>
+    <string name="network_proxy_test">Testuj połączenie</string>
+    <string name="network_cancel">Anuluj</string>
+    <string name="network_save">Zapisz</string>
+    <string name="network_provider_route">Sieć</string>
+</resources>

@@ -34,7 +34,8 @@ class StopSiblingSubagentLoopTest {
 
     @Test
     fun `the parent loop stops after the results are recorded and before anything else is sent`() {
-        val appended = vm.indexOf("contentParts = resultParts,\n                dbMessageId = toolResultDbId,")
+        // [T-ctx-builder] The results message is built by ToolResultWrap.historyMessage.
+        val appended = vm.indexOf("agentHistory.add(ToolResultWrap.historyMessage(resultParts, toolResultDbId))")
         val gate = vm.indexOf("if (com.openminis.app.agent.jobs.AgentJobRegistry.isDelegationMuted(activeSessionId)) {")
         val nextBatch = vm.indexOf("val insertBatch = QueuedPromptBatching.nextInsertBatch(_promptQueue.value)")
         assertTrue("results appended", appended >= 0)

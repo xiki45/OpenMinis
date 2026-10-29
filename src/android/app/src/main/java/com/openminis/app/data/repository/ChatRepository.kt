@@ -8,6 +8,8 @@ import com.openminis.app.data.db.MessageEntity
 import com.openminis.app.data.db.MessageHeadRow
 import com.openminis.app.data.model.ModelAttributionSnapshot
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.util.UUID
 
 class ChatRepository(internal val dao: ChatDao) {
@@ -96,12 +98,25 @@ class ChatRepository(internal val dao: ChatDao) {
         }
     }
 
+    /**
+     * [T-android-chat-title-follows-store] The session's stored title and
+     * category, once now and again whenever either changes - whoever wrote it
+     * (the list's Regenerate Title or rename, auto-title, sync).
+     */
+    fun observeSessionTitle(id: String): Flow<com.openminis.app.data.db.SessionTitleRow> =
+        dao.observeSessionTitle(id).filterNotNull().distinctUntilChanged()
+
     suspend fun updateSessionTitle(id: String, title: String) {
         dao.updateSessionTitle(id, title, System.currentTimeMillis())
     }
 
     suspend fun updateSessionTitleAndCategory(id: String, title: String, category: String?) {
         dao.updateSessionTitleAndCategory(id, title, category, System.currentTimeMillis())
+    }
+
+    /** [T-sessions-cli-update] Set the icon (category); null = the default icon. */
+    suspend fun updateSessionCategory(id: String, category: String?) {
+        dao.updateSessionCategory(id, category, System.currentTimeMillis())
     }
 
     suspend fun updateSessionModel(sessionId: String, modelId: String) {
@@ -225,6 +240,12 @@ class ChatRepository(internal val dao: ChatDao) {
 
     suspend fun sessionIdsInFolder(folderId: String): List<String> = dao.sessionIdsInFolder(folderId)
 
+    /** [T-autogroup-folder-titles] Group id → newest member activity and newest-first titles. */
+    internal suspend fun recentSessionTitlesByFolder(
+        perFolder: Int = com.openminis.app.ui.chat.FolderOfferFormat.FETCH_PER_FOLDER,
+    ): Map<String, com.openminis.app.ui.chat.FolderOfferFormat.Recent> =
+        com.openminis.app.ui.chat.FolderOfferFormat.group(dao.titledFolderMembers(), perFolder)
+
     /**
      * Move sessions into a group, or out of one when [folderId] is null.
      *
@@ -285,28 +306,33 @@ class ChatRepository(internal val dao: ChatDao) {
      *    result shows why it is one.
      *  - On an SQLite without JSON functions the raw-JSON query runs instead;
      *    its rows are still subject to the drop rule.
+     *  - [T-search-multi-keyword] (iOS b09df3824) Whitespace separates
+     *    keywords ([SessionSearch.searchTerms], at most 10) and a session
+     *    holding ANY of them is a result; `%` and `_` match literally. One
+     *    keyword gives the sessions the whole-string search always gave.
      */
     suspend fun searchSessionsWithHits(query: String): List<SessionSearchResult> {
-        val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        val like = "%$q%"
+        val terms = SessionSearch.searchTerms(query)
+        if (terms.isEmpty()) return emptyList()
+        val args = SessionSearch.searchArgs(terms)
         var visibleOnly = true
         val rows = try {
-            dao.runSessionSearchQuery(androidx.sqlite.db.SimpleSQLiteQuery(SessionSearch.VISIBLE_SEARCH_SQL, arrayOf(like, q)))
+            dao.runSessionSearchQuery(androidx.sqlite.db.SimpleSQLiteQuery(SessionSearch.visibleSearchSql(terms.size), args))
         } catch (e: android.database.sqlite.SQLiteException) {
             android.util.Log.w("ChatRepository", "[Search] visible-field query unavailable (${e.message}) — raw-JSON fallback")
             visibleOnly = false
-            dao.runSessionSearchQuery(androidx.sqlite.db.SimpleSQLiteQuery(SessionSearch.LEGACY_SEARCH_SQL, arrayOf(like, q)))
+            dao.runSessionSearchQuery(androidx.sqlite.db.SimpleSQLiteQuery(SessionSearch.legacySearchSql(terms.size), args))
         }
         var lookbackBudget = SessionSearch.OLDER_LOOKBACK_SESSIONS
         var dropped = 0
         val out = ArrayList<SessionSearchResult>(rows.size)
         for (row in rows) {
-            val titleMatched = row.session.title?.contains(q, ignoreCase = true) == true
-            var snippet = row.hitPartsJson?.let { SessionSearch.searchSnippet(it, q) }
+            val title = row.session.title
+            val titleMatched = title != null && SessionSearch.firstHit(title, terms) != null
+            var snippet = row.hitPartsJson?.let { SessionSearch.searchSnippet(it, terms) }
             if (snippet == null && row.hitPartsJson != null && lookbackBudget > 0) {
                 lookbackBudget--
-                snippet = olderSearchSnippet(row.session.id, like, q, visibleOnly)
+                snippet = olderSearchSnippet(row.session.id, terms, visibleOnly)
             }
             if (!titleMatched && snippet == null) {
                 dropped++
@@ -324,15 +350,18 @@ class ChatRepository(internal val dao: ChatDao) {
     }
 
     /** The newest match was already tried; look through the next few. */
-    private suspend fun olderSearchSnippet(sessionId: String, like: String, query: String, visibleOnly: Boolean): String? {
+    private suspend fun olderSearchSnippet(sessionId: String, terms: List<String>, visibleOnly: Boolean): String? {
         val older = try {
             dao.runPartsJsonQuery(
-                androidx.sqlite.db.SimpleSQLiteQuery(SessionSearch.olderMatchesSql(visibleOnly), arrayOf(like, sessionId, query.trim())),
+                androidx.sqlite.db.SimpleSQLiteQuery(
+                    SessionSearch.olderMatchesSql(visibleOnly, terms.size),
+                    SessionSearch.searchArgs(terms) + sessionId,
+                ),
             )
         } catch (e: android.database.sqlite.SQLiteException) {
             return null
         }
-        return older.drop(1).firstNotNullOfOrNull { SessionSearch.searchSnippet(it.partsJson, query) }
+        return older.drop(1).firstNotNullOfOrNull { SessionSearch.searchSnippet(it.partsJson, terms) }
     }
 
     fun observeMessages(sessionId: String): Flow<List<MessageEntity>> =
@@ -638,9 +667,25 @@ class ChatRepository(internal val dao: ChatDao) {
         limit: Int,
         startMs: Long?,
         endMs: Long?,
+        /**
+         * [T-sessions-cli-update] `list --group`: null = no filter; an empty
+         * list = ungrouped sessions only (no folder, or a folder that is not
+         * here - the list renders those as ungrouped too); otherwise members
+         * of any of these folder ids.
+         */
+        folderIds: List<String>? = null,
     ): List<SessionMeta> {
         val conditions = mutableListOf<String>()
         val args = mutableListOf<Any>()
+
+        if (folderIds != null) {
+            if (folderIds.isEmpty()) {
+                conditions += "(s.folder_id IS NULL OR s.folder_id NOT IN (SELECT id FROM folders))"
+            } else {
+                conditions += "s.folder_id IN (${folderIds.joinToString(",") { "?" }})"
+                args.addAll(folderIds)
+            }
+        }
 
         if (!sessionIds.isNullOrEmpty()) {
             conditions += "s.id IN (${sessionIds.joinToString(",") { "?" }})"
@@ -671,7 +716,8 @@ class ChatRepository(internal val dao: ChatDao) {
                     WHERE m2.session_id = s.id AND m2.role = 'user'
                     ORDER BY m2.sort_order ASC LIMIT 1) AS first_user_msg,
                    s.source, s.created_at, s.updated_at,
-                   (SELECT COUNT(*) FROM messages m3 WHERE m3.session_id = s.id) AS msg_count
+                   (SELECT COUNT(*) FROM messages m3 WHERE m3.session_id = s.id) AS msg_count,
+                   s.folder_id, s.category
             FROM sessions s
             $where
             ORDER BY s.updated_at DESC
@@ -694,6 +740,8 @@ class ChatRepository(internal val dao: ChatDao) {
                 startedAt = r.createdAt,
                 lastActive = r.updatedAt,
                 messageCount = r.msgCount,
+                folderId = r.folderId,
+                category = r.category,
             )
         }
     }
@@ -972,7 +1020,12 @@ class ChatRepository(internal val dao: ChatDao) {
             role == "assistant" && partsJson.trim() == ERROR_CARRIER_PARTS_JSON
 
         private fun cleanPreview(raw: String): String {
-            return stripSystemReminders(raw)
+            // [T-preview-scheduled-tag-leak] Every internal envelope out, not
+            // only the reminders (InternalTags): an attached-file listing and
+            // the attachment captions used to show in the list as raw text.
+            // [T-md-inline-html] <br> → space, whitelisted style tags out, before
+            // the regexes below and code-aware (code keeps its `<br>`).
+            return com.openminis.app.ui.markdown.InlineHtmlTags.stripForPreview(InternalTags.stripForPreview(raw))
                 .replace(Regex("[\r\n]+"), " ")      // newlines → space
                 .replace(Regex("#{1,6}\\s"), "")      // headings: ## Title → Title
                 .replace(Regex("\\*{1,3}|_{1,3}"), "")// bold/italic markers
@@ -1086,7 +1139,19 @@ class ChatRepository(internal val dao: ChatDao) {
                             com.openminis.app.agent.jobs.AgentCallback.parse(text)?.let { cb ->
                                 return com.openminis.app.agent.jobs.AgentCallbackLabels.previewLine(cb)
                             }
-                            return cleanPreview(text)
+                            // [T-preview-scheduled-tag-leak] A scheduled fire's
+                            // row is its <scheduled_task …> envelope: preview it
+                            // as "定时任务 · <label>", never the raw tag.
+                            InternalTags.scheduledPreviewLine(
+                                text,
+                                com.openminis.app.agent.jobs.AgentCallbackLabels.scheduled,
+                                ::cleanPreview,
+                            )?.let { return it.take(100) }
+                            val cleaned = cleanPreview(text)
+                            // A row that was only envelopes (a lone reminder)
+                            // previews as nothing, not as an empty line.
+                            if (cleaned.isEmpty()) continue
+                            return cleaned
                         }
                     } else if (type == "mediaRef") {
                         hasMedia = true
@@ -1108,11 +1173,10 @@ class ChatRepository(internal val dao: ChatDao) {
         // they must not show up in the session-list "last message" preview.
         // DOTALL flag covers multi-line reminder bodies; reluctant
         // quantifier so back-to-back reminders don't merge into one match.
-        private val SYSTEM_REMINDER_RE =
-            Regex("""<system-reminder>.*?</system-reminder>""", RegexOption.DOT_MATCHES_ALL)
-
+        // [T-preview-scheduled-tag-leak] Now case-insensitive and tolerant
+        // of an unclosed tag; see InternalTags.
         internal fun stripSystemReminders(raw: String): String =
-            SYSTEM_REMINDER_RE.replace(raw, "").trim()
+            InternalTags.stripSystemReminders(raw)
 
         /**
          * [T-android-sessions-cli-tool-calls] Every toolUse / toolResult part
@@ -1192,6 +1256,9 @@ data class SessionMeta(
     val startedAt: Long,    // ms — sessions.created_at
     val lastActive: Long,   // ms — sessions.updated_at
     val messageCount: Int,
+    /** [T-sessions-cli-update] Group id (null = ungrouped) and icon (category). */
+    val folderId: String? = null,
+    val category: String? = null,
 )
 
 /** T188: a single matching message returned by `minis-sessions-cli search`. */

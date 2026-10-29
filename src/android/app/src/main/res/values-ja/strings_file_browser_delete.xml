@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">「%1$s」は Minis がここにマウントしているフォルダのため、ファイルブラウザからは削除できません。何も削除されていません。外部フォルダを外すには「設定 › 外部フォルダをマウント」を使用してください。</string>
+</resources>

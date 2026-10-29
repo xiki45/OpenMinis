@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-retry-badge] The retry badge before "… is thinking" and its retry log sheet. -->
+<resources>
+    <string name="retry_badge_a11y">正在重试，第 %1$d 次，共 %2$d 次。点按查看重试记录。</string>
+    <string name="retry_sheet_title">自动重试记录</string>
+    <string name="retry_sheet_subtitle">本次任务中自动重试过的请求，回复结束后清除。</string>
+    <string name="retry_sheet_empty">本次任务没有重试。</string>
+    <string name="retry_record_title">第 %1$d/%2$d 次重试</string>
+    <string name="retry_record_error">错误：%1$s</string>
+    <string name="retry_record_model">模型：%1$s</string>
+    <string name="retry_record_endpoint">接入点：%1$s</string>
+    <string name="retry_record_delay">等待 %1$d 秒后重试</string>
+    <string name="retry_record_switched">与上次重试相比已切换模型</string>
+</resources>

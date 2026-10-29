@@ -1,0 +1,174 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/IMG_0002.HEIC]"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0002.HEIC\" url=\"minis://attachments/uploads/IMG_0002.HEIC\" size=\"4120\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/IMG_0002.HEIC]"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0002.HEIC\" url=\"minis://attachments/uploads/IMG_0002.HEIC\" size=\"4120\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/IMG_0002.HEIC]"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0002.HEIC\" url=\"minis://attachments/uploads/IMG_0002.HEIC\" size=\"4120\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/IMG_0002.HEIC]"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0002.HEIC\" url=\"minis://attachments/uploads/IMG_0002.HEIC\" size=\"4120\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0002.HEIC\" url=\"minis://attachments/uploads/IMG_0002.HEIC\" size=\"4120\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0002.HEIC\" url=\"minis://attachments/uploads/IMG_0002.HEIC\" size=\"4120\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0002.HEIC\" url=\"minis://attachments/uploads/IMG_0002.HEIC\" size=\"4120\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/IMG_0002.HEIC\" url=\"minis://attachments/uploads/IMG_0002.HEIC\" size=\"4120\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

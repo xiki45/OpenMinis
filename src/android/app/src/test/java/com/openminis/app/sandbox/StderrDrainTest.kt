@@ -53,6 +53,7 @@ class StderrDrainTest {
         assertEquals("wget: unable to resolve host\nreal error\n", kept)
         assertTrue(StderrDrain.isProotDebugLine("[native_offload] x"))
         assertTrue(StderrDrain.isProotDebugLine("[fake_netlink] initialized (rtnetlink -> loopback only; SO_MARK -> no-op)"))
+        assertTrue(StderrDrain.isProotDebugLine("[xnet] x1 local port 42451 -> 100.64.0.42:22"))
         assertFalse("only the exact prefix", StderrDrain.isProotDebugLine("native_offload x"))
     }
 

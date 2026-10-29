@@ -48,6 +48,21 @@ object CrashFrequencyDetector {
     private const val WINDOW_MS: Long = 60L * 60L * 1000L  // 1 hour
     private const val THRESHOLD = 2
 
+    // [T-safe-mode-suppressed-threshold] Threshold while the 24 h "Not now"
+    // suppress window is active (see KEY_SUPPRESS_UNTIL). Only there.
+    //
+    // The window used to switch detection off completely, so after one
+    // "Not now" a crash-on-launch loop ran unprotected: measured 23 crashes
+    // in ~70 s with no safe mode and no exit. The user did ask not to be
+    // prompted, so an occasional crash (1-4 in an hour) still stays silent;
+    // 5 in one hour is no longer "occasional", it is the app failing to
+    // start, and that warrants safe mode and the dialog (its only exit).
+    // 5 = well above the normal 2 so a user who opted out is not nagged by a
+    // couple of unrelated crashes, yet low enough that a loop (one crash
+    // every few seconds) is caught within seconds. Outside the window the
+    // threshold stays [THRESHOLD].
+    private const val SUPPRESSED_THRESHOLD = 5
+
     // T-android-crash-safe-mode-v2: persisted "user dismissed at" timestamp.
     // Only crash files whose mtime is GREATER than this timestamp count
     // toward the safe-mode threshold on subsequent cold starts. Without
@@ -64,10 +79,11 @@ object CrashFrequencyDetector {
     // re-entering the chat that may have been the crash trigger.
     private const val KEY_FORCE_HOME_UNTIL = "force_home_until"
     private const val FORCE_HOME_GRACE_MS: Long = 60L * 60L * 1000L  // 1 hour
-    // "Not now" hard-suppress window. When the user explicitly opts out
-    // of sharing we don't want to nag them again every cold start — they
-    // saw the prompt and said no. Hide the prompt entirely for 24 hours,
-    // independent of however many fresh crashes pile up in that window.
+    // "Not now" suppress window. When the user explicitly opts out of
+    // sharing we don't want to nag them again every cold start — they saw
+    // the prompt and said no. For 24 hours the burst threshold is raised
+    // to [SUPPRESSED_THRESHOLD] instead of [THRESHOLD]: occasional crashes
+    // stay silent, a crash loop still gets safe mode and the dialog.
     // After 24h we resume the normal 1-hour rolling burst detection.
     private const val KEY_SUPPRESS_UNTIL = "suppress_until"
     private const val SUPPRESS_AFTER_DISMISS_MS: Long = 24L * 60L * 60L * 1000L  // 24 hours
@@ -197,28 +213,31 @@ object CrashFrequencyDetector {
     fun isSafeMode(): Boolean = _safeMode.get()
 
     /**
+     * [T-safe-mode-suppressed-threshold] Crashes in the last hour needed to
+     * enter safe mode: [SUPPRESSED_THRESHOLD] while the "Not now" suppress
+     * window is active, [THRESHOLD] otherwise (including after it expires).
+     */
+    internal fun thresholdFor(now: Long, suppressUntil: Long): Int =
+        if (suppressUntil > 0 && now < suppressUntil) SUPPRESSED_THRESHOLD else THRESHOLD
+
+    /** Whether [recent] crash files in the window trip safe mode at [now]. */
+    internal fun tripsSafeMode(recent: Int, now: Long, suppressUntil: Long): Boolean =
+        recent >= thresholdFor(now, suppressUntil)
+
+    /**
      * Inspect `filesDir/logs/` and remember recent crash files for the
      * next [maybeShowOnActivity] call. Safe to call from
      * Application.onCreate; never throws.
      */
     fun checkAtLaunch(app: Application) {
         try {
-            // "Not now" 24-hour hard suppress. Once the user explicitly
-            // dismisses, skip the whole detection path on cold starts
-            // until the suppress window expires. After expiry we
-            // resume normal 1-hour rolling burst detection — fresh
-            // crashes in the new live window can still trigger a prompt.
+            // [T-safe-mode-suppressed-threshold] The "Not now" window no
+            // longer skips detection; it raises the threshold (see
+            // [thresholdFor]). Previously this returned here, leaving a
+            // crash loop with no safe mode for 24 h.
             val now0 = System.currentTimeMillis()
             val suppressUntil = getSuppressUntil(app)
-            if (suppressUntil > 0 && now0 < suppressUntil) {
-                pendingShareFiles = null
-                android.util.Log.i(
-                    TAG,
-                    "checkAtLaunch: suppressed (user dismissed; " +
-                        "${(suppressUntil - now0) / 60_000L} min remaining)",
-                )
-                return
-            }
+            val threshold = thresholdFor(now0, suppressUntil)
             val logsDir = File(app.filesDir, "logs")
             if (!logsDir.isDirectory) {
                 pendingShareFiles = null
@@ -251,9 +270,12 @@ object CrashFrequencyDetector {
             android.util.Log.i(
                 TAG,
                 "checkAtLaunch: total=${all.size} recent=${recent.size} " +
-                    "threshold=$THRESHOLD dismissedAt=$dismissedAt",
+                    "threshold=$threshold dismissedAt=$dismissedAt" +
+                    if (threshold == SUPPRESSED_THRESHOLD) {
+                        " (user dismissed; raised threshold, ${(suppressUntil - now0) / 60_000L} min of suppress left)"
+                    } else "",
             )
-            if (recent.size < THRESHOLD) {
+            if (recent.size < threshold) {
                 pendingShareFiles = null
                 return
             }

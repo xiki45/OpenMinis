@@ -1,5 +1,7 @@
 package com.openminis.app.config.audit
 
+import com.openminis.app.config.readable.ReadableSummary
+
 /** Who initiated the change. Mirrors iOS `ConfigAuditActor`. */
 enum class ConfigAuditActor(val raw: String) {
     AGENT("agent"),
@@ -50,4 +52,12 @@ data class ConfigAuditEntry(
     val revertOf: String?,
     /** Caller-supplied `--caption "..."` text. Optional. */
     val caption: String?,
+    /**
+     * [T-config-readable] Human-readable description rendered when the change
+     * was requested (names frozen at that moment). Shown in Logs → Config
+     * Changes only — ConfigBridge.auditEntryDict never emits it, so the model
+     * cannot see it. null for rows written before this column existed; the UI
+     * then shows the raw diff with a "predates" note.
+     */
+    val readable: ReadableSummary? = null,
 )

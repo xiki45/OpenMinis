@@ -1,0 +1,254 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Please review: Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscin\u2026[5015 chars sha256:940d05a55059]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reviewed."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "And this one: second paste body Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, cons\u2026[3032 chars sha256:1e4740bd20ad]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Please review: Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscin\u2026[5015 chars sha256:940d05a55059]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reviewed."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "And this one: second paste body Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, cons\u2026[3032 chars sha256:1e4740bd20ad]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Please review: Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscin\u2026[5015 chars sha256:940d05a55059]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reviewed."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "And this one: second paste body Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, cons\u2026[3032 chars sha256:1e4740bd20ad]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Please review: Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscin\u2026[5015 chars sha256:940d05a55059]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reviewed."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "And this one: second paste body Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, cons\u2026[3032 chars sha256:1e4740bd20ad]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Please review: "
+          },
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[5000 chars sha256:74a1a6856442]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reviewed."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "And this one: "
+          },
+          {
+            "kind": "text",
+            "text": "[pasted content unavailable \u2014 the stored text file is missing]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Please review: "
+          },
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[5000 chars sha256:74a1a6856442]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reviewed."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "And this one: "
+          },
+          {
+            "kind": "text",
+            "text": "[pasted content unavailable \u2014 the stored text file is missing]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Please review: Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscin\u2026[5015 chars sha256:940d05a55059]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reviewed."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "And this one: [pasted content unavailable \u2014 the stored text file is missing]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Please review: Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscin\u2026[5015 chars sha256:940d05a55059]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Reviewed."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "And this one: [pasted content unavailable \u2014 the stored text file is missing]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

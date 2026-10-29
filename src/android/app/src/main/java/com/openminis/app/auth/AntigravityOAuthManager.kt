@@ -9,8 +9,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Antigravity OAuth manager — mirrors iOS `AntigravityOAuthManager`.
@@ -105,13 +103,11 @@ class AntigravityOAuthManager(context: Context, instanceId: String) : OAuthManag
     private suspend fun fetchUserEmail() = withContext(Dispatchers.IO) {
         val token = validAccessToken() ?: return@withContext
         try {
-            val conn = URL("https://www.googleapis.com/oauth2/v1/userinfo").openConnection() as HttpURLConnection
-            conn.setRequestProperty("Authorization", "Bearer $token")
-            if (conn.responseCode == 200) {
-                val body = conn.inputStream.bufferedReader().readText()
-                email = JSONObject(body).optString("email")
+            // [FEAT-261021-16] Routed by the instance's tag; unrouted it is the same HttpURLConnection request.
+            com.openminis.app.network.NetworkUrlRequest.open(netTag, "https://www.googleapis.com/oauth2/v1/userinfo",
+                headers = mapOf("Authorization" to "Bearer $token")).use { r ->
+                if (r.code == 200) email = JSONObject(r.text()).optString("email")
             }
-            conn.disconnect()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to fetch email", e)
         }

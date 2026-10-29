@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_task_paused_body">Attività in pausa. Apri la sessione per continuare.</string>
+</resources>

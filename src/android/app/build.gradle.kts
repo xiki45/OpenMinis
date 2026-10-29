@@ -36,8 +36,8 @@ android {
         applicationId = "com.openminis.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 28
-        versionName = "1.14"
+        versionCode = 37
+        versionName = "1.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -55,6 +55,16 @@ android {
             "ANTHROPIC_OAUTH_IDENTIFIER_PROMPT",
             "\"${customizationValue("ANTHROPIC_OAUTH_IDENTIFIER_PROMPT")}\""
         )
+
+        // [T15-channels] In-app update. Every build and every update channel
+        // checks GitHub Releases of this one repository: stable reads only
+        // prerelease=false, beta also reads the prereleases, which are tagged
+        // `0-beta-build<N>` so that 1.12-1.15 clients (which ignore the
+        // prerelease flag and cut a tag at its first '-') see them as version
+        // 0 and never offer them. UPDATE_CHANNEL is the channel a fresh
+        // install starts on; the user can switch to beta in About.
+        buildConfigField("String", "RELEASE_REPO", "\"OpenMinis/OpenMinis\"")
+        buildConfigField("String", "UPDATE_CHANNEL", "\"stable\"")
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -120,6 +130,36 @@ android {
         }
     }
 
+    // [T15-channels] Where a build is distributed. Same applicationId, same
+    // signing and same versionCode for both, so either installs over the other.
+    // - github: the APK attached to GitHub Releases. Checks for updates on its
+    //   own (ON_START, throttled) and shows the update badges.
+    // - store: the app-store build (AAB). Never checks on its own and never
+    //   shows a badge; About's manual "Check for Updates" still works and
+    //   downloads + installs from GitHub like the github build.
+    // IN_APP_INSTALL gates the download-and-install step. It is true for both
+    // today; Google Play forbids self-installing APKs, so a Play listing would
+    // flip it to false for `store` (show the release page instead).
+    // `github` is the default flavor: plain assembleDebug / installDebug /
+    // testDebugUnitTest keep meaning the build everyone already uses (see the
+    // aliases after this block).
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            isDefault = true
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+            buildConfigField("boolean", "AUTO_UPDATE_CHECK", "true")
+            buildConfigField("boolean", "IN_APP_INSTALL", "true")
+        }
+        create("store") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+            buildConfigField("boolean", "AUTO_UPDATE_CHECK", "false")
+            buildConfigField("boolean", "IN_APP_INSTALL", "true")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -168,6 +208,64 @@ android {
         // a fixed detector (tracked at issuetracker.google.com/388538014).
         checkReleaseBuilds = false
         disable += "NonNullableMutableLiveData"
+    }
+}
+
+// [T15-channels] Keep the flavorless task names and APK paths working.
+// Adding the `distribution` dimension renames every variant (debug ->
+// githubDebug), and scripts and docs drive the build with :app:assembleDebug,
+// :app:installDebug, :app:testDebugUnitTest --tests '…' and
+// app/build/outputs/apk/debug/app-debug.apk.
+// - The store flavor only ships as a release AAB, so its debug and perf
+//   variants are off unless -Pminis.storeDev=true (to try the store
+//   behaviour on a device with installStoreDebug). That keeps the
+//   aggregate assembleDebug / assemblePerf building ONE variant, not two.
+// - assembleRelease is narrowed to the github APK (bundleStoreRelease builds
+//   the store AAB explicitly).
+// - installDebug / installPerf / installRelease are aliases for the github
+//   variants; AGP only creates them when there are no flavors.
+// - testDebugUnitTest is a real Test task over the githubDebug unit-test
+//   classpath, so `--tests` filtering works and results still land in
+//   build/test-results/testDebugUnitTest.
+// - The github APKs are also copied to their pre-flavor paths
+//   (outputs/apk/<type>/app-<type>.apk); the flavored originals stay at
+//   outputs/apk/github/<type>/app-github-<type>.apk.
+val storeDevVariants = providers.gradleProperty("minis.storeDev").map { it.toBoolean() }.getOrElse(false)
+androidComponents {
+    beforeVariants(selector().withFlavor("distribution" to "store")) { variant ->
+        if (variant.buildType != "release" && !storeDevVariants) variant.enable = false
+    }
+}
+for (buildType in listOf("debug", "release", "perf")) {
+    val cap = buildType.replaceFirstChar { it.uppercase() }
+    val copyLegacy = tasks.register<Copy>("copyGithub${cap}ApkToLegacyPath") {
+        from(layout.buildDirectory.dir("outputs/apk/github/$buildType")) {
+            include("app-github-$buildType.apk")
+            rename { "app-$buildType.apk" }
+        }
+        into(layout.buildDirectory.dir("outputs/apk/$buildType"))
+    }
+    tasks.matching { it.name == "assembleGithub$cap" || it.name == "packageGithub$cap" }
+        .configureEach { finalizedBy(copyLegacy) }
+    tasks.register("install$cap") {
+        group = "install"
+        description = "Installs the github $buildType build (alias of installGithub$cap)."
+        dependsOn("installGithub$cap")
+    }
+}
+afterEvaluate {
+    // AGP wires the aggregate after the build script's own configuration, so
+    // narrowing it has to wait until then.
+    tasks.named("assembleRelease") { setDependsOn(listOf("assembleGithubRelease")) }
+    val githubUnitTests = tasks.named<Test>("testGithubDebugUnitTest")
+    tasks.register<Test>("testDebugUnitTest") {
+        group = "verification"
+        description = "Runs the githubDebug unit tests (pre-flavor name; supports --tests)."
+        testClassesDirs = githubUnitTests.get().testClassesDirs
+        classpath = githubUnitTests.get().classpath
+        jvmArgs(githubUnitTests.get().jvmArgs ?: emptyList<String>())
+        systemProperties(githubUnitTests.get().systemProperties)
+        maxHeapSize = githubUnitTests.get().maxHeapSize
     }
 }
 
@@ -234,11 +332,25 @@ abstract class WriteBuildInfoTask : DefaultTask() {
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
+    /** [T-android-jankdiag] Repository root, for the commit stamp. */
+    @get:Internal
+    abstract val repoDir: DirectoryProperty
+
     @TaskAction
     fun write() {
         val file = outputDir.file("build_info/build_time.txt").get().asFile
         file.parentFile.mkdirs()
         file.writeText(System.currentTimeMillis().toString())
+        // [T-android-jankdiag] The commit the APK came from, "-dirty" when the
+        // Android sources had uncommitted changes (Gradle builds the working
+        // tree, not the commit), so a field log names exactly what was built.
+        fun git(vararg args: String): String = runCatching {
+            val p = ProcessBuilder(listOf("git") + args).directory(repoDir.get().asFile).redirectErrorStream(true).start()
+            p.inputStream.bufferedReader().readText().trim().also { p.waitFor() }
+        }.getOrDefault("")
+        val head = git("rev-parse", "--short=9", "HEAD").ifEmpty { "unknown" }
+        val dirty = git("status", "--porcelain", "--untracked-files=no", "--", "src/android").isNotEmpty()
+        outputDir.file("build_info/commit.txt").get().asFile.writeText(if (dirty) "$head-dirty" else head)
     }
 }
 androidComponents {
@@ -246,6 +358,7 @@ androidComponents {
         val cap = variant.name.replaceFirstChar { it.uppercase() }
         val task = tasks.register<WriteBuildInfoTask>("write${cap}BuildInfo") {
             outputs.upToDateWhen { false }
+            repoDir.set(rootProject.layout.projectDirectory.dir("../.."))
         }
         variant.sources.assets?.addGeneratedSourceDirectory(task, WriteBuildInfoTask::outputDir)
     }
@@ -276,6 +389,9 @@ dependencies {
     implementation("androidx.compose.material3.adaptive:adaptive-layout:1.2.0")
     implementation("androidx.compose.material3.adaptive:adaptive-navigation:1.2.0")
     implementation("androidx.compose.ui:ui")
+    // [T-android-jankdiag] ProfileVerifier (ART compile state in the jank log).
+    // Already in the APK through Compose at this version; declared to compile against it.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.0")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
@@ -378,6 +494,7 @@ dependencies {
     // [T-android-search-visible-only] Runs the session-search SQL (SQLite JSON functions)
     // against a real SQLite in JVM tests; the same driver Room's compiler already uses.
     testImplementation("org.xerial:sqlite-jdbc:3.41.2.2")
+    testImplementation("org.robolectric:robolectric:4.17")
 
     // Testing — Instrumented (on-device) tests
     // [T-android-downgrade-compat] MigrationTestHelper replays the committed

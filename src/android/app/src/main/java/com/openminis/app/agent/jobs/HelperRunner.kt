@@ -114,7 +114,7 @@ object HelperRunner {
      * ([DEFAULT_MINUTES]/[MAX_MINUTES]) is what actually bounds a runaway
      * child, and it is unchanged; this cap is the backstop behind it.
      */
-    const val MAX_TURNS = 200
+    const val MAX_TURNS = com.openminis.app.agent.AgentLoopLimits.MAX_AGENT_TURNS
     const val MAX_PER_ASSISTANT_TURN = 3
     const val DEFAULT_MINUTES = 10
     const val MAX_MINUTES = 60
@@ -180,6 +180,39 @@ object HelperRunner {
         turnCap: Int,
         pendingSteers: Int,
     ): Boolean = isHelper && !isEmptyTurn && pendingSteers > 0 && turn + 1 < turnCap
+
+    /**
+     * [T-subagent-termination] The one-shot hidden user turn a sub agent gets
+     * when a turn ends with neither tool calls nor text: without it the run
+     * ends with no deliverable and the parent receives nothing. Sent with the
+     * tools withdrawn, so the only possible answer is the report. Starts with
+     * <system-reminder>, so it is never rendered. Byte-identical to iOS
+     * `RawMessage.helperClosingNudgeText` (76b9b0428).
+     */
+    const val CLOSING_NUDGE_TEXT =
+        "<system-reminder>This note is from the app, not from the delegating agent. Your last reply contained no text, so the delegating agent has received nothing from you. Tools are no longer available. Write your final answer now from what you already have: the deliverable itself, what you finished, what failed (including any tool error above) and what is left. Mark anything you could not verify as unverified.</system-reminder>"
+
+    /**
+     * [T-subagent-termination] Whether a sub agent turn that ended with no
+     * tool calls gets the one-shot closing request ([CLOSING_NUDGE_TEXT]).
+     *
+     * - Only a sub agent, once per run.
+     * - Only when THIS turn wrote no text: an empty endTurn, a stream that
+     *   closed without a stop reason, a max_tokens cut inside reasoning. Text
+     *   written in earlier turns does not count - narration next to a tool call
+     *   is not an answer, and that is exactly the field shape (a run that stops
+     *   right after a tool result).
+     * - Not on the last permitted round (no further iteration exists).
+     * A refusal and a user stop never reach this decision: both leave the loop
+     * earlier.
+     */
+    fun shouldSendClosingRequest(
+        isHelper: Boolean,
+        alreadySent: Boolean,
+        turnHasText: Boolean,
+        turn: Int,
+        turnCap: Int,
+    ): Boolean = isHelper && !alreadySent && !turnHasText && turn + 1 < turnCap
 
     fun parseArgs(argsJson: String): DelegateTaskArgs {
         val o = runCatching { JSONObject(argsJson) }.getOrElse { JSONObject() }
@@ -415,7 +448,87 @@ object HelperRunner {
 
     fun resolvedStatus(status: String, result: String): String {
         if (status != "completed") return status
-        return if (result.isBlank()) NO_DELIVERABLE else status
+        // [T-subagent-termination] The labelled earlier line childRunFacts falls
+        // back to is not a deliverable either: it used to make a run with no
+        // final answer report `completed`.
+        return if (SubAgentTerminationRules.isFinalAnswer(result)) status else NO_DELIVERABLE
+    }
+
+    /**
+     * [T-subagent-termination] The child's last tool call from its in-memory
+     * bubbles: `name "title"`, its status word and a one-line summary of the
+     * result. Port of iOS `AIChatViewModel.lastToolSnapshot`.
+     */
+    fun lastToolSnapshot(messages: List<com.openminis.app.ui.chat.ChatMessage>): SubAgentToolSnapshot? {
+        for (msg in messages.asReversed()) {
+            if (msg.role != "assistant") continue
+            val block = msg.toolBlocks.lastOrNull { it.kind == "tool_use" && it.toolStatus != null } ?: continue
+            val word = when (block.toolStatus) {
+                com.openminis.app.ui.chat.ToolBlockStatus.SUCCESS -> "success"
+                com.openminis.app.ui.chat.ToolBlockStatus.FAILED, com.openminis.app.ui.chat.ToolBlockStatus.TIMEOUT -> "failed"
+                com.openminis.app.ui.chat.ToolBlockStatus.CANCELLED -> "cancelled"
+                else -> "running"
+            }
+            var name = block.toolName.ifEmpty { "tool" }
+            if (block.toolTitle.isNotBlank()) name += " \"" + SubAgentTerminationRules.summarize(block.toolTitle, 80) + "\""
+            return SubAgentToolSnapshot(name, word, SubAgentTerminationRules.summarize(block.content))
+        }
+        return null
+    }
+
+    /**
+     * [T-subagent-termination] Classify a finished run into its termination
+     * record (not stored here; the caller stores it). [history] is the child's
+     * agentHistory, [resultText] what the run hands the parent.
+     *
+     * "Final answer" means the last history row is an assistant text turn with
+     * no tool call AND the text is not one of the app's no-answer labels.
+     */
+    fun terminationOf(
+        childSessionId: String,
+        jobId: String,
+        parentSessionId: String?,
+        loopStatus: String,
+        budgetExpired: Boolean,
+        errorText: String?,
+        history: List<com.openminis.app.data.model.LLMMessage>,
+        resultText: String,
+        lastTool: SubAgentToolSnapshot?,
+        closingAttempted: Boolean,
+        delivery: SubAgentTermination.Delivery,
+        nowMs: Long = System.currentTimeMillis(),
+    ): SubAgentTermination {
+        val hasFinal = SubAgentTerminationRules.isFinalAnswer(resultText) &&
+            SubAgentTerminationRules.endsWithFinalTurn(SubAgentTerminationRules.shapesOf(history))
+        // A "failed" loop is a clean exit with an error; the error itself is
+        // weighed by classify after a final answer, like iOS.
+        val loop = if (loopStatus == "cancelled" || loopStatus == "timeout") loopStatus else "completed"
+        val (reason, detail) = SubAgentTerminationRules.classify(
+            SubAgentRunEnd(
+                loopStatus = loop, budgetExpired = budgetExpired, errorText = errorText,
+                hasFinalAnswer = hasFinal, lastToolStatus = lastTool?.status,
+            ),
+        )
+        return SubAgentTermination(
+            sessionId = childSessionId, jobId = jobId, parentSessionId = parentSessionId,
+            reason = reason, detail = detail,
+            lastTool = lastTool?.name, lastToolStatus = lastTool?.status, lastToolSummary = lastTool?.summary,
+            partialOutputAvailable = reason != SubAgentTermination.Reason.COMPLETED && resultText.isNotBlank(),
+            closingAttempted = closingAttempted,
+            delivery = delivery,
+            startedAtMs = nowMs,
+            endedAtMs = nowMs,
+        )
+    }
+
+    /**
+     * [T-subagent-termination] The payload status for a run, given its
+     * termination: a clean loop exit whose last turn was not an answer
+     * (narration before a tool call, then nothing) is not a delivered result.
+     */
+    fun reportedStatus(loopStatus: String, result: String, termination: SubAgentTermination?): String {
+        val s = resolvedStatus(loopStatus, result)
+        return if (s == "completed" && termination != null && termination.reason != SubAgentTermination.Reason.COMPLETED) NO_DELIVERABLE else s
     }
 
     /**
@@ -625,10 +738,21 @@ object HelperRunner {
          * per-model clamp. null when reasoning stayed off.
          */
         thinkingLevel: String? = null,
+        /**
+         * [T-subagent-termination] How the run ended. When present, `result`
+         * becomes [SubAgentTerminationRules.helperResultText] (the answer, or a
+         * note naming the reason and the last tool) and the termination fields
+         * are merged into the payload.
+         */
+        termination: SubAgentTermination? = null,
     ): String = JSONObject()
         .put("ok", status == "completed")
         .put("status", status)
-        .put("result", result.ifEmpty { emptyResultNote(status) })
+        .put(
+            "result",
+            if (termination != null && termination.isTerminal) SubAgentTerminationRules.helperResultText(result, termination)
+            else result.ifEmpty { emptyResultNote(status) },
+        )
         .put("model_used", modelLabel)
         .put("tier_used", tierUsed.wire)
         .put("tier_requested", tierRequested)
@@ -673,6 +797,7 @@ object HelperRunner {
                 it.put("resumed_note", RESUMED_NOTE)
             }
         }
+        .also { j -> termination?.putPayload(j) }
         .toString()
 
     /**
@@ -839,7 +964,7 @@ object HelperRunner {
         // tool call — the last thing the agent actually said, labelled.
         val last = assistantTexts.lastOrNull().orEmpty()
         val lastText = if (last.isNotEmpty()) last else assistantTexts.dropLast(1).lastOrNull { it.isNotEmpty() }
-            ?.let { "(The agent did not write a final answer; this is its last message before the run ended.)\n$it" } ?: ""
+            ?.let { SubAgentTerminationRules.NO_FINAL_ANSWER_LABEL + "\n" + it } ?: ""
         return ChildRunFacts(tools, turns, input, output, cache, lastText)
     }
 

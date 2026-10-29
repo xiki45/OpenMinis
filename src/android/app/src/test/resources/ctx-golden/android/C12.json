@@ -1,0 +1,398 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Broken files"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/empty.jpg]"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/cut.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 1368,
+              "bytes": 1024,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "eecf090966072a8a",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/notes.png]"
+          },
+          {
+            "image": {
+              "base64Len": 3096,
+              "bytes": 2320,
+              "decodable": false,
+              "magic": "unknown",
+              "mime": "image/png",
+              "sha256": "ac031c8a18199a1b"
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/empty.jpg\" url=\"minis://attachments/uploads/empty.jpg\" size=\"0\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[478 chars sha256:a0ba4ba58c0e]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Broken files"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/empty.jpg]"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/cut.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 1368,
+              "bytes": 1024,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "eecf090966072a8a",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/notes.png]"
+          },
+          {
+            "image": {
+              "base64Len": 3096,
+              "bytes": 2320,
+              "decodable": false,
+              "magic": "unknown",
+              "mime": "image/png",
+              "sha256": "ac031c8a18199a1b"
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/empty.jpg\" url=\"minis://attachments/uploads/empty.jpg\" size=\"0\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[478 chars sha256:a0ba4ba58c0e]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Broken files"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/empty.jpg]"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/cut.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 1368,
+              "bytes": 1024,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "eecf090966072a8a",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/notes.png]"
+          },
+          {
+            "image": {
+              "base64Len": 3096,
+              "bytes": 2320,
+              "decodable": false,
+              "magic": "unknown",
+              "mime": "image/png",
+              "sha256": "ac031c8a18199a1b"
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/empty.jpg\" url=\"minis://attachments/uploads/empty.jpg\" size=\"0\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[478 chars sha256:a0ba4ba58c0e]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Broken files"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/empty.jpg]"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/cut.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 1368,
+              "bytes": 1024,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "eecf090966072a8a",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/notes.png]"
+          },
+          {
+            "image": {
+              "base64Len": 3096,
+              "bytes": 2320,
+              "decodable": false,
+              "magic": "unknown",
+              "mime": "image/png",
+              "sha256": "ac031c8a18199a1b"
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/empty.jpg\" url=\"minis://attachments/uploads/empty.jpg\" size=\"0\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[478 chars sha256:a0ba4ba58c0e]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Broken files"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "image": {
+              "base64Len": 1368,
+              "bytes": 1024,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "eecf090966072a8a",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 3096,
+              "bytes": 2320,
+              "decodable": false,
+              "magic": "unknown",
+              "mime": "image/png",
+              "sha256": "ac031c8a18199a1b"
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/empty.jpg\" url=\"minis://attachments/uploads/empty.jpg\" size=\"0\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[478 chars sha256:a0ba4ba58c0e]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Broken files"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "image": {
+              "base64Len": 1368,
+              "bytes": 1024,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "eecf090966072a8a",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 3096,
+              "bytes": 2320,
+              "decodable": false,
+              "magic": "unknown",
+              "mime": "image/png",
+              "sha256": "ac031c8a18199a1b"
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/empty.jpg\" url=\"minis://attachments/uploads/empty.jpg\" size=\"0\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[478 chars sha256:a0ba4ba58c0e]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Broken files"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "image": {
+              "base64Len": 1368,
+              "bytes": 1024,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "eecf090966072a8a",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 3096,
+              "bytes": 2320,
+              "decodable": false,
+              "magic": "unknown",
+              "mime": "image/png",
+              "sha256": "ac031c8a18199a1b"
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/empty.jpg\" url=\"minis://attachments/uploads/empty.jpg\" size=\"0\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[478 chars sha256:a0ba4ba58c0e]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Broken files"
+          },
+          {
+            "kind": "text",
+            "text": "[Image omitted: its file format could not be converted to one this model accepts]"
+          },
+          {
+            "image": {
+              "base64Len": 1368,
+              "bytes": 1024,
+              "decodable": true,
+              "h": 900,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "eecf090966072a8a",
+              "w": 1200
+            },
+            "kind": "image"
+          },
+          {
+            "image": {
+              "base64Len": 3096,
+              "bytes": 2320,
+              "decodable": false,
+              "magic": "unknown",
+              "mime": "image/png",
+              "sha256": "ac031c8a18199a1b"
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/empty.jpg\" url=\"minis://attachments/uploads/empty.jpg\" size=\"0\" modified=\"2025-10-09T08:53:20Z\" />\n  <file path=\"/var/minis/attachmen\u2026[478 chars sha256:a0ba4ba58c0e]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

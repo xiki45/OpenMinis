@@ -134,6 +134,25 @@ object BackupFormat {
         explicitNulls = false
         coerceInputValues = true
     }
+
+    /**
+     * [T-port-backup-secrets-defaults] Encoder for `secrets.json`: [json] plus
+     * `encodeDefaults`, so `v` and every section are written even when empty.
+     *
+     * [json] omits default values, so a phone with no MCP OAuth tokens (and,
+     * with only one category selected, no provider keys or no env values)
+     * wrote `{"envVars":[...]}`. iOS builds before e0fafc8cd (every 1.15
+     * build shipped before 2026-10-01) decode BackupSecrets with the
+     * synthesized Decodable, which requires `v`, `providers`, `envVars` and
+     * `mcpOAuth`; the whole file failed to decode there and an Android -> iOS
+     * restore silently lost every provider key and env var value.
+     * `explicitNulls = false` still applies, so absent optional credentials
+     * stay absent rather than becoming `null`, as iOS writes them.
+     */
+    private val secretsJson = Json(json) { encodeDefaults = true }
+
+    fun encodeSecrets(secrets: BackupSecrets): String =
+        secretsJson.encodeToString(BackupSecrets.serializer(), secrets)
 }
 
 /**
@@ -412,6 +431,14 @@ data class BackupEnvVarMeta(
      */
     @Serializable(with = Iso8601MillisSerializer::class)
     val createdAt: Long = 0,
+    /**
+     * [T-envvar-disable] Same name and default on both platforms. Missing
+     * (packages from before the feature, either platform) means enabled; with
+     * the default encoder an enabled variable is written without it, a
+     * disabled one as `"enabled": false`. Applied only to variables the
+     * restore creates - an existing variable keeps its own state.
+     */
+    val enabled: Boolean = true,
 )
 
 /**

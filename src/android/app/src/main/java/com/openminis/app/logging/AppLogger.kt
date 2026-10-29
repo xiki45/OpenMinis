@@ -191,6 +191,8 @@ object AppLogger {
         // launch) so it is present in every attached log, including the
         // post-crash one.
         appContext?.let { com.openminis.app.diagnostics.EnvironmentBanner.log(it) }
+        // [T-android-jankdiag] Its build / device / display lines, in this file too.
+        com.openminis.app.diagnostics.JankDiag.onLoggingStarted()
     }
 
     @Synchronized
@@ -408,6 +410,10 @@ object AppLogger {
         // [T-android-log-level] DEBUG reaches the file only at Verbose; it
         // still goes to logcat above for adb users.
         if (level == "DEBUG" && !verbose) return
+        // [T-android-jankdiag] What logging costs the main thread: timed only
+        // for main-thread callers, a thread-local lookup otherwise.
+        val onMain = android.os.Looper.myLooper() === android.os.Looper.getMainLooper()
+        val t0 = if (onMain) System.nanoTime() else 0L
         // [T-android-log-hotpath] Format the timestamps only for a line that
         // is actually written. They used to be computed first, so every
         // logcat-only call (all DEBUG lines at the default level, and every
@@ -419,6 +425,26 @@ object AppLogger {
         } catch (e: Exception) {
             Log.w(TAG, "Failed to write log: ${e.message}")
         }
+        if (onMain) {
+            val d = System.nanoTime() - t0
+            statMainCalls.incrementAndGet()
+            statMainNs.addAndGet(d)
+            if (d > statMainMaxNs) statMainMaxNs = d
+        }
+    }
+
+    /** [T-android-jankdiag] Log-file writes since the last drain. Writes are synchronous: there is no queue. */
+    class Stats(val lines: Long, val mainCalls: Long, val mainNs: Long, val mainMaxNs: Long)
+
+    private val statLines = java.util.concurrent.atomic.AtomicLong()
+    private val statMainCalls = java.util.concurrent.atomic.AtomicLong()
+    private val statMainNs = java.util.concurrent.atomic.AtomicLong()
+    @Volatile private var statMainMaxNs = 0L
+
+    fun drainStats(): Stats {
+        val out = Stats(statLines.getAndSet(0), statMainCalls.getAndSet(0), statMainNs.getAndSet(0), statMainMaxNs)
+        statMainMaxNs = 0L
+        return out
     }
 
     /**
@@ -427,6 +453,7 @@ object AppLogger {
      */
     @Synchronized
     private fun appendLine(date: String, text: String) {
+        statLines.incrementAndGet()
         val w = getWriter(date)
         w.println(text)
         w.flush()

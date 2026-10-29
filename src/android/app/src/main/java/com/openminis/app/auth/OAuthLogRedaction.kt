@@ -34,6 +34,20 @@ object OAuthLogRedaction {
         return "<len=${value.length} prefix=${value.take(4)}…>"
     }
 
+    /**
+     * [T-android-oauth-log-redact] JSON members whose values are credentials: a token
+     * endpoint's response carries them, and it used to be logged verbatim.
+     */
+    private val SECRET_JSON = Regex(
+        "(\"(?:access_token|refresh_token|id_token|token|code|code_verifier|state|client_secret|api_key|key)\"\\s*:\\s*)\"((?:[^\"\\\\]|\\\\.)*)\"",
+    )
+
+    /** [body] with every secret JSON string value replaced by its length only. */
+    fun jsonBody(body: String?): String {
+        if (body == null) return "<null>"
+        return SECRET_JSON.replace(body) { m -> "${m.groupValues[1]}\"<len=${m.groupValues[2].length}>\"" }
+    }
+
     /** Replaces the value of every secret-bearing query/fragment parameter in [url] with [secret]. */
     fun url(url: String?): String {
         if (url == null) return "<null>"

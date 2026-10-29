@@ -20,6 +20,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.BatteryFull
 import androidx.compose.material.icons.outlined.Bolt
@@ -93,6 +98,7 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
     val backgroundOverlayEnabled by backgroundRepo.backgroundOverlayEnabled.collectAsState()
     // [T-android-dynamic-island] Live-Updates toggle + device capability.
     val dynamicIslandEnabled by backgroundRepo.dynamicIslandEnabled.collectAsState()
+    val scheduledCountdownLead by backgroundRepo.scheduledCountdownLead.collectAsState()
 
     var ignoringOptimizations by remember {
         mutableStateOf(PowerOptimizationManager.isIgnoringBatteryOptimizations(context))
@@ -246,6 +252,43 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
                     stringResource(R.string.settings_dynamic_island_footer)
                 },
             )
+
+            // [FIX-261025-03] When a waiting scheduled task's chat becomes
+            // active again: the ongoing notification, the capsule / Live
+            // Updates countdown and the keep-alive (ScheduledSessionHold).
+            Spacer(Modifier.size(8.dp))
+            val countdownLabels = listOf(
+                stringResource(R.string.settings_scheduled_countdown_off),
+                pluralStringResource(R.plurals.settings_scheduled_countdown_minutes, 1, 1),
+                pluralStringResource(R.plurals.settings_scheduled_countdown_minutes, 5, 5),
+                pluralStringResource(R.plurals.settings_scheduled_countdown_minutes, 15, 15),
+                stringResource(R.string.settings_scheduled_countdown_always),
+            )
+            var countdownMenu by remember { mutableStateOf(false) }
+            Box {
+                BgRow(
+                    icon = Icons.Outlined.Timer,
+                    iconColor = Color(0xFFFF9500),
+                    title = stringResource(R.string.settings_scheduled_countdown),
+                    subtitle = countdownLabels.getOrNull(scheduledCountdownLead),
+                    onClick = { countdownMenu = true },
+                )
+                DropdownMenu(expanded = countdownMenu, onDismissRequest = { countdownMenu = false }) {
+                    countdownLabels.forEachIndexed { i, label ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            trailingIcon = {
+                                if (i == scheduledCountdownLead) Icon(Icons.Default.Check, contentDescription = null)
+                            },
+                            onClick = {
+                                countdownMenu = false
+                                backgroundRepo.setScheduledCountdownLead(i)
+                            },
+                        )
+                    }
+                }
+            }
+            BgFooter(stringResource(R.string.settings_scheduled_countdown_footer))
 
             Spacer(Modifier.size(16.dp))
             BgSectionTitle(stringResource(R.string.battery_opt_section_title))

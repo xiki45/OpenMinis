@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Tumatakbo</string>
+    <string name="sched_pill_waiting">Naghihintay</string>
+    <string name="sched_pill_run_now">Patakbuhin Ngayon</string>
+    <string name="sched_pill_hide">Itago ang countdown na ito</string>
+    <string name="sched_pill_cancel_all">Kanselahin ang lahat ng naka-iskedyul na gawain</string>
+    <string name="sched_pill_cancel_all_title">Kanselahin ang lahat ng naka-iskedyul na gawain?</string>
+    <string name="sched_pill_cancel_all_confirm">Kanselahin lahat</string>
+    <string name="sched_pill_not_now">Hindi Ngayon</string>
+    <string name="sched_pill_cancel_all_message">Kakanselahin ang lahat ng gawaing naka-iskedyul pa sa usapang ito.</string>
+    <string name="sched_pill_a11y_title">Paparating na naka-iskedyul na gawain</string>
+    <string name="sched_pill_a11y_running">Tumatakbo ngayon</string>
+    <string name="sched_pill_a11y_waiting">Naghihintay matapos ang ibang gawain</string>
+    <string name="sched_pill_a11y_upcoming_left">Susunod na takbo · %1$d pa</string>
+    <string name="sched_pill_a11y_upcoming">Susunod na takbo</string>
+    <string name="sched_pill_a11y_run_of">Takbo %1$d sa %2$d</string>
+    <string name="sched_pill_a11y_run">Takbo %1$d</string>
+    <string name="sched_pill_a11y_next_in">Susunod na takbo sa loob ng %1$s</string>
+    <string name="sched_pill_a11y_more">+%1$d pa</string>
+    <string name="sched_pill_a11y_hint">Binubuksan ang mga detalye ng gawain</string>
+</resources>

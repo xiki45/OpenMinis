@@ -99,6 +99,11 @@ class OnboardingModelFetchTest {
         assertTrue(repo.contains("onVendorError: ((String) -> Unit)? = null,"))
         val catch = repo.substringAfter("android.util.Log.e(\"ProviderRepo\", \"refreshModels fetch error:")
             .substringBefore("emptyList()")
-        assertTrue(catch.contains("onVendorError?.invoke("))
+        // The catch reports through reportVendorError, which is the one place
+        // that calls onVendorError (26076413e moved the call there).
+        assertTrue(catch.contains("reportVendorError("))
+        val report = repo.substringAfter("reportVendorError(").substringBefore("\n    }")
+        assertTrue(repo.contains("onVendorError?.invoke(message)"))
+        assertTrue(report.isNotEmpty())
     }
 }

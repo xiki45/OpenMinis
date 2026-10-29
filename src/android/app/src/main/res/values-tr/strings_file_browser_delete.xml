@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">\"%1$s\", Minis\'in buraya bağladığı bir klasör olduğundan dosya tarayıcısından silinemez. Hiçbir şey silinmedi. Dış klasörü kaldırmak için Ayarlar › Dış Klasörleri Bağla bölümünü kullanın.</string>
+</resources>

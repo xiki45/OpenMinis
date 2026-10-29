@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-retry-badge] The retry badge before "… is thinking" and its retry log sheet. -->
+<resources>
+    <string name="retry_badge_a11y">Retrying, attempt %1$d of %2$d. Tap to see the retries.</string>
+    <string name="retry_sheet_title">Automatic retries</string>
+    <string name="retry_sheet_subtitle">Requests retried during this task. The list is cleared when the reply ends.</string>
+    <string name="retry_sheet_empty">No retries in this task.</string>
+    <string name="retry_record_title">Retry %1$d of %2$d</string>
+    <string name="retry_record_error">Error: %1$s</string>
+    <string name="retry_record_model">Model: %1$s</string>
+    <string name="retry_record_endpoint">Endpoint: %1$s</string>
+    <string name="retry_record_delay">Waited %1$d s before retrying</string>
+    <string name="retry_record_switched">Different model from the previous retry</string>
+</resources>

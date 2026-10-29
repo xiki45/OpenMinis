@@ -114,6 +114,13 @@ class WebViewHolder(
             setAcceptThirdPartyCookies(wv, true)
         }
         webViewClient = object : WebViewClient() {
+            // [T-net-android-phase3] Settings > Network: answer the local entry's
+            // proxy challenge (WebViewNetworkProxy); any other auth request as before.
+            override fun onReceivedHttpAuthRequest(view: android.webkit.WebView?, handler: android.webkit.HttpAuthHandler?, host: String?, realm: String?) {
+                if (handler != null && com.openminis.app.network.WebViewNetworkProxy.answerAuth(handler, host, realm, view?.url)) return
+                super.onReceivedHttpAuthRequest(view, handler, host, realm)
+            }
+
             // [T-android-webview-render-process-gone] (GH#341) Route to this
             // holder's own destroy(), which detaches, stops loading and blanks
             // the page before destroying, and is documented safe to call twice

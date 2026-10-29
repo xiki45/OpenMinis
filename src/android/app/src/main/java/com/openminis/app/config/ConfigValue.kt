@@ -110,7 +110,11 @@ sealed class ConfigValue {
          * masked in any audit / display / confirm-sheet surface. Mirrors
          * iOS `ConfigValue.secretObjectKeys`. Used by [redactingSecrets].
          */
-        val SECRET_KEYS: Set<String> = setOf("apiKey", "oauthToken", "manualOAuthToken")
+        val SECRET_KEYS: Set<String> = setOf(
+            "apiKey", "oauthToken", "manualOAuthToken",
+            // [FEAT-261021-03] Proxy passwords and the Tailscale auth key.
+            "password", "authKey",
+        )
 
         /**
          * Parse a JSON string into a ConfigValue. Returns null on malformed JSON.

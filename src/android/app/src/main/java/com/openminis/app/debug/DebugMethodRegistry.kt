@@ -39,11 +39,41 @@ object DebugMethodRegistry {
     val methods: List<MethodSpec> by lazy {
         buildList {
             addAll(BASE_METHODS)
+            addAll(NetDebugMethods.specs)
             if (BuildConfig.DEV_TOOLS) addAll(DEBUG_ONLY_METHODS)
         }
     }
 
     private val DEBUG_ONLY_METHODS: List<MethodSpec> = listOf(
+        MethodSpec(
+            name = "debug.chatShare.openPicker",
+            description = "[T-multi-select-share] Open the Share Chat picker on the session shown in the app, exactly as long-pressing a message and choosing \"Share Chat…\" would (its round preselected). Anchors on the last user message unless messageId is given. The session must be on screen. DEBUG only.",
+            params = listOf(
+                ParamSpec("sessionId", "string", required = true, description = "The session currently shown in the app."),
+                ParamSpec("messageId", "string", required = false, description = "Message whose round is preselected; default the last user message."),
+            ),
+            returns = "{ok, messageId}",
+            example = ex("sessionId" to "…"),
+        ),
+        MethodSpec(
+            name = "debug.chatExport.render",
+            description = "[T-multi-select-share] Render the Share Chat export headlessly for the session shown in the app (long image or PDF) and report the file. The session must be on screen. DEBUG only.",
+            params = listOf(
+                ParamSpec("sessionId", "string", required = true, description = "The session currently shown in the app."),
+                ParamSpec("format", "string", required = false, default = "image", description = "image | pdf"),
+                ParamSpec("unitIndexes", "[int]", required = false, description = "Units (questions, replies, callback cards) to include by index; default all."),
+                ParamSpec("lastUnits", "int", required = false, description = "Include only the last N units."),
+                ParamSpec("includeToolCalls", "bool", required = false, default = false, description = "Include tool-call cells."),
+                ParamSpec("includeThinking", "bool", required = false, default = false, description = "Include thinking cells."),
+                ParamSpec("wideLayout", "bool", required = false, default = false, description = "Tablet (1024dp) width."),
+                ParamSpec("adaptiveTables", "bool", required = false, default = false, description = "Tables at their natural width."),
+                ParamSpec("dark", "bool", required = false, default = false, description = "Dark appearance."),
+                ParamSpec("title", "string", required = false, default = "Debug Export", description = "Header / footer title."),
+                ParamSpec("inline", "bool", required = false, default = false, description = "Also return the file as base64 (up to 8 MB)."),
+            ),
+            returns = "{path, bytes, width, height, scale, pages, units, totalUnits, cells, ms, base64?}",
+            example = ex("sessionId" to "…", "format" to "pdf", "lastUnits" to 2),
+        ),
         MethodSpec(
             name = "debug.shizuku.exec",
             description = "DEBUG-only: invoke ShizukuOffloadHandler directly with the given argv (T344). Bypasses the agent loop for e2e harness verification of android-shizuku-cli.",
@@ -213,6 +243,61 @@ object DebugMethodRegistry {
             example = JSONObject().put("name", "SlowDavTest"),
         ),
         MethodSpec(
+            name = "debug.limits.get",
+            description = "[T-loadtest-limits] The concurrency caps admission uses now, with their defaults: agent loop sessions (global), sub agent jobs (per parent conversation, childJobsScope), shell process budget. DEV_TOOLS builds only.",
+            params = emptyList(),
+            returns = "{sessions, sessionsDefault, childJobs, childJobsDefault, childJobsScope, queuedDelegationsPerParent, shellProcessBudget, shellProcessBudgetDefault}",
+            example = JSONObject(),
+        ),
+        MethodSpec(
+            name = "debug.limits.set",
+            description = "[T-loadtest-limits] Override a concurrency cap in memory for a load test (absent = unchanged, null or \"default\" = reset). A process restart resets all. DEV_TOOLS builds only.",
+            params = listOf(
+                ParamSpec("sessions", "integer", required = false, description = "Agent loop sessions, global, 1..32 (default 6). Raising it admits queued turns. Sub agents do not use these slots."),
+                ParamSpec("childJobs", "integer", required = false, description = "Sub agent jobs PER PARENT conversation, 1..32 (default 3). Raising it drains the queues."),
+                ParamSpec("childJobsPerParent", "integer", required = false, description = "Alias of childJobs (wins when both are given)."),
+                ParamSpec("shellProcessBudget", "integer", required = false, description = "Live Minis child processes the shell gate admits up to, 4..64 (default 16)."),
+            ),
+            returns = "the caps in effect (as debug.limits.get)",
+            example = ex("sessions" to 10, "childJobs" to 10, "shellProcessBudget" to 32),
+        ),
+        MethodSpec(
+            name = "debug.loadtest.seedSession",
+            description = "[T-loadtest-seed] Create a titled loadtest-* session (no title request to the title sub-model), optionally with synthetic text / shell-tool history. DEV_TOOLS builds only.",
+            params = listOf(
+                ParamSpec("title", "string", required = true, description = "Must start with 'loadtest-'."),
+                ParamSpec("modelId", "string", required = true, description = "Model id the session row is bound to."),
+                ParamSpec("turns", "integer", required = false, description = "User + assistant pairs (0..5000, default 0)."),
+                ParamSpec("chars", "integer", required = false, description = "Characters per text message (default 400)."),
+                ParamSpec("toolEvery", "integer", required = false, description = "Every Nth turn also gets a shell tool call + result (0 = never)."),
+                ParamSpec("toolOutputChars", "integer", required = false, description = "Characters per synthetic tool result (default 4000)."),
+            ),
+            returns = "{sessionId, title, rows}",
+            example = ex("title" to "loadtest-medium-1", "modelId" to "loadtest-mock", "turns" to 150, "toolEvery" to 5),
+        ),
+        MethodSpec(
+            name = "debug.loadtest.snapshot",
+            description = "[T-loadtest-limits] One sample of the app process for a load test: Java / native heap, PSS, threads, availMem / threshold / lowMemory, onTrimMemory counts, slot and queue counters. DEV_TOOLS builds only.",
+            params = emptyList(),
+            returns = "{tMs, javaHeapUsedKb, javaHeapMaxKb, nativeHeapAllocKb, totalPssKb, dalvikPssKb, nativePssKb, otherPssKb, threads, availMemKb, thresholdKb, lowMemory, trims, runningSessions, suspendedSessions, childJobsActive, limits}",
+            example = JSONObject(),
+        ),
+        MethodSpec(
+            name = "debug.chat.usageHint",
+            description = "[T-port-composer-hint-debug] Show the composer's context-usage line with chosen figures in the chat on screen (empty composer only), to test the context / quota carousel (two pages, 5 s x 3 rounds) without filling 70% of a context window. Each call is a new generation. DEV_TOOLS builds only.",
+            params = listOf(
+                ParamSpec("sessionId", "string", required = false, description = "Chat to show it in; defaults to the chat on screen."),
+                ParamSpec("percent", "integer", required = false, default = 75, description = "Context used, 1-100. <70 normal, 70-79 warning (amber), 80+ critical (red)."),
+                ParamSpec("windowTokens", "integer", required = false, default = 200000, description = "Context window size."),
+                ParamSpec("quota", "string", required = false, default = "sample", description = "\"sample\" (fake quota page), \"live\" (the model's real quota, if any), or \"none\" (context page only)."),
+                ParamSpec("quotaText", "string", required = false, description = "Custom quota page text (overrides quota)."),
+                ParamSpec("quotaHighlight", "string", required = false, description = "Substring of quotaText to tint."),
+                ParamSpec("quotaTier", "string", required = false, default = "normal", description = "normal | warning | critical: the quota figure's tint."),
+            ),
+            returns = "{ok, sessionId, generation, tier, highlights, quotaText, quotaTier, pages:[CONTEXT, QUOTA?], note}",
+            example = ex("percent" to 85, "quota" to "sample", "quotaTier" to "warning"),
+        ),
+        MethodSpec(
             name = "debug.subAgents.list",
             description = "List the sub agent roster (built-in + custom).",
             params = emptyList(),
@@ -355,8 +440,9 @@ object DebugMethodRegistry {
             params = listOf(
                 ParamSpec("last", "int", required = false, description = "Limit to the N most recent entries."),
                 ParamSpec("formatted", "bool", required = false, default = false, description = "If true, return a single 'text' string (same shape as iOS Copy Requests output) instead of structured JSON."),
+                ParamSpec("fullLast", "bool", required = false, default = false, description = "If true, return only the newest request body UNTRUNCATED (the ring caps bodies at 64 KB)."),
             ),
-            returns = "{count, requests:[...]} or {count, text} when formatted=true",
+            returns = "{count, requests:[...]}; {count, text} when formatted=true; {timestamp, length, requestBody} when fullLast=true",
             example = ex("last" to 5),
         ),
         MethodSpec(
@@ -504,6 +590,19 @@ object DebugMethodRegistry {
             example = JSONObject(),
         ),
         MethodSpec(
+            name = "debug.browser.cookies",
+            description = "DEV_TOOLS only. WebView cookie store, names only (never values): get a site's cookie names, " +
+                "set one raw Set-Cookie value, or clear a site exactly as the browser settings delete icon does.",
+            params = listOf(
+                ParamSpec("action", "string", required = true, description = "get | set | clear"),
+                ParamSpec("domain", "string", required = false, description = "Site host, for get / clear (e.g. www.example.com)."),
+                ParamSpec("url", "string", required = false, description = "For set: the URL the cookie is set from."),
+                ParamSpec("cookie", "string", required = false, description = "For set: a Set-Cookie value, e.g. \"a=1; Path=/; Secure\"."),
+            ),
+            returns = "get {domain, names, hasCookies} · set {ok} · clear {domain, cleared, found, remaining}",
+            example = ex("action" to "get", "domain" to "www.example.com"),
+        ),
+        MethodSpec(
             name = "debug.browser.executeJS",
             description = "Run arbitrary JavaScript in a tab's WebView and return the evaluated result.",
             params = listOf(
@@ -614,7 +713,7 @@ object DebugMethodRegistry {
             params = listOf(
                 ParamSpec("sessionId", "string", required = true, description = "Target session id."),
             ),
-            returns = "{id, title, modelId, modelName, source, isRunning, memoryEnabled, category, messageCount, createdAt, updatedAt}",
+            returns = "{id, title, modelId, modelName, source, isRunning (processing: own loop, sub agents or own scheduled task due), isStreaming, memoryEnabled, category, messageCount, createdAt, updatedAt}",
             example = ex("sessionId" to "6D0F…"),
         ),
         MethodSpec(
@@ -785,6 +884,7 @@ object DebugMethodRegistry {
                 ParamSpec("memberEntryIds", "[string]", required = false, description = "Initial member entries (order significant for fallback)."),
                 ParamSpec("strategy", "string", required = false, default = "fallback", description = "fallback / loadBalance"),
                 ParamSpec("fallbackStrategy", "string", required = false, default = "default", description = "default / always"),
+                ParamSpec("contextLimitTokens", "int", required = false, description = "Context cap for sessions bound to the group; omit / null / 0 for no cap."),
             ),
             returns = "{group:{...}}",
             example = ex("name" to "Coding", "memberEntryIds" to JSONArray().apply { put("entry_a") }),
@@ -798,6 +898,7 @@ object DebugMethodRegistry {
                 ParamSpec("memberEntryIds", "[string]", required = false, description = "Replace members entirely; order preserved."),
                 ParamSpec("strategy", "string", required = false, description = "fallback / loadBalance"),
                 ParamSpec("fallbackStrategy", "string", required = false, description = "default / always"),
+                ParamSpec("contextLimitTokens", "int", required = false, description = "Set the group's context cap; null / 0 removes it. Omitted = unchanged."),
             ),
             returns = "{group:{...}}",
             example = ex("groupId" to "grp_xyz"),
@@ -882,7 +983,7 @@ object DebugMethodRegistry {
             params = listOf(
                 ParamSpec("sessionId", "string", required = true, description = "Target session id."),
             ),
-            returns = "{sessionId, title, modelName, isRunning, messageCount, lastMessageRole, updatedAt}",
+            returns = "{sessionId, title, modelName, isRunning (processing), isStreaming, messageCount, lastMessageRole, updatedAt}",
             example = ex("sessionId" to "6D0F…"),
         ),
         MethodSpec(

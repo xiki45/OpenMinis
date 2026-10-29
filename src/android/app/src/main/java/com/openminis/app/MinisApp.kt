@@ -180,6 +180,25 @@ class MinisApp : Application(), ImageLoaderFactory {
     fun isAppForeground(): Boolean = foregroundActivityCount > 0
 
     /**
+     * [UI-261023-07] A turn that ended with a reply marks its chat unread
+     * (SessionUnreadStore), as iOS endBackgroundProcessing does. Not for a
+     * paused turn (it has its own badge), not for a sub agent's chat (its
+     * result goes into the parent), and not while the chat still has sub
+     * agents working: the parent's turn that collects the last of them ends
+     * here again and marks it then, so a fan-out raises the dot once.
+     */
+    private fun markUnreadOnCompletion(sessionId: String, outcome: com.openminis.app.notification.BackgroundTurnOutcome) {
+        if (outcome == com.openminis.app.notification.BackgroundTurnOutcome.INTERRUPTED) return
+        if (com.openminis.app.service.SessionUnreadStore.isViewing(sessionId)) return
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            val session = runCatching { chatRepository.getSession(sessionId) }.getOrNull() ?: return@launch
+            if (session.isChild) return@launch
+            if (com.openminis.app.agent.jobs.AgentJobRegistry.hasAgentWork(sessionId)) return@launch
+            com.openminis.app.service.SessionUnreadStore.markUnread(sessionId)
+        }
+    }
+
+    /**
      * T-bg-overlay phase 2: live "is the app foreground?" stream so the
      * AgentForegroundService can react to background ↔ foreground
      * transitions and toggle the floating tool-status overlay. Same
@@ -239,6 +258,21 @@ class MinisApp : Application(), ImageLoaderFactory {
     @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
     override fun onCreate() {
         super.onCreate()
+        // [T-oauth-wait-fgs] Before anything can start an OAuth callback server:
+        // gives it a context to keep the process out of the freezer with.
+        com.openminis.app.service.OAuthWaitKeepAlive.install(this)
+        // [T-android-tls-trust-error] Localized text for a rejected certificate;
+        // LLMError has no Context of its own.
+        com.openminis.app.data.model.CertificateErrorText.resolver = { kind, host ->
+            getString(
+                when (kind) {
+                    com.openminis.app.provider.TlsFailure.Kind.UNTRUSTED -> R.string.error_tls_untrusted
+                    com.openminis.app.provider.TlsFailure.Kind.EXPIRED_OR_CLOCK -> R.string.error_tls_expired_or_clock
+                    com.openminis.app.provider.TlsFailure.Kind.HOSTNAME_MISMATCH -> R.string.error_tls_hostname_mismatch
+                },
+                host,
+            )
+        }
         // [T-android-content-capture-off] Opt every Compose window out of
         // Android content capture, before any of them exists.
         //
@@ -467,6 +501,8 @@ class MinisApp : Application(), ImageLoaderFactory {
         // so a user trapped opening a session that hangs the UI gets
         // unstuck on the next launch.
         com.openminis.app.diagnostics.HangDetector.start(this)
+        // [T-android-jankdiag] Frame / main-thread / streaming / device diagnostics.
+        com.openminis.app.diagnostics.JankDiag.start(this)
 
         // [T-android-safemode-lateinit-crash-147] Structural backstop for the
         // whole repository block.
@@ -512,6 +548,9 @@ class MinisApp : Application(), ImageLoaderFactory {
         // [T-p2-agent-series] How a background agent's completion reaches its
         // parent: submit the <agent_callback> as a PROGRAMMATIC prompt on the
         // parent's ViewModel (queued behind a running loop, never interrupting).
+        // [T-subagent-termination] Sub agent termination records live in filesDir
+        // so `minis-sessions-cli status` can read them after a restart.
+        com.openminis.app.agent.jobs.SubAgentTerminationStore.install(filesDir)
         com.openminis.app.agent.jobs.AgentJobRegistry.followUpDispatcher = { parentId, text, jobId ->
             // [T-agent-port-round2] HeadlessChatRunner.prompt (not a bare
             // submitPrompt): it waits up to 5 s for the parent's provider to
@@ -519,10 +558,15 @@ class MinisApp : Application(), ImageLoaderFactory {
             // while the parent chat is not open), and reports a real outcome.
             // A parent that no longer exists gets nothing — submitting would
             // re-create rows for a deleted session.
+            // [T-subagent-termination] Each outcome lands on the child's
+            // termination record as its delivery state (no-op for jobs that
+            // have none): delivered / queued / failed.
+            val terminations = com.openminis.app.agent.jobs.SubAgentTerminationStore.shared
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 runCatching {
                     if (chatRepository.getSession(parentId) == null) {
                         com.openminis.app.logging.AppLogger.warning("AgentJobRegistry", "followUp ${jobId.take(8)} dropped — parent ${parentId.take(8)} no longer exists")
+                        terminations.setDeliveryForJob(jobId, com.openminis.app.agent.jobs.SubAgentTermination.Delivery.FAILED, "parent session no longer exists")
                         return@launch
                     }
                     val r = com.openminis.app.debug.HeadlessChatRunner.prompt(
@@ -530,11 +574,22 @@ class MinisApp : Application(), ImageLoaderFactory {
                         attachments = emptyList(), thinkingLevel = null, wait = false, timeoutMs = 0L,
                     )
                     com.openminis.app.logging.AppLogger.info("AgentJobRegistry", "followUp ${jobId.take(8)} → parent ${parentId.take(8)} outcome=${r.status}")
-                }.onFailure { com.openminis.app.logging.AppLogger.warning("AgentJobRegistry", "followUp ${jobId.take(8)} failed: ${it.message}") }
+                    when (r.status) {
+                        "Running" -> terminations.setDeliveryForJob(jobId, com.openminis.app.agent.jobs.SubAgentTermination.Delivery.DELIVERED)
+                        "Queued" -> terminations.setDeliveryForJob(jobId, com.openminis.app.agent.jobs.SubAgentTermination.Delivery.QUEUED, "waiting behind the parent's running turn")
+                        else -> terminations.setDeliveryForJob(jobId, com.openminis.app.agent.jobs.SubAgentTermination.Delivery.FAILED, listOfNotNull(r.status, r.responseText).joinToString(": "))
+                    }
+                }.onFailure {
+                    com.openminis.app.logging.AppLogger.warning("AgentJobRegistry", "followUp ${jobId.take(8)} failed: ${it.message}")
+                    terminations.setDeliveryForJob(jobId, com.openminis.app.agent.jobs.SubAgentTermination.Delivery.FAILED, it.message ?: "delivery threw")
+                }
             }
         }
         com.openminis.app.agent.jobs.AgentCallbackLabels.install(this)
         providerRepository = ProviderRepository(this)
+        // [T-provider-quota] Upstream balance / quota cache; refreshes only while
+        // the app is in the foreground.
+        com.openminis.app.quota.QuotaStore.start(this, providerRepository)
         envVarRepository = EnvVarRepository(this)
         // [T-android-safemode-lateinit-crash-147] SkillRepository parses
         // third-party content (skills imported from external hubs), which
@@ -566,6 +621,10 @@ class MinisApp : Application(), ImageLoaderFactory {
         // late, non-UI subsystem from permanently locking the user out
         // of an app whose UI dependencies are in fact ready.
         subsystemsInitialized = true
+        // [T-update-channels] Automatic update checks on each return to the
+        // foreground, throttled (24 h stable / 6 h beta); off on store builds.
+        runCatching { com.openminis.app.data.UpdateAutoChecker.install(this) }
+            .onFailure { Log.w("MinisApp", "update auto-check install failed: ${it.message}") }
         } catch (t: Throwable) {
             // subsystemsInitialized stays false — MainActivity will show the
             // crash-share dialog rather than composing against unassigned
@@ -645,6 +704,24 @@ class MinisApp : Application(), ImageLoaderFactory {
         // DNS servers after Wi-Fi ↔ cellular swaps or VPN toggles.
         networkMonitor.start(this)
 
+        // [T-net-android-phase2] Settings > Network (Tailscale + proxies). Does
+        // nothing - no Go call, no listener - unless the user turned it on;
+        // on each return to the foreground, and every 30 s while in front, a
+        // published local entry is checked and restarted if it died (clients
+        // go direct meanwhile), and the Tailscale status is refreshed.
+        com.openminis.app.network.NetworkHub.init(this)
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(
+            object : androidx.lifecycle.DefaultLifecycleObserver {
+                override fun onStart(owner: androidx.lifecycle.LifecycleOwner) {
+                    com.openminis.app.network.NetworkHub.onForeground()
+                }
+
+                override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
+                    com.openminis.app.network.NetworkHub.onBackground()
+                }
+            }
+        )
+
         // Register global /var/minis/{memory,skills,shared} bind mounts up-front
         // so direct file I/O tools (file_read) resolve these paths even before
         // PRoot has booted or any shell has started.
@@ -714,7 +791,17 @@ class MinisApp : Application(), ImageLoaderFactory {
         // (writes a 17-byte exit-0 stub at /usr/local/bin/minis-sessions-cli
         // so PATH lookup succeeds; PRoot intercepts the execve before
         // the stub runs and routes to this handler).
-        NativeOffloadServer.register("minis-sessions-cli", SessionsOffloadHandler(chatRepository))
+        NativeOffloadServer.register(
+            "minis-sessions-cli",
+            SessionsOffloadHandler(
+                chatRepository,
+                // [T-sessions-cli-update] `update --title-auto` = the list's Regenerate Title.
+                titleRegenerator = { id ->
+                    com.openminis.app.ui.sessions.SessionTitleRegenerator(chatRepository, providerRepository, this)
+                        .regenerate(id, origin = "cli")
+                },
+            ),
+        )
         // [T-android-scheduled-tasks-full] minis-scheduled — create/list/run
         // timed AI tasks (new chat / follow-up / re-run), mirroring the in-app
         // Scheduled Tasks editor and the iOS Shortcuts intent set.
@@ -742,10 +829,49 @@ class MinisApp : Application(), ImageLoaderFactory {
             )
         }
 
-        NativeOffloadServer.start(RootfsManager.getInstance(this).rootfsDir)
+        // [T-native-offload-bind] start() no longer throws when the socket name
+        // is taken - it degrades and retries in the background. The guard is
+        // defence in depth: native offload is optional, so nothing it does may
+        // fail Application.onCreate (that is what made a held socket name an
+        // endless crash loop: "Unable to create application").
+        try {
+            NativeOffloadServer.start(RootfsManager.getInstance(this).rootfsDir)
+        } catch (t: Throwable) {
+            Log.e("MinisApp", "native offload server failed to start; continuing without it", t)
+        }
 
         // Initialize session activity tracker for foreground service management
         SessionActivityTracker.init(this)
+        // [T-scheduled-active-session-android] Chats their own scheduled task
+        // keeps processing between fires. Derived from the persisted task list,
+        // so it is right again from the first emission after a restart.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
+            com.openminis.app.scheduled.ScheduledSessionHold.observe(this@MinisApp).collect { held ->
+                SessionActivityTracker.setScheduledSessions(held)
+            }
+        }
+        // [FIX-261025-19] Timed tasks fire on time from inside the process
+        // while it is alive; their alarm (inexact without the exact-alarm
+        // permission) stays the fallback.
+        com.openminis.app.scheduled.ScheduledInAppTimer.start(this)
+        // [T-port-sched-wait-notification] The next run the ongoing
+        // notification counts down to between fires, with the waiting chat's
+        // title (iOS's waiting card shows the conversation title).
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
+            com.openminis.app.scheduled.ScheduledWaitModel.observe(this@MinisApp).collect { wait ->
+                val title = wait?.let { w ->
+                    runCatching { chatRepository.getSession(w.sessionId)?.title }.getOrNull()?.takeIf { it.isNotBlank() }
+                }
+                SessionActivityTracker.setScheduledWait(wait?.copy(chatTitle = title))
+            }
+        }
+        // [T-port-sched-running-counter] The fire running now, for the
+        // "· 2/30" counter on the running notification.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
+            com.openminis.app.scheduled.ScheduledWaitModel.observeFiring(this@MinisApp).collect {
+                SessionActivityTracker.setScheduledFiring(it)
+            }
+        }
 
         // [T-android-session-paused-badge] Per-session badge-state queue
         // displayed in the session-list cell corner. Init early so the
@@ -793,8 +919,9 @@ class MinisApp : Application(), ImageLoaderFactory {
             backgroundSettings = backgroundSettingsRepository,
             isAppForeground = ::isAppForeground,
         )
-        SessionActivityTracker.setCompletionListener { sessionId, isError ->
-            backgroundTaskNotifier.notifyTaskCompleted(sessionId, isError)
+        SessionActivityTracker.setCompletionListener { sessionId, outcome ->
+            backgroundTaskNotifier.notifyTaskCompleted(sessionId, outcome)
+            markUnreadOnCompletion(sessionId, outcome)
         }
 
         // [T-android-config-confirm-timeout] Wire the config-confirm background
@@ -812,6 +939,9 @@ class MinisApp : Application(), ImageLoaderFactory {
         com.openminis.app.config.confirm.ConfigConfirmationGate.cancelNotification = {
             configConfirmNotifier.cancel(it)
         }
+        // [T-android-user-ask-notify] A user_ask question asked while the app is
+        // away is posted as a notification, answerable from it (iOS parity).
+        com.openminis.app.notification.UserAskNotifier.install(this)
 
         // Track foreground state via ActivityLifecycleCallbacks. Counting
         // started/stopped balances out around configuration changes (the
@@ -833,6 +963,9 @@ class MinisApp : Application(), ImageLoaderFactory {
                 if (wasBackgrounded && ::backgroundTaskNotifier.isInitialized) {
                     backgroundTaskNotifier.cancelAllCompletedNotifications()
                 }
+                // [T-fgs-start-not-allowed-guard] A foreground-service start the
+                // system refused in the background is retried now.
+                if (wasBackgrounded) SessionActivityTracker.onAppForegrounded()
                 // [T-android-session-paused-badge-hardkill] On foreground,
                 // reconcile PAUSED badges from the DB tail (authoritative
                 // interrupted-state) instead of the old heuristic that marked
@@ -1041,6 +1174,13 @@ class MinisApp : Application(), ImageLoaderFactory {
      */
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
+            // [FEAT-261021-16] Remote images follow the default route in
+            // Settings > Network. Coil's own default is a plain OkHttpClient();
+            // that same client sends every request while nothing is configured.
+            .callFactory {
+                val base = okhttp3.OkHttpClient()
+                okhttp3.Call.Factory { request -> com.openminis.app.network.NetworkHttp.client(com.openminis.app.network.NetworkHttp.DEFAULT_TAG, base).newCall(request) }
+            }
             .components {
                 add(MinisImageFetcher.Factory())
                 add(MinisImageFetcher.UriFactory())
@@ -1077,6 +1217,8 @@ class MinisApp : Application(), ImageLoaderFactory {
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        // [T-loadtest-limits] Counted for debug.loadtest.snapshot (a few ints).
+        com.openminis.app.debug.LoadTestDebugMethods.noteTrim(level)
 
         val dropFormulaCaches = when (level) {
             TRIM_MEMORY_RUNNING_LOW,

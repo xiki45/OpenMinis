@@ -39,14 +39,26 @@ class FallbackRespectsUserSwitchTest {
     fun `the class-level write and persistBinding sit behind the user-switch guard`() {
         val loop = vmSrc.substringAfter("private suspend fun runAgentLoop(")
         assertTrue(loop.contains("var classProviderAtSend = this@ChatViewModel.currentProvider"))
-        val guard = loop.indexOf("val userSwitchedMidTurn = !fallbackMayRebindSession(")
-        val write = loop.indexOf("this@ChatViewModel.currentProvider = next")
-        val persist = loop.indexOf("persistBinding(\"\"\"{\"type\":\"entry\",\"entryId\":\"\${newEntry.id}\"}\"\"\")")
+        // [T-b13-empty-fallback] The session side moved into
+        // adoptLoopFallbackBinding, shared by the error and empty-turn paths.
+        val fn = vmSrc.substringAfter("private fun adoptLoopFallbackBinding(").substringBefore("\n    }\n")
+        val guard = fn.indexOf("val userSwitchedMidTurn = !fallbackMayRebindSession(currentProvider, classProviderAtSend)")
+        val write = fn.indexOf("            currentProvider = next")
+        val persist = fn.indexOf("persistBinding(\"\"\"{\"type\":\"entry\",\"entryId\":\"\${newEntry.id}\"}\"\"\")")
         assertTrue("guard not found", guard >= 0)
         assertTrue("class-level write must follow the guard", write > guard)
         assertTrue("persistBinding must follow the guard", persist > guard)
+        assertTrue(fn.contains("return !userSwitchedMidTurn"))
         // Our own fallback moves the baseline, so a second fallback in the same
-        // turn is still allowed to rebind.
-        assertTrue(loop.substring(write, write + 200).contains("classProviderAtSend = next"))
+        // turn is still allowed to rebind: both call sites move it when the
+        // binding moved.
+        val call = "if (adoptLoopFallbackBinding(nextCandidate, classProviderAtSend, isRealModelChange)) {\n" +
+            "                            classProviderAtSend = next"
+        assertTrue("error-path call site", loop.contains(call))
+        assertTrue(
+            "empty-turn call site",
+            loop.contains("if (adoptLoopFallbackBinding(emptyNext, classProviderAtSend, isRealModelChange)) {\n" +
+                "                            classProviderAtSend = next"),
+        )
     }
 }

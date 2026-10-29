@@ -149,11 +149,17 @@ object ExitInfoCollector {
             // THE field this class was written for.
             appendLine("Abort message / description:")
             appendLine(info.description ?: "(none provided by the platform)")
+            appendLine()
+            appendLine(lastResourceSample(context, info))
 
             if (info.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
+                val trace = readTrace(info)
+                appendLine()
+                appendLine("--- Tombstone summary (whole trace) ---")
+                appendLine(trace?.summary ?: "(no trace available)")
                 appendLine()
                 appendLine("--- Tombstone (truncated to ${MAX_TRACE_BYTES / 1024} kB) ---")
-                appendLine(readTrace(info) ?: "(no trace available)")
+                appendLine(trace?.head?.takeIf { it.isNotEmpty() }?.let { String(it, Charsets.UTF_8) } ?: "(no trace available)")
             }
         }
 
@@ -167,22 +173,31 @@ object ExitInfoCollector {
     }
 
     /**
+     * [GH #453] The last resource sample the dead process wrote
+     * ([com.openminis.app.diagnostics.ResourceWatermark], every 30 s from
+     * JankDiag): threads / maps / fds and, past the alert threshold, threads
+     * per name. A process killed by thread or mapping exhaustion cannot write
+     * anything at the end, so this is the nearest reading before the death.
+     */
+    internal fun lastResourceSample(context: Context, info: ApplicationExitInfo): String {
+        val (text, modifiedMs) = com.openminis.app.diagnostics.ResourceWatermark.readWatermark(context.filesDir, info.pid)
+            ?: return "Last resource sample: (none for pid ${info.pid})"
+        return formatResourceSample(text, (info.timestamp - modifiedMs) / 1000)
+    }
+
+    internal fun formatResourceSample(text: String, secondsBeforeExit: Long): String =
+        "Last resource sample (${secondsBeforeExit}s before exit):\n" + text.trimEnd()
+
+    /**
      * The tombstone itself. On [ApplicationExitInfo.REASON_CRASH_NATIVE] this
      * is the proto/text dump debuggerd produced — the same content as
      * `/data/tombstones/`, delivered through a channel the app is allowed to
      * read.
      */
-    private fun readTrace(info: ApplicationExitInfo): String? = try {
-        info.traceInputStream?.use { stream ->
-            val buf = ByteArray(MAX_TRACE_BYTES)
-            var total = 0
-            while (total < buf.size) {
-                val n = stream.read(buf, total, buf.size - total)
-                if (n <= 0) break
-                total += n
-            }
-            if (total <= 0) null else String(buf, 0, total, Charsets.UTF_8)
-        }
+    private fun readTrace(info: ApplicationExitInfo): TombstoneSummary.Result? = try {
+        // [GH #453] The whole stream is read once for the summary; only its
+        // first MAX_TRACE_BYTES are kept for the raw section, as before.
+        info.traceInputStream?.use { stream -> TombstoneSummary.read(stream.buffered(), MAX_TRACE_BYTES) }
     } catch (t: Throwable) {
         Log.w(TAG, "traceInputStream failed: ${t.message}")
         null

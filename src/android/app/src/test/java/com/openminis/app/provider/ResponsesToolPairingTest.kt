@@ -197,7 +197,9 @@ class ResponsesToolPairingTest {
         val provider = ProductionSources.read("provider/openai/OpenAIProvider.kt")
         assertTrue(provider.contains("ResponsesToolPairing.sanitize(input)"))
         val vm = ProductionSources.read("ui/chat/ChatViewModel.kt")
-        val drop = vm.substringAfter("private fun dropOrphanedToolParts(").substringBefore("private fun sanitizeAgentHistory(")
+        // [T-ctx-builder] The sweep moved to RequestContextBuilder (ChatViewModel delegates).
+        assertTrue(vm.contains("RequestContextBuilder.dropOrphanedToolParts(history, { activeSessionId })"))
+        val drop = vm.substringAfter("    fun dropOrphanedToolParts(history: List<LLMMessage>, sessionId: () -> String").substringBefore("\n    }\n")
         val sanitize = vm.substringAfter("private fun sanitizeAgentHistory(").substringBefore("private fun unwrapFlowException(")
         assertTrue(drop.contains("ToolPairing.key("))
         assertTrue(sanitize.contains("ToolPairing.key("))

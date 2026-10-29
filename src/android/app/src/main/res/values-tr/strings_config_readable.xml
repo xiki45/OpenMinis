@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">API Anahtarı</string>
+    <string name="cfgr_all_models">Tüm modeller</string>
+    <string name="cfgr_allow_minis_config">minis-config\'e izin ver</string>
+    <string name="cfgr_applies_to">Şunlar için geçerli</string>
+    <string name="cfgr_audio_input">Ses girişi</string>
+    <string name="cfgr_audio_output">Ses çıkışı</string>
+    <string name="cfgr_automatic">Otomatik</string>
+    <string name="cfgr_chinese">Çince</string>
+    <string name="cfgr_custom">Özel</string>
+    <string name="cfgr_custom_user_agent">Özel User-Agent</string>
+    <string name="cfgr_dark">Koyu</string>
+    <string name="cfgr_default">Varsayılan</string>
+    <string name="cfgr_disabled">Devre dışı</string>
+    <string name="cfgr_display_name">Görünen ad</string>
+    <string name="cfgr_enabled">Etkin</string>
+    <string name="cfgr_english">English</string>
+    <string name="cfgr_hidden">Gizli</string>
+    <string name="cfgr_high">Yüksek</string>
+    <string name="cfgr_image_input">Görsel girişi</string>
+    <string name="cfgr_image_output">Görsel çıkışı</string>
+    <string name="cfgr_label">Etiket</string>
+    <string name="cfgr_light">Açık</string>
+    <string name="cfgr_low">Düşük</string>
+    <string name="cfgr_max">En Yüksek</string>
+    <string name="cfgr_med">Orta</string>
+    <string name="cfgr_medium">Orta</string>
+    <string name="cfgr_models">Modeller</string>
+    <string name="cfgr_name">Ad</string>
+    <string name="cfgr_not_set">Ayarlanmadı</string>
+    <string name="cfgr_note">Not</string>
+    <string name="cfgr_off">Kapalı</string>
+    <string name="cfgr_on">Açık</string>
+    <string name="cfgr_pdf_input">PDF girişi</string>
+    <string name="cfgr_privacy_mode">Gizlilik Modu</string>
+    <string name="cfgr_send">Gönder</string>
+    <string name="cfgr_status">Durum</string>
+    <string name="cfgr_system">Sistem</string>
+    <string name="cfgr_theme">Tema</string>
+    <string name="cfgr_ultra">Ultra</string>
+    <string name="cfgr_video_input">Video girişi</string>
+    <string name="cfgr_video_output">Video çıkışı</string>
+    <string name="cfgr_xhigh">Çok Yüksek</string>
+    <string name="cfgr_fold_consecutive_tool_calls">Art arda araç çağrılarını daralt</string>
+</resources>

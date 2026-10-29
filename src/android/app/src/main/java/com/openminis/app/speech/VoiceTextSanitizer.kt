@@ -67,7 +67,9 @@ object VoiceTextSanitizer {
      * visible text.
      */
     private fun stripMarkdown(text: String, phrases: LinkPhrases): String {
-        var s = text
+        // [T-md-inline-html] <br> → space and whitelisted style tags out, so
+        // "b" / "br" are never read aloud; code is left for the rules below.
+        var s = com.openminis.app.ui.markdown.InlineHtmlTags.stripForPreview(text)
         // Fenced code blocks are dropped entirely — reading code aloud is noise.
         s = s.replace(Regex("```[\\s\\S]*?```"), " ")
         // Inline `code` → keep the inner text.

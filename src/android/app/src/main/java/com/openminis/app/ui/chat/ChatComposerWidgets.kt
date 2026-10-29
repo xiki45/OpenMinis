@@ -281,35 +281,6 @@ import com.openminis.app.ui.DisplayBitmapLimits
 import com.openminis.app.ui.components.MinisTextButton
 import com.openminis.app.ui.components.DecorativeSpinner
 
-@OptIn(ExperimentalFoundationApi::class)
-
-/**
- * [T-android-tile-tail-memo] The last [n] lines of [text], scanning backward
- * from the end so the cost is O(length of those lines), not O(whole string).
- *
- * `lines()` / `lineSequence().toList()` both materialize every line of a
- * growing shell log on each call; the live tile only ever shows the tail, so
- * walking back from the end past [n] newlines and substringing once is all
- * that is needed.
- */
-private fun lastLinesOf(text: String, n: Int): String {
-    if (text.isEmpty() || n <= 0) return ""
-    var idx = text.length
-    var newlines = 0
-    // Ignore a single trailing newline so it does not count as a blank line.
-    var end = text.length
-    if (text[end - 1] == '\n') end--
-    idx = end
-    while (idx > 0) {
-        val nl = text.lastIndexOf('\n', idx - 1)
-        if (nl < 0) { idx = 0; break }
-        newlines++
-        if (newlines >= n) { idx = nl + 1; break }
-        idx = nl
-    }
-    return text.substring(idx, end)
-}
-
 @Composable
 internal fun AttachmentChip(
     attachment: InputAttachment,
@@ -535,6 +506,33 @@ internal fun rememberChildLiveToolBlock(childSessionId: String?): AssistantBlock
     }
 }
 
+/** The generic tool tile: the output tail, or the tool's icon while there is none. */
+@Composable
+private fun GenericThumbContent(block: AssistantBlock, toolAccent: Color) {
+    if (block.content.isNotEmpty()) {
+        Column(modifier = Modifier.padding(horizontal = 6.dp, vertical = 5.dp)) {
+            Text(
+                // [T-android-tile-tail-memo] Split the tail only when
+                // content changes, not on every recompose. During a
+                // streaming shell the tile recomposes per delta, and an
+                // unmemoized lines()+takeLast()+joinToString on a growing
+                // string is O(n) each time — a measurable slice of the
+                // per-token allocation churn.
+                text = remember(block.content) { ToolTextTail.lastLines(block.content, 12) },
+                fontSize = 5.5.sp,
+                fontFamily = FontFamily.Monospace,
+                color = toolAccent.copy(alpha = 0.85f),
+                maxLines = 12,
+                lineHeight = 6.5.sp,
+            )
+        }
+    } else {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(toolIconFor(block.toolName), contentDescription = null, tint = toolAccent.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
 @Composable
 private fun ToolPreviewThumbnail(
     block: AssistantBlock,
@@ -554,6 +552,13 @@ private fun ToolPreviewThumbnail(
      * DIRECT child — so one level is the behaviour to match.
      */
     punchThroughDepth: Int = 0,
+    /**
+     * [T-tool-preview-longpress-close] Long-press handler from the mount site.
+     * The menu itself lives there, not here: this view renders itself again
+     * for a sub agent's inner tool, and a menu inside would nest. Passed down
+     * that recursion only so a long-press on the inner tile still reaches it.
+     */
+    onLongClick: (() -> Unit)? = null,
 ) {
     val args = remember(block.toolArgs) {
         try { org.json.JSONObject(block.toolArgs) } catch (_: Exception) { org.json.JSONObject() }
@@ -678,7 +683,10 @@ private fun ToolPreviewThumbnail(
                     inset += step
                 }
             }
-            .clickable(onClick = onClick),
+            .then(
+                if (onLongClick == null) Modifier.clickable(onClick = onClick)
+                else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            ),
     ) {
         when (block.toolName) {
             "shell_execute" -> {
@@ -686,7 +694,9 @@ private fun ToolPreviewThumbnail(
                 val command = extractShellCommand(args, block)
                 Column(modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)) {
                     Text(
-                        text = "$ $command",
+                        // [T-android-tool-text-line-cap] A heredoc or inline
+                        // script can make the command itself one huge line.
+                        text = "$ ${ToolTextTail.head(command)}",
                         fontSize = 7.sp,
                         lineHeight = 8.sp,
                         fontWeight = FontWeight.Bold,
@@ -703,7 +713,7 @@ private fun ToolPreviewThumbnail(
                             // unmemoized lines()+takeLast()+joinToString on a growing
                             // string is O(n) each time — a measurable slice of the
                             // per-token allocation churn.
-                            text = remember(block.content) { lastLinesOf(block.content, 12) },
+                            text = remember(block.content) { ToolTextTail.lastLines(block.content, 12) },
                             fontSize = 5.5.sp,
                             fontFamily = FontFamily.Monospace,
                             color = toolAccent.copy(alpha = 0.85f),
@@ -722,7 +732,7 @@ private fun ToolPreviewThumbnail(
                     .ifEmpty { extractPartialJsonString("new_string", block.toolArgs) ?: "" }
                 Column(modifier = Modifier.padding(horizontal = 6.dp, vertical = 5.dp)) {
                     if (oldStr.isNotEmpty()) {
-                        oldStr.lines().takeLast(5).forEach { line ->
+                        remember(oldStr) { ToolTextTail.lastLines(oldStr, 5).lines() }.forEach { line ->
                             Text(
                                 text = "- $line",
                                 fontSize = 5.sp,
@@ -735,7 +745,7 @@ private fun ToolPreviewThumbnail(
                         }
                     }
                     if (newStr.isNotEmpty()) {
-                        newStr.lines().takeLast(5).forEach { line ->
+                        remember(newStr) { ToolTextTail.lastLines(newStr, 5).lines() }.forEach { line ->
                             Text(
                                 text = "+ $line",
                                 fontSize = 5.sp,
@@ -786,9 +796,8 @@ private fun ToolPreviewThumbnail(
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (displayText.isNotEmpty()) {
-                        val lines = displayText.lines()
                         Text(
-                            text = lines.takeLast(12).joinToString("\n"),
+                            text = remember(displayText) { ToolTextTail.lastLines(displayText, 12) },
                             fontSize = 5.5.sp,
                             fontFamily = FontFamily.Monospace,
                             color = toolAccent.copy(alpha = 0.85f),
@@ -832,7 +841,7 @@ private fun ToolPreviewThumbnail(
                     )
                     if (displayText.isNotEmpty()) {
                         Text(
-                            text = displayText.lines().takeLast(12).joinToString("\n"),
+                            text = remember(displayText) { ToolTextTail.lastLines(displayText, 12) },
                             fontSize = 5.5.sp,
                             fontFamily = FontFamily.Monospace,
                             color = toolAccent.copy(alpha = 0.85f),
@@ -948,37 +957,19 @@ private fun ToolPreviewThumbnail(
                         toolAccent = toolAccentColor(inner.toolName),
                         onClick = onClick,
                         punchThroughDepth = punchThroughDepth + 1,
+                        onLongClick = onLongClick,
                     )
                 } else {
                     HelperThumbContent(block)
                 }
             }
 
-            else -> {
-                // Generic: icon or content preview
-                if (block.content.isNotEmpty()) {
-                    Column(modifier = Modifier.padding(horizontal = 6.dp, vertical = 5.dp)) {
-                        Text(
-                            // [T-android-tile-tail-memo] Split the tail only when
-                            // content changes, not on every recompose. During a
-                            // streaming shell the tile recomposes per delta, and an
-                            // unmemoized lines()+takeLast()+joinToString on a growing
-                            // string is O(n) each time — a measurable slice of the
-                            // per-token allocation churn.
-                            text = remember(block.content) { lastLinesOf(block.content, 12) },
-                            fontSize = 5.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = toolAccent.copy(alpha = 0.85f),
-                            maxLines = 12,
-                            lineHeight = 6.5.sp,
-                        )
-                    }
-                } else {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(toolIconFor(block.toolName), contentDescription = null, tint = toolAccent.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
-                    }
-                }
-            }
+            // [T-android-user-ask-tile] A miniature of the question card, not a
+            // wrench (iOS T-user-ask-tile-rich).
+            com.openminis.app.agent.userask.UserAskPromptText.TOOL_NAME ->
+                UserAskThumbContent(block) { GenericThumbContent(block, toolAccent) }
+
+            else -> GenericThumbContent(block, toolAccent)
         }
 
         // T141: live CPU/MEM HUD ribbon. Sits at the thumbnail's bottom edge,
@@ -1014,10 +1005,36 @@ private fun ToolPreviewThumbnail(
 // [T-android-tool-pager-longpress] ExperimentalFoundationApi is for
 // combinedClickable on the pager chevrons.
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+/**
+ * [T-android-toolbar-gap] The floating tool bar's geometry, shared with the
+ * chat list's bottom reserve so the two cannot drift apart.
+ *
+ * The reserve used to be pinned to the thumbnail's 65dp whenever the bar was
+ * mounted. With Tool preview OFF no thumbnail is drawn and the bar is only
+ * 38dp, so the last row sat 27dp (the thumbnail overhang) further from the bar
+ * than it sits from the thumbnail with preview ON.
+ */
+internal object FloatingToolBarMetrics {
+    val BAR_HEIGHT = 38.dp
+    val THUMBNAIL_HEIGHT = 65.dp
+    /** ChatScreen's wrapper padding below the bar (above the composer). */
+    val WRAPPER_BOTTOM_PADDING = 6.dp
+    /**
+     * List bottom padding beyond the overlay's visible top. 8dp keeps the
+     * reserve the preview-ON state always had (6 + 65 + 8 = 79dp).
+     */
+    val ROW_GAP = 8.dp
+
+    /** How far the bar's visible top (the thumbnail's, when shown) sits above the list's bottom edge. */
+    fun visibleTop(previewEnabled: Boolean) =
+        WRAPPER_BOTTOM_PADDING + if (previewEnabled) THUMBNAIL_HEIGHT else BAR_HEIGHT
+}
+
 @Composable
 internal fun FloatingToolStatusBar(
     toolBlocks: List<AssistantBlock>,
-    onStop: (() -> Unit)? = null,
+    // [T-android-stop-late-write] Per-tool: called with the shown block's id.
+    onStop: ((blockId: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
     onOpenTerminalWithCommand: (String) -> Unit = {},
     // T261: detail open routes through ChatViewModel state so this bar
@@ -1076,13 +1093,29 @@ internal fun FloatingToolStatusBar(
         block.toolStatus == ToolBlockStatus.PENDING
     val toolAccent = toolAccentColor(block.toolName)
     val previewEnabled = LocalToolPreviewEnabled.current
+    // [T-tool-preview-longpress-close] Long-press shortcuts for the Appearance
+    // setting (port of iOS 277d5ce1b / b556ea8f8): the title area toggles the
+    // preview window, the thumbnail closes it. The pager chevrons keep their
+    // own long-press (first / last tool).
+    val context = LocalContext.current
+    var showBarMenu by remember { mutableStateOf(false) }
+    var showThumbMenu by remember { mutableStateOf(false) }
+    fun setToolPreview(on: Boolean) {
+        com.openminis.app.ui.settings.getAppearancePrefs(context).edit()
+            .putBoolean(com.openminis.app.ui.settings.KEY_TOOL_PREVIEW, on).apply()
+        if (!on) {
+            android.widget.Toast.makeText(
+                context, context.getString(R.string.tool_preview_closed_toast), android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
 
     // iOS layout: ZStack(alignment: .bottomLeading)
     // Thumbnail (100×65dp) floats ABOVE the status bar (38dp tall)
     val thumbnailWidth = 100.dp
-    val thumbnailHeight = 65.dp
-    val barHeight = 38.dp
-    val thumbnailOverhang = thumbnailHeight - barHeight  // 14dp above bar
+    val thumbnailHeight = FloatingToolBarMetrics.THUMBNAIL_HEIGHT
+    val barHeight = FloatingToolBarMetrics.BAR_HEIGHT
+    val thumbnailOverhang = thumbnailHeight - barHeight  // 27dp above bar
     val thumbnailInset = 10.dp
     val barStartPadding = if (previewEnabled) thumbnailWidth + thumbnailInset + 8.dp else 12.dp
 
@@ -1134,20 +1167,33 @@ internal fun FloatingToolStatusBar(
             // stays clean.
 
             // Tool title
-            Text(
-                text = block.toolTitle.ifEmpty { block.toolName },
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = ChatColors.primaryText,
-                maxLines = 1,
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                    ) { onOpenCurrentDetail() },
-                overflow = TextOverflow.Ellipsis,
-            )
+            Box(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = displayToolTitle(block),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = ChatColors.primaryText,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                            onLongClick = { showBarMenu = true },
+                        ) { onOpenCurrentDetail() },
+                    overflow = TextOverflow.Ellipsis,
+                )
+                DropdownMenu(expanded = showBarMenu, onDismissRequest = { showBarMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.appearance_tool_preview_title)) },
+                        trailingIcon = { if (previewEnabled) Icon(Icons.Default.Check, contentDescription = null) },
+                        onClick = {
+                            showBarMenu = false
+                            setToolPreview(!previewEnabled)
+                        },
+                    )
+                }
+            }
 
             // Pagination
             if (toolBlocks.size > 1) {
@@ -1251,7 +1297,19 @@ internal fun FloatingToolStatusBar(
                     toolAccent = toolAccent,
                     onClick = { onOpenCurrentDetail() },
                     fallbackImagePath = fallbackImagePath,
+                    onLongClick = { showThumbMenu = true },
                 )
+                DropdownMenu(expanded = showThumbMenu, onDismissRequest = { showThumbMenu = false }) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(stringResource(R.string.tool_preview_close_menu), color = MaterialTheme.colorScheme.error)
+                        },
+                        onClick = {
+                            showThumbMenu = false
+                            setToolPreview(false)
+                        },
+                    )
+                }
             }
         }
     }

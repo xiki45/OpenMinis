@@ -22,6 +22,17 @@ abstract class OAuthManager(
     protected val context: Context,
     protected val instanceId: String,
 ) {
+    /**
+     * [FEAT-261021-16] The instance's Settings > Network tag: sign-in, token
+     * refresh and the account calls around them take the same route as the
+     * provider's chat requests (an instance without a route of its own
+     * follows the default route).
+     */
+    protected val netTag: String get() = com.openminis.app.network.NetworkRuntime.providerTag(instanceId)
+
+    /** [baseHttpClient], routed by [netTag]; the same object when nothing is configured. */
+    protected val httpClient: OkHttpClient get() = com.openminis.app.network.NetworkHttp.client(netTag, baseHttpClient)
+
     companion object {
         private const val TAG = "OAuthManager"
         private const val KEY_MANUAL_BEARER = "manual_bearer_token"
@@ -33,7 +44,7 @@ abstract class OAuthManager(
         )
 
         /** Shared OkHttp client for all OAuth HTTP requests (respects system proxy). */
-        internal val httpClient = OkHttpClient.Builder()
+        internal val baseHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .build()
@@ -108,6 +119,21 @@ abstract class OAuthManager(
         private fun tokenFingerprint(blob: String): String =
             MessageDigest.getInstance("SHA-256").digest(blob.toByteArray())
                 .joinToString("") { "%02x".format(it) }
+
+        /**
+         * The token bundle to save after a refresh: the [response], plus what
+         * it left out that the stored bundle had. The refresh token may not
+         * come back on every refresh. [T-codex-account-id-refresh] Nor may the
+         * id_token, which an OpenAI sign-in made before its account id was
+         * stored needs to backfill it (GH #447): saving the response alone
+         * dropped it for good.
+         */
+        internal fun refreshedTokens(stored: JSONObject, response: JSONObject, usedRefreshToken: String): JSONObject {
+            if (!response.has("refresh_token")) response.put("refresh_token", usedRefreshToken)
+            val idToken = stored.optString("id_token", "")
+            if (response.optString("id_token", "").isEmpty() && idToken.isNotEmpty()) response.put("id_token", idToken)
+            return response
+        }
 
         /**
          * [T-oauth-keep-credentials] Structured "the token endpoint rejected
@@ -216,7 +242,14 @@ abstract class OAuthManager(
 
     suspend fun startLogin(onComplete: (Boolean) -> Unit) {
         callbackServer?.stop()
-        callbackServer = OAuthCallbackServer(callbackPort) { code, state ->
+        callbackServer = OAuthCallbackServer(
+            callbackPort,
+            // [T-oauth-callback-double-resume] Denied / failed: report now.
+            onError = { err ->
+                Log.w(TAG, "OAuth callback error: ${err.error}")
+                kotlinx.coroutines.GlobalScope.launch(Dispatchers.Main) { onComplete(false) }
+            },
+        ) { code, state ->
             if (state != null && state != currentState) {
                 Log.w(TAG, "State mismatch")
                 onComplete(false)
@@ -311,12 +344,9 @@ abstract class OAuthManager(
                 return@withContext false
             }
 
-            val json = JSONObject(responseBody)
-            // Preserve refresh_token if not returned
-            if (!json.has("refresh_token")) {
-                json.put("refresh_token", refreshToken)
-            }
+            val json = refreshedTokens(stored, JSONObject(responseBody), refreshToken)
             saveTokens(json)
+            onTokensRefreshed(json)
             true
         } catch (e: Exception) {
             Log.e(TAG, "Token refresh error", e)
@@ -437,6 +467,8 @@ abstract class OAuthManager(
      */
     fun saveManualBearerToken(token: String) {
         saveOAuthString(KEY_MANUAL_BEARER, token)
+        // [T-provider-quota] A pasted token is the quota query's credential too.
+        com.openminis.app.quota.QuotaStore.credentialsChanged()
     }
 
     fun loadManualBearerToken(): String? = loadOAuthString(KEY_MANUAL_BEARER)
@@ -445,6 +477,7 @@ abstract class OAuthManager(
         getEncryptedPrefs().edit()
             .remove("oauth_${KEY_MANUAL_BEARER}_$instanceId")
             .apply()
+        com.openminis.app.quota.QuotaStore.credentialsChanged()
     }
 
     // [T-android-provider-export-oauth-token] Public export/import shims for the
@@ -523,4 +556,7 @@ abstract class OAuthManager(
         com.openminis.app.util.EncryptedPrefsFactory.safeCreate(context, "oauth_prefs")
 
     protected open suspend fun onTokensReceived(json: JSONObject) {}
+
+    /** After [refreshToken] saved [json] (already merged by [refreshedTokens]). */
+    protected open suspend fun onTokensRefreshed(json: JSONObject) {}
 }

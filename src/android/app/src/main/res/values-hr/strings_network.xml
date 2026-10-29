@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Mreža</string>
+    <string name="network_status">Status</string>
+    <string name="network_status_starting">Pokretanje…</string>
+    <string name="network_status_connecting">Povezivanje…</string>
+    <string name="network_status_off">Isključeno</string>
+    <string name="network_device_name">Naziv uređaja</string>
+    <string name="network_device_name_automatic">Automatski</string>
+    <string name="network_exit_node_none">Ništa</string>
+    <string name="network_sign_out">Odjava</string>
+    <string name="network_scope_shell">Ljuska</string>
+    <string name="network_scope_browser">Preglednik</string>
+    <string name="network_scope_backup">Sigurnosna kopija</string>
+    <string name="network_proxy_type">Vrsta</string>
+    <string name="network_proxy_server">Poslužitelj</string>
+    <string name="network_proxy_authentication">Autentifikacija</string>
+    <string name="network_proxy_password">Lozinka</string>
+    <string name="network_proxy_bypass">Zaobiđi</string>
+    <string name="network_proxy_test">Testiraj vezu</string>
+    <string name="network_cancel">Odustani</string>
+    <string name="network_save">Spremi</string>
+    <string name="network_provider_route">Mreža</string>
+</resources>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Network</string>
+    <string name="network_status">Status</string>
+    <string name="network_status_starting">Nagsisimula…</string>
+    <string name="network_status_connecting">Kumokonekta…</string>
+    <string name="network_status_off">Naka-off</string>
+    <string name="network_device_name">Pangalan ng Device</string>
+    <string name="network_device_name_automatic">Awtomatiko</string>
+    <string name="network_exit_node_none">Wala</string>
+    <string name="network_sign_out">Mag-sign Out</string>
+    <string name="network_scope_shell">Shell</string>
+    <string name="network_scope_browser">Browser</string>
+    <string name="network_scope_backup">Backup</string>
+    <string name="network_proxy_type">Uri</string>
+    <string name="network_proxy_server">Server</string>
+    <string name="network_proxy_authentication">Authentication</string>
+    <string name="network_proxy_password">Password</string>
+    <string name="network_proxy_bypass">Bypass</string>
+    <string name="network_proxy_test">Subukan ang Koneksyon</string>
+    <string name="network_cancel">Kanselahin</string>
+    <string name="network_save">I-save</string>
+    <string name="network_provider_route">Network</string>
+</resources>

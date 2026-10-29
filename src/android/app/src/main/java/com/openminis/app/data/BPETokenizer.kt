@@ -1,7 +1,6 @@
 package com.openminis.app.data
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -51,10 +50,12 @@ object BPETokenizer {
      */
     fun countImageTokens(data: ByteArray): Int {
         if (data.isEmpty()) return 0
-        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(data, 0, data.size, opts)
-        val w = opts.outWidth.toFloat()
-        val h = opts.outHeight.toFloat()
+        // [T-ctx-builder] Bounds-only decode through the image codec seam
+        // (production: the same BitmapFactory inJustDecodeBounds call), so a
+        // JVM test can measure real dimensions instead of the 1000 fallback.
+        val (outWidth, outHeight) = com.openminis.app.provider.ImageBudget.codec.bounds(data)
+        val w = outWidth.toFloat()
+        val h = outHeight.toFloat()
         if (w <= 0f || h <= 0f) return IMAGE_FAILURE_FALLBACK
         val longEdge = max(w, h)
         val scale = if (longEdge > IMAGE_MAX_EDGE) IMAGE_MAX_EDGE / longEdge else 1f

@@ -1,0 +1,572 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo and screenshot"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/cam.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/cam.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/cam.jpg\" url=\"minis://attachments/uploads/cam.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Taking a screenshot"
+          },
+          {
+            "id": "call_s",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          },
+          {
+            "image": {
+              "base64Len": 381700,
+              "bytes": 286273,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5331e4580e0282e3",
+              "w": 900
+            },
+            "inResultOf": "call_s",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo and screenshot"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/cam.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/cam.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/cam.jpg\" url=\"minis://attachments/uploads/cam.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Taking a screenshot"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          },
+          {
+            "image": {
+              "base64Len": 381700,
+              "bytes": 286273,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5331e4580e0282e3",
+              "w": 900
+            },
+            "inResultOf": "fn:browser_use",
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo and screenshot"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/cam.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/cam.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/cam.jpg\" url=\"minis://attachments/uploads/cam.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Taking a screenshot"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by browser_use (tool_call_id: call_s)]"
+          },
+          {
+            "image": {
+              "base64Len": 381700,
+              "bytes": 286273,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5331e4580e0282e3",
+              "w": 900
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo and screenshot"
+          },
+          {
+            "kind": "text",
+            "text": "[attached image: /var/minis/attachments/uploads/cam.jpg]"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/cam.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/cam.jpg\" url=\"minis://attachments/uploads/cam.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Taking a screenshot"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "[Image returned by browser_use]"
+          },
+          {
+            "image": {
+              "base64Len": 381700,
+              "bytes": 286273,
+              "decodable": true,
+              "h": 2000,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "5331e4580e0282e3",
+              "w": 900
+            },
+            "kind": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo and screenshot"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/cam.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/cam.jpg\" url=\"minis://attachments/uploads/cam.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Taking a screenshot"
+          },
+          {
+            "id": "call_s",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo and screenshot"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/cam.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/cam.jpg\" url=\"minis://attachments/uploads/cam.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Taking a screenshot"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "id": "fn:browser_use",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo and screenshot"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/cam.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/cam.jpg\" url=\"minis://attachments/uploads/cam.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Taking a screenshot"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Photo and screenshot"
+          },
+          {
+            "image": {
+              "base64Len": 118344,
+              "bytes": 88756,
+              "decodable": true,
+              "h": 1500,
+              "magic": "image/jpeg",
+              "mime": "image/jpeg",
+              "sha256": "a8610119712fc705",
+              "w": 2000
+            },
+            "kind": "image"
+          },
+          {
+            "kind": "text",
+            "text": "[Image downscaled before sending: the original is 4032×3024 px, shown here at 2000×1500 px, so fine detail and small text may be unreadable. The full-size original is saved at /var/minis/attachments/uploads/cam.jpg.]"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/cam.jpg\" url=\"minis://attachments/uploads/cam.jpg\" size=\"242687\" modified=\"2025-10-09T08:53:20Z\" />\n<\/user-attached-files>"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Taking a screenshot"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolUse",
+            "text": "browser_use"
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "id": "call_s",
+            "kind": "toolResult",
+            "text": "Screenshot captured\nURL: https://example.com/page\nTitle: Example\nImage: 1080x2400\nminis_url: minis://browser/screenshot_1760000000.jpg"
+          }
+        ],
+        "role": "tool"
+      }
+    ]
+  }
+}

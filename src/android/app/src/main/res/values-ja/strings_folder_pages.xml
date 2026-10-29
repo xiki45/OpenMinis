@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-folder-pages] Translations from the iOS catalog. -->
+<resources>
+    <string name="sessionlist_folder_show_more">さらに%1$d件表示（残り%2$d件）</string>
+</resources>

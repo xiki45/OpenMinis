@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Config Changes record detail page and the approval
+     dialog's batch summary. Wording and translations mirror iOS
+     ConfigAuditDetailView / ConfigConfirmSheet. -->
+<resources>
+    <string name="config_audit_summary_header">已勾選修改彙總</string>
+    <string name="config_audit_detail_title">變更詳情</string>
+    <string name="config_audit_detail_status">狀態</string>
+    <string name="config_audit_detail_changed_by">修改者</string>
+    <string name="config_audit_detail_requested">發起時間</string>
+    <string name="config_audit_detail_resolved">處理時間</string>
+    <string name="config_audit_detail_note">助手的說明</string>
+    <string name="config_audit_detail_what_changed">改了什麼</string>
+    <string name="config_audit_detail_predates">此記錄早於可讀描述功能，僅顯示原始變更。</string>
+    <string name="config_audit_detail_raw">原始變更</string>
+    <string name="config_audit_detail_setting">設定項</string>
+    <string name="config_audit_detail_before">修改前</string>
+    <string name="config_audit_detail_after">修改後</string>
+    <string name="config_audit_detail_revert">撤銷此變更</string>
+    <string name="config_audit_detail_reverted">已還原</string>
+    <string name="config_audit_revert_undoes">將撤銷：</string>
+    <string name="config_audit_actor_assistant">助手</string>
+    <string name="config_audit_actor_you">你</string>
+    <string name="config_audit_actor_assistant_revert">助手（撤銷）</string>
+    <string name="config_audit_actor_you_revert">你（撤銷）</string>
+</resources>

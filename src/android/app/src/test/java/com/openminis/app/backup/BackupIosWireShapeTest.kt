@@ -1,5 +1,6 @@
 package com.openminis.app.backup
 
+import com.openminis.app.IosSources
 import com.openminis.app.ProductionSources
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.db.FolderEntity
@@ -65,9 +66,9 @@ class BackupIosWireShapeTest {
         }
     }
 
-    private val chatStore by lazy { swiftSource("src/ios/Agent/Chat/ChatStore.swift") }
-    private val iosSession by lazy { storedProps(chatStore, "struct ChatSession: ") }
-    private val iosFolder by lazy { storedProps(chatStore, "struct ChatFolder: ") }
+    // Found wherever iOS declares them (f492946c7 moved both out of ChatStore.swift).
+    private val iosSession by lazy { storedProps(IosSources.declaring("struct ChatSession: "), "struct ChatSession: ") }
+    private val iosFolder by lazy { storedProps(IosSources.declaring("struct ChatFolder: "), "struct ChatFolder: ") }
     private val iosSessionRecord by lazy {
         storedProps(
             swiftSource("src/ios/Agent/Backup/BackupImporter+Categories.swift"),

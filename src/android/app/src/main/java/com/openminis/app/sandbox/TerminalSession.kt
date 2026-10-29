@@ -33,6 +33,16 @@ import java.util.concurrent.CopyOnWriteArrayList
 class TerminalSession(private val context: Context) {
 
     companion object {
+        /**
+         * [T-envvar-disable] A terminal's environment: the kernel's own
+         * variables, then the user's ENABLED variables ([user] comes from
+         * EnvVarRepository.allAsDict()). Pure, and it never writes back into
+         * [system], so turning every variable off leaves a new terminal with
+         * none of them.
+         */
+        internal fun terminalEnvironment(system: Map<String, String>, user: Map<String, String>): Map<String, String> =
+            LinkedHashMap(system).apply { putAll(user) }
+
         private const val TAG = "TerminalSession"
         private const val READ_BUFFER_SIZE = 8192
         /** Max bytes per PTY write; larger pastes are chunked so nothing is dropped. */
@@ -133,11 +143,13 @@ class TerminalSession(private val context: Context) {
             try {
                 PRootKernel.boot(context)
 
-                if (sessionId != null) {
-                    ExecutionCoordinator.envVarRepository?.allAsDict()?.let { envVars ->
-                        PRootKernel.customEnvironment.putAll(envVars)
-                    }
-                }
+                // [T-envvar-disable] The user's variables used to be putAll()-ed
+                // into the process-wide PRootKernel.customEnvironment here. That
+                // map is never cleared, and every shell copies it (FreshProcessShell,
+                // PersistentShell, ShellExecutor), so once a terminal had been
+                // opened a deleted - or disabled - variable kept reaching every
+                // later command until the app restarted. They now go only into
+                // this terminal's own environment, below.
 
                 val cmdList = buildInteractiveCommand(sessionId)
                 val cmd = cmdList.first()
@@ -159,8 +171,15 @@ class TerminalSession(private val context: Context) {
                 // but set a fresh value here too in case the kernel was booted earlier
                 // and the system timezone changed since.
                 envMap["TZ"] = PRootKernel.posixTz()
-                for ((k, v) in PRootKernel.customEnvironment) envMap[k] = v
-                ExecutionCoordinator.envVarRepository?.allAsDict()?.forEach { (k, v) -> envMap[k] = v }
+                // [T-net-android-phase3] Settings > Network "Shell" route (empty
+                // = direct, unchanged); the user's own variables below win.
+                envMap.putAll(com.openminis.app.network.NetworkShellEnvironment.proxyVariables())
+                envMap.putAll(
+                    terminalEnvironment(
+                        PRootKernel.customEnvironment,
+                        ExecutionCoordinator.envVarRepository?.allAsDict().orEmpty(),
+                    )
+                )
 
                 // [T-android-seccomp-selfheal / GH#186] Applied last so nothing
                 // above can clobber it once this device is known to need it.
@@ -445,7 +464,10 @@ class TerminalSession(private val context: Context) {
         cmd.addAll(SessionMounts.toProotArgs(SessionMounts.forContext(context, sessionId).mounts))
 
         val handlers = NativeOffloadServer.registeredHandlers
-        if (handlers.isNotEmpty()) {
+        // [T-native-offload-bind] Only when our server is listening: otherwise
+        // the handler stubs run and report the CLI unavailable, instead of
+        // proot connecting to a name another process holds (and hanging).
+        if (handlers.isNotEmpty() && NativeOffloadServer.awaitListening()) {
             cmd.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
         }
 
@@ -468,6 +490,8 @@ class TerminalSession(private val context: Context) {
         // Whatever exposure decision that flag gets, both builders take it
         // together.
         cmd.add("--fake-netlink")
+        // [FEAT-261021-11] Shell transparent forwarding (see PRootKernel).
+        cmd.addAll(com.openminis.app.network.ShellTransparentNet.prootArgs(rootfsManager.prootBinary))
 
         // Login + interactive so /etc/profile is sourced (readline, history, color aliases).
         cmd.add("/bin/sh")

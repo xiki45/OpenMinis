@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">전체 생각 보기</string>
+    <string name="thinking_full_title">전체 생각</string>
+    <string name="thinking_full_char_count">%1$s자</string>
+    <string name="thinking_full_load_more">더 불러오기</string>
+    <string name="thinking_full_copy_failed">너무 길어 복사할 수 없습니다</string>
+</resources>

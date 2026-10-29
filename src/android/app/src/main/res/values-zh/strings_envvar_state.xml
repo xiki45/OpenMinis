@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">已禁用</string>
+    <string name="env_var_status_duplicate">名称重复</string>
+    <string name="env_var_enabled_toggle">启用</string>
+    <string name="env_var_enabled_footer">关闭后，变量的值和备注都会保留，但不会传给 Shell、终端和 MCP 服务器。</string>
+    <string name="env_var_disabled_highlight">此变量已禁用，打开开关即可重新启用。</string>
+    <string name="env_var_action_disable">禁用</string>
+    <string name="env_var_action_enable">启用</string>
+    <string name="mcp_form_env_disabled_warning">%1$s 已禁用，将以空值传入。</string>
+</resources>

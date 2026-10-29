@@ -62,102 +62,133 @@ object FileReadTool {
                 return ToolExecutionResult("Error: Path is a directory: $path", false, toolTitle = toolTitle)
             }
 
-            val size = file.length()
-
-            // Binary detection: check first 8192 bytes for null bytes
-            val isBinary = file.inputStream().use { input ->
-                val buf = ByteArray(minOf(8192, size.toInt()))
-                val read = input.read(buf)
-                if (read > 0) buf.take(read).any { it == 0.toByte() } else false
+            val requestedLines = if (args.has("lines")) args.optInt("lines") else null
+            if (requestedLines != null && requestedLines < 0) {
+                return ToolExecutionResult("Error: 'lines' must not be negative", false, toolTitle = toolTitle)
             }
 
-            if (isBinary) {
-                return ToolExecutionResult(
-                    "[$path | $size bytes | binary file — cannot display contents]",
-                    true, toolTitle = toolTitle
+            // [T-port-filetool-size-guard] The read runs off the caller's
+            // thread with a timeout, and streams the file (see read()).
+            try {
+                FileToolIO.run("Reading $path") {
+                    read(file, path, offset, requestedLines, maxLength, direction, toolTitle)
+                }
+            } catch (e: FileToolIO.TimedOut) {
+                ToolExecutionResult("Error: ${e.message}", false, toolTitle = toolTitle, timedOut = true)
+            } catch (e: FileToolIO.OutOfMemory) {
+                ToolExecutionResult(
+                    "Error: ${e.message} Read a smaller range with offset/lines or direction='tail', " +
+                        "or use the shell (head / tail / grep).",
+                    false, toolTitle = toolTitle,
                 )
             }
-
-            val allLines = file.readLines()
-            val totalLines = allLines.size
-
-            val requestedLines = if (args.has("lines")) args.optInt("lines") else null
-
-            val selectedLines = if (direction == "tail") {
-                val count = requestedLines ?: totalLines
-                val start = (totalLines - count).coerceAtLeast(0)
-                allLines.subList(start, totalLines)
-            } else {
-                val start = (offset - 1).coerceIn(0, totalLines)
-                val end = if (requestedLines != null) {
-                    (start + requestedLines).coerceAtMost(totalLines)
-                } else {
-                    totalLines
-                }
-                allLines.subList(start, end)
-            }
-
-            val showStart = if (direction == "tail") {
-                (totalLines - selectedLines.size) + 1
-            } else {
-                offset
-            }
-            val showEnd = showStart + selectedLines.size - 1
-
-            var content = selectedLines.joinToString("\n")
-
-            // [T-fileread-truncation-header] The header used to report the line
-            // range chosen BEFORE truncation, and said nothing about having
-            // truncated at all — only the body gained a trailing
-            // "... (truncated)". So a cut-off read still announced
-            // "showing 1-1324 of 1324", which the agent took as the whole file
-            // and never paged on.
-            //
-            // Recompute the range that actually survived and hand back the
-            // offset to resume from. Confined to the truncating branch; a read
-            // that fits is byte-identical to before.
-            var effectiveStart = showStart
-            var effectiveEnd = showEnd
-            var nextOffset: Int? = null
-            var wasTruncated = false
-            if (content.length > maxLength) {
-                wasTruncated = true
-                if (direction == "tail") {
-                    // tail asks for the END of the file; take() returned the
-                    // start of the tail window instead — the opposite.
-                    content = content.takeLast(maxLength)
-                    // Drop a leading partial line so the first line is whole.
-                    val firstNewline = content.indexOf('\n')
-                    if (firstNewline in 0 until content.length - 1) {
-                        content = content.substring(firstNewline + 1)
-                    }
-                    effectiveStart = effectiveEnd - content.count { it == '\n' }
-                    // No next_offset for tail: paging forward from the end of
-                    // the file is meaningless.
-                } else {
-                    content = content.take(maxLength)
-                    // Back off to the last complete line, so the next page does
-                    // not re-read or split a line.
-                    val lastNewline = content.lastIndexOf('\n')
-                    if (lastNewline > 0) content = content.substring(0, lastNewline)
-                    effectiveEnd = showStart + content.count { it == '\n' }
-                    if (effectiveEnd < totalLines) nextOffset = effectiveEnd + 1
-                }
-            }
-
-            var header = "[$path | $size bytes | $totalLines lines | " +
-                "showing $effectiveStart-$effectiveEnd of $totalLines"
-            if (wasTruncated) {
-                header += " | truncated at $maxLength chars"
-                // Named to match the tool's own `offset` parameter so the model
-                // can copy it straight into the next call.
-                header += if (nextOffset != null) ", next_offset=$nextOffset"
-                          else ", retry with a smaller lines value"
-            }
-            header += "]"
-            ToolExecutionResult("$header\n$content", true, toolTitle = toolTitle)
         } catch (e: Exception) {
             ToolExecutionResult("Error reading file: ${e.message}", false)
         }
+    }
+
+    /**
+     * Read [file] for file_read. Pure apart from the file access, so tests can
+     * call it on a temp file.
+     *
+     * [T-port-filetool-size-guard] This used to be File.readLines - the
+     * whole file in memory before the 80 KB output cap applied, so a read of
+     * a multi-hundred-MB log or dump threw OutOfMemoryError, which no caller
+     * catches, and killed the app. FileToolIO.scanLines streams the file once
+     * and keeps only what the cap can return; the output (header, range,
+     * truncation, next_offset) is unchanged for every file that used to fit.
+     */
+    internal fun read(
+        file: java.io.File,
+        path: String,
+        offset: Int,
+        requestedLines: Int?,
+        maxLength: Int,
+        direction: String,
+        toolTitle: String,
+    ): ToolExecutionResult {
+        val size = file.length()
+
+        // Binary detection: check first 8192 bytes for null bytes.
+        // minOf on Long: size.toInt() overflowed for files over 2 GB.
+        val isBinary = file.inputStream().use { input ->
+            val buf = ByteArray(minOf(8192L, size).toInt())
+            val read = input.read(buf)
+            if (read > 0) buf.take(read).any { it == 0.toByte() } else false
+        }
+
+        if (isBinary) {
+            return ToolExecutionResult(
+                "[$path | $size bytes | binary file — cannot display contents]",
+                true, toolTitle = toolTitle
+            )
+        }
+
+        val window = FileToolIO.scanLines(
+            file, tail = direction == "tail", offset = offset,
+            lines = requestedLines, maxLength = maxLength,
+        )
+        val totalLines = window.totalLines
+        val selectedCount = window.selectedCount
+
+        val showStart = if (direction == "tail") {
+            (totalLines - selectedCount) + 1
+        } else {
+            offset
+        }
+        val showEnd = showStart + selectedCount - 1
+
+        var content = window.content
+
+        // [T-fileread-truncation-header] The header used to report the line
+        // range chosen BEFORE truncation, and said nothing about having
+        // truncated at all — only the body gained a trailing
+        // "... (truncated)". So a cut-off read still announced
+        // "showing 1-1324 of 1324", which the agent took as the whole file
+        // and never paged on.
+        //
+        // Recompute the range that actually survived and hand back the
+        // offset to resume from. Confined to the truncating branch; a read
+        // that fits is byte-identical to before.
+        var effectiveStart = showStart
+        var effectiveEnd = showEnd
+        var nextOffset: Int? = null
+        var wasTruncated = false
+        if (content.length > maxLength) {
+            wasTruncated = true
+            if (direction == "tail") {
+                // tail asks for the END of the file; take() returned the
+                // start of the tail window instead — the opposite.
+                content = content.takeLast(maxLength)
+                // Drop a leading partial line so the first line is whole.
+                val firstNewline = content.indexOf('\n')
+                if (firstNewline in 0 until content.length - 1) {
+                    content = content.substring(firstNewline + 1)
+                }
+                effectiveStart = effectiveEnd - content.count { it == '\n' }
+                // No next_offset for tail: paging forward from the end of
+                // the file is meaningless.
+            } else {
+                content = content.take(maxLength)
+                // Back off to the last complete line, so the next page does
+                // not re-read or split a line.
+                val lastNewline = content.lastIndexOf('\n')
+                if (lastNewline > 0) content = content.substring(0, lastNewline)
+                effectiveEnd = showStart + content.count { it == '\n' }
+                if (effectiveEnd < totalLines) nextOffset = effectiveEnd + 1
+            }
+        }
+
+        var header = "[$path | $size bytes | $totalLines lines | " +
+            "showing $effectiveStart-$effectiveEnd of $totalLines"
+        if (wasTruncated) {
+            header += " | truncated at $maxLength chars"
+            // Named to match the tool's own `offset` parameter so the model
+            // can copy it straight into the next call.
+            header += if (nextOffset != null) ", next_offset=$nextOffset"
+                      else ", retry with a smaller lines value"
+        }
+        header += "]"
+        return ToolExecutionResult("$header\n$content", true, toolTitle = toolTitle)
     }
 }

@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -163,11 +164,45 @@ data class AgentJobCompletion(
 object AgentJobRegistry {
     private const val TAG = "AgentJobRegistry"
 
-    /** Hard cap on concurrently running child-session jobs (design §4.3).
-     *  Helpers bypass SessionConcurrencyManager — a parent awaiting its helper
-     *  holds a slot there, so routing helpers through the same pool of 5 could
-     *  deadlock every parent behind its own children (§4.4). */
-    const val MAX_CONCURRENT_CHILD_JOBS = 3
+    /**
+     * [T-new-limits] Sub agent (child-session) jobs that may run at once PER
+     * PARENT conversation (design §4.3; was 3 for all parents together).
+     *
+     * Counted per parent so one conversation's fan-out never starves
+     * another's: each parent has its own 3, and a parent that is full queues
+     * only its OWN further delegations. Scheduled child-of-current runs count
+     * against their parent's 3 like any delegation.
+     *
+     * These jobs do NOT take one of SessionConcurrencyManager's slots
+     * ([com.openminis.app.service.SessionConcurrencyManager.MAX_CONCURRENT]):
+     * a child's loop skips acquireSlot (`helperConfig != null`). A parent
+     * awaiting its helper holds its own slot, so routing helpers through the
+     * same pool would deadlock every parent behind its own children (§4.4).
+     * Worst case is therefore 6 parents × 3 children + 6 = 24 loops.
+     */
+    const val MAX_CONCURRENT_CHILD_JOBS_PER_PARENT = 3
+
+    /**
+     * [T-loadtest-limits] The per-parent cap admission uses:
+     * [MAX_CONCURRENT_CHILD_JOBS_PER_PARENT] unless a DEV_TOOLS build
+     * overrides it for a load test. In memory only.
+     */
+    @Volatile
+    var maxConcurrentChildJobsPerParent: Int = MAX_CONCURRENT_CHILD_JOBS_PER_PARENT
+        private set
+
+    /**
+     * [T-loadtest-limits] DEV_TOOLS only: set the PER-PARENT child cap (null =
+     * default), 1..32; drains the queue. Name and RPC key (`childJobs`) kept for
+     * the load-test scripts; since [T-new-limits] the number is per parent.
+     */
+    fun debugSetMaxConcurrentChildJobs(n: Int?): Int {
+        if (!com.openminis.app.BuildConfig.DEV_TOOLS) return maxConcurrentChildJobsPerParent
+        maxConcurrentChildJobsPerParent = (n ?: MAX_CONCURRENT_CHILD_JOBS_PER_PARENT).coerceIn(1, 32)
+        AppLogger.info(TAG, "[T-loadtest-limits] maxConcurrentChildJobsPerParent=$maxConcurrentChildJobsPerParent")
+        drainIfStalled()
+        return maxConcurrentChildJobsPerParent
+    }
 
     private val _jobs = MutableStateFlow<Map<String, AgentJob>>(emptyMap())
     val jobs: StateFlow<Map<String, AgentJob>> = _jobs.asStateFlow()
@@ -239,13 +274,41 @@ object AgentJobRegistry {
     fun jobForSession(runSessionId: String): AgentJob? =
         _jobs.value.values.firstOrNull { it.runSessionId == runSessionId }
 
-    /** PENDING counts too: a job is reserved from `register` on, so the window
-     *  between registering and `markRunning` (session creation, vm readiness)
-     *  cannot be used to exceed the cap. */
-    val runningChildJobCount: Int
+    /**
+     * [T-new-limits] Active child jobs of ONE parent. PENDING counts too: a job
+     * is reserved from `register` on, so the window between registering and
+     * `markRunning` (session creation, vm readiness) cannot be used to exceed
+     * the cap.
+     */
+    fun runningChildJobCount(parentSessionId: String): Int =
+        _jobs.value.values.count { it.target.parentSessionIdOrNull == parentSessionId && it.isActive }
+
+    /** All active child jobs, every parent — diagnostics only, never admission. */
+    val totalRunningChildJobCount: Int
         get() = _jobs.value.values.count { it.target.isChildOfCurrent && it.isActive }
 
-    val canStartChildJob: Boolean get() = runningChildJobCount < MAX_CONCURRENT_CHILD_JOBS
+    /** Active child jobs per parent — diagnostics (load-test snapshot). */
+    fun runningChildJobCountsByParent(): Map<String, Int> =
+        _jobs.value.values.filter { it.isActive }.mapNotNull { it.target.parentSessionIdOrNull }
+            .groupingBy { it }.eachCount()
+
+    /** [T-new-limits] Whether [parentSessionId] may start one more child job now. */
+    fun canStartChildJob(parentSessionId: String): Boolean =
+        runningChildJobCount(parentSessionId) < maxConcurrentChildJobsPerParent
+
+    /**
+     * [T-new-limits] Wait until [parentSessionId] has a free child slot, at most
+     * [timeoutMs]. For the scheduled child-of-current path, which has no tool
+     * call to answer "queued" to: it waits (defers the fire) instead of
+     * silently exceeding the cap. True = a slot is free now.
+     */
+    suspend fun awaitChildSlot(parentSessionId: String, timeoutMs: Long): Boolean {
+        if (canStartChildJob(parentSessionId)) return true
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            jobs.first { canStartChildJob(parentSessionId) }
+            true
+        } ?: false
+    }
 
     // ── Delegation queue  [T-sub-agents-queue] ──────────────────────────────
 
@@ -264,8 +327,12 @@ object AgentJobRegistry {
         val queuedAtMs: Long = System.currentTimeMillis(),
     )
 
-    /** Backlog bound. Past this a delegation is refused, and says so plainly. */
-    const val MAX_QUEUED_DELEGATIONS = 10
+    /**
+     * [T-new-limits] Backlog bound PER PARENT conversation (was 10 for all
+     * parents together). Past this a delegation is refused, and says so
+     * plainly ("it was NOT queued").
+     */
+    const val MAX_QUEUED_DELEGATIONS_PER_PARENT = 10
 
     private val queuedDelegations = mutableListOf<QueuedDelegation>()
 
@@ -341,12 +408,14 @@ object AgentJobRegistry {
     }
 
     fun enqueueDelegation(item: QueuedDelegation): Boolean = synchronized(queuedDelegations) {
-        if (queuedDelegations.size >= MAX_QUEUED_DELEGATIONS) return false
+        val forParent = queuedDelegations.count { it.parentSessionId == item.parentSessionId }
+        if (forParent >= MAX_QUEUED_DELEGATIONS_PER_PARENT) return false
         queuedDelegations.add(item)
         queueRevision.value++
         AppLogger.info(
             TAG,
-            "QUEUE + tool=${item.toolUseId.take(12)} depth=${queuedDelegations.size}",
+            "QUEUE + tool=${item.toolUseId.take(12)} parent=${item.parentSessionId.take(8)} " +
+                "depth=${forParent + 1} total=${queuedDelegations.size}",
         )
         true
     }
@@ -376,17 +445,25 @@ object AgentJobRegistry {
     }
 
     /**
-     * Start ONE queued delegation if a slot is free.
+     * Start queued delegations whose parent has a free slot.
      *
-     * One per call on purpose: the started task only occupies its slot once it
-     * registers, so draining the whole backlog here would blow past the
-     * concurrency cap. The next `finish` drains the next one.
+     * [T-new-limits] The earliest entry of a parent WITH room is taken, not the
+     * head of the queue: a parent that is full must not block the entries of
+     * other parents behind it (head-of-line blocking).
+     *
+     * At most ONE per parent per call, on purpose: a fresh delegation only
+     * occupies its slot once it registers (asynchronously, on its parent's
+     * view model), so draining a parent's whole backlog here would blow past
+     * its cap. The next `finish` of that parent's job drains its next one.
      */
     private fun drainQueuedDelegations() {
+        val startedFor = HashSet<String>()
         while (true) {
-            if (!canStartChildJob) return
             val next = synchronized(queuedDelegations) {
-                queuedDelegations.removeFirstOrNull()?.also { queueRevision.value++ }
+                val i = queuedDelegations.indexOfFirst {
+                    it.parentSessionId !in startedFor && canStartChildJob(it.parentSessionId)
+                }
+                if (i < 0) null else queuedDelegations.removeAt(i).also { queueRevision.value++ }
             } ?: return
             val starter = queuedStarters[next.parentSessionId]
             if (starter == null) {
@@ -404,10 +481,10 @@ object AgentJobRegistry {
                 AppLogger.warning(TAG, "QUEUE start failed for ${next.toolUseId.take(12)}: ${e.message}")
                 false
             }
-            AppLogger.info(TAG, "QUEUE - tool=${next.toolUseId.take(12)} started=$started")
+            AppLogger.info(TAG, "QUEUE - tool=${next.toolUseId.take(12)} parent=${next.parentSessionId.take(8)} started=$started")
             // A parent that no longer exists takes its queued work with it;
             // move on to the next rather than stalling the whole backlog.
-            if (started) return
+            if (started) startedFor.add(next.parentSessionId)
         }
     }
 
@@ -456,8 +533,10 @@ object AgentJobRegistry {
      * returns immediately unless work is waiting AND a slot is free.
      */
     fun drainIfStalled() {
-        val waiting = synchronized(queuedDelegations) { queuedDelegations.isNotEmpty() }
-        if (!waiting || !canStartChildJob) return
+        val waiting = synchronized(queuedDelegations) {
+            queuedDelegations.any { canStartChildJob(it.parentSessionId) }
+        }
+        if (!waiting) return
         AppLogger.info(TAG, "QUEUE stalled with a free slot — draining")
         drainQueuedDelegations()
     }
@@ -649,16 +728,53 @@ object AgentJobRegistry {
     fun muteDelegationResults(parentSessionId: String) {
         mutedParents.add(parentSessionId)
         AppLogger.info(TAG, "delegation results muted for parent ${parentSessionId.take(8)}")
+        // [stop-diag] Who muted, and what the set holds afterwards.
+        AppLogger.info(TAG, "[stop-diag] mute ADD sid=$parentSessionId set=${mutedSnapshot()} caller=${stopDiagCaller()}")
     }
 
     /** Cleared when the user starts new work in that session. */
     fun clearDelegationMute(parentSessionId: String) {
-        if (mutedParents.remove(parentSessionId)) {
+        val removed = mutedParents.remove(parentSessionId)
+        if (removed) {
             AppLogger.info(TAG, "delegation mute cleared for parent ${parentSessionId.take(8)}")
         }
+        // [stop-diag] Logged whether or not it was set, so a missing clear on
+        // a new-work entry point shows up as the absence of this line.
+        AppLogger.info(TAG, "[stop-diag] mute REMOVE sid=$parentSessionId removed=$removed set=${mutedSnapshot()} caller=${stopDiagCaller()}")
     }
 
-    fun isDelegationMuted(parentSessionId: String): Boolean = mutedParents.contains(parentSessionId)
+    fun isDelegationMuted(parentSessionId: String): Boolean {
+        val muted = mutedParents.contains(parentSessionId)
+        // [stop-diag] Every hit, with the caller (the loop's post-tool check,
+        // runThen's callback gate, ...).
+        if (muted) {
+            AppLogger.info(TAG, "[stop-diag] mute HIT sid=$parentSessionId set=${mutedSnapshot()} caller=${stopDiagCaller()}")
+        }
+        return muted
+    }
+
+    /** [stop-diag] Current muted parent ids, for diagnostics. */
+    fun mutedSnapshot(): List<String> = synchronized(mutedParents) { mutedParents.toList() }
+
+    /** [stop-diag] Active sub agent jobs of [parentSessionId]. */
+    fun activeChildCount(parentSessionId: String): Int = activeChildren(parentSessionId).size
+
+    /** [stop-diag] The first frames above the registry, "Class.method:line" each. */
+    internal fun stopDiagCaller(frames: Int = 6): String =
+        Thread.currentThread().stackTrace
+            .asSequence()
+            .drop(1)
+            .filterNot {
+                it.className.startsWith("java.lang.Thread") ||
+                    (it.className.endsWith("AgentJobRegistry") && it.methodName in STOP_DIAG_SELF)
+            }
+            .take(frames)
+            .joinToString(" <- ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+
+    private val STOP_DIAG_SELF = setOf(
+        "stopDiagCaller", "stopDiagCaller\$default", "muteDelegationResults",
+        "clearDelegationMute", "isDelegationMuted",
+    )
 
     /** Drop terminal jobs so the map does not grow without bound. */
     fun pruneFinished(olderThanMs: Long = 3_600_000L) {
@@ -669,6 +785,7 @@ object AgentJobRegistry {
     /** Test hook. */
     internal fun resetForTest() {
         _jobs.value = emptyMap(); cancelHooks.clear(); completionHooks.clear()
+        AppLogger.info(TAG, "[stop-diag] mute CLEAR-ALL (test reset) set=${mutedSnapshot()}")
         followUpDispatcher = null; mutedParents.clear()
     }
 
@@ -681,23 +798,40 @@ object AgentJobRegistry {
         // job still finishes and still records its result; what it must not do
         // is hand that result to the parent, which would start a new turn in a
         // conversation the user just stopped.
+        // [T-subagent-termination] Delivery outcomes are recorded on the child's
+        // termination record (no-op for a job that has none, e.g. a scheduled
+        // child-of-current run).
+        val terminations = SubAgentTerminationStore.shared
         if (isDelegationMuted(parent)) {
             AppLogger.info(TAG, "then.FollowUpParent ${job.id.take(8)} suppressed — parent ${parent.take(8)} stopped")
+            terminations.setDeliveryForJob(job.id, SubAgentTermination.Delivery.FAILED, "withheld: the user stopped the parent's agents")
             return
         }
         // [T-agent-wrapup-turn] Never hand the parent an empty result: say
         // what happened so it re-delegates instead of digging.
-        val result = job.resultText?.takeIf { it.isNotBlank() } ?: HelperRunner.emptyResultNote(job.state.wire)
+        // [T-subagent-termination] A delegate run's termination record (if it
+        // has one) names WHY there is no answer and what the last tool did;
+        // other jobs keep the generic note.
+        val termination = terminations.terminalForJob(job.id)
+        val result = if (termination != null) {
+            SubAgentTerminationRules.helperResultText(job.resultText.orEmpty(), termination)
+        } else {
+            job.resultText?.takeIf { it.isNotBlank() } ?: HelperRunner.emptyResultNote(job.state.wire)
+        }
         val text = then.template?.takeIf { it.isNotEmpty() }?.replace("{{result}}", result)
             ?: completionCallback(job, result).xml
         val dispatcher = followUpDispatcher
         if (dispatcher == null) {
             AppLogger.warning(TAG, "then.FollowUpParent ${job.id.take(8)} dropped — no dispatcher installed")
+            terminations.setDeliveryForJob(job.id, SubAgentTermination.Delivery.FAILED, "no delivery path installed")
             return
         }
         AppLogger.info(TAG, "then.FollowUpParent ${job.id.take(8)} → parent ${parent.take(8)} state=${job.state.wire}")
         runCatching { dispatcher(parent, text, job.id) }
-            .onFailure { AppLogger.warning(TAG, "then.FollowUpParent ${job.id.take(8)} failed: ${it.message}") }
+            .onFailure {
+                AppLogger.warning(TAG, "then.FollowUpParent ${job.id.take(8)} failed: ${it.message}")
+                terminations.setDeliveryForJob(job.id, SubAgentTermination.Delivery.FAILED, it.message ?: "delivery threw")
+            }
     }
 
     /** The finished-envelope for [job] — iOS AgentJobRegistry.completionCallback. */

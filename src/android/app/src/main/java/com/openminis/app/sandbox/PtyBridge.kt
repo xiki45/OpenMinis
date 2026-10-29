@@ -63,4 +63,16 @@ object PtyBridge {
      */
     @JvmStatic
     external fun waitFor(pid: Int): Int
+
+    /**
+     * [T-shell-stall-yes-head] Unblock SIGPIPE on the calling thread. Returns
+     * a bit set (1 = it was blocked, 2 = its disposition is SIG_IGN) or -errno.
+     * Use through [SpawnSignalMask], never directly.
+     */
+    @JvmStatic
+    external fun unblockSigpipe(): Int
+
+    /** [T-shell-stall-yes-head] Re-block SIGPIPE on the calling thread. 0 or -errno. */
+    @JvmStatic
+    external fun blockSigpipe(): Int
 }

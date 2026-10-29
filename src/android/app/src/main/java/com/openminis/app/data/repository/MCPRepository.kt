@@ -246,7 +246,10 @@ class MCPRepository(private val context: Context) {
             if (s.headers.isNotEmpty()) o.put("headers", JSONObject(s.headers))
             // [T-android-mcp-oauth] Persist the non-secret OAuth config alongside
             // the URL. Secret + tokens live in MCPOAuthStore, never in JSON.
-            s.oauth?.takeIf { it.isConfigured }?.let { o.put("oauth", it.toJson()) }
+            // [T-mcp-oauth-signin-android] A browser sign-in entry is saved
+            // even before its first sign-in (iOS #432: dropping it made the
+            // entry reopen as "None" and the guest stop sending the token).
+            s.oauth?.takeIf { it.isConfigured || it.isDynamic }?.let { o.put("oauth", it.toJson()) }
         }
         s.note?.takeIf { it.isNotBlank() }?.let { o.put("note", it) }
         o.put("enabled", s.enabled)

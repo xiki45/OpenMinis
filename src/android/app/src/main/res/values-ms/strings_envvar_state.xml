@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Tidak aktif</string>
+    <string name="env_var_status_duplicate">Nama pendua</string>
+    <string name="env_var_enabled_toggle">Aktif</string>
+    <string name="env_var_enabled_footer">Apabila dimatikan, nilai dan nota pemboleh ubah dikekalkan tetapi tidak dihantar ke shell, terminal atau pelayan MCP.</string>
+    <string name="env_var_disabled_highlight">Pemboleh ubah ini tidak aktif. Hidupkan untuk menggunakannya semula.</string>
+    <string name="env_var_action_disable">Nyahdayakan</string>
+    <string name="env_var_action_enable">Aktifkan</string>
+    <string name="mcp_form_env_disabled_warning">%1$s tidak aktif dan akan dihantar sebagai nilai kosong.</string>
+</resources>

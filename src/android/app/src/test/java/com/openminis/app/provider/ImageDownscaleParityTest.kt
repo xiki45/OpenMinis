@@ -117,8 +117,15 @@ class ImageDownscaleParityTest {
     }
 
     @Test fun `every send path emits the image through addModelImage with its note`() {
-        assertEquals(3, Regex("""\.addModelImage\(part, prepared\.imageUploadPaths\.getOrNull\(idx\), prepared\.imageModelNotes\.getOrNull\(idx\)\)""").findAll(vm).count())
-        assertTrue(vm.contains("imageModelNotes.add(downscaled?.let { ImageBudget.downscaleNote(it, linuxPath) })"))
+        // [T-image-real-tests] sendMessage's live turn goes through ChatAttachmentIngest.liveUserTurn,
+        // which calls addModelImage per image. [T-ctx-builder] The two queue paths build their batch
+        // with ChatAttachmentIngest.queuedTurn, which calls it per image the same way.
+        assertEquals(2, Regex(Regex.escape("ChatAttachmentIngest.queuedTurn(")).findAll(vm).count())
+        assertTrue(vm.contains("addModelImage(combinedParts, part, prepared.imageUploadPaths.getOrNull(idx), prepared.imageModelNotes.getOrNull(idx), visionPlaceholderFor)"))
+        assertTrue(vm.contains("agentHistory.add(ChatAttachmentIngest.liveUserTurn("))
+        assertTrue(vm.contains("addModelImage(userContentParts, part, imageUploadPaths.getOrNull(idx), imageModelNotes.getOrNull(idx), visionPlaceholderFor)"))
+        assertTrue(vm.contains("modelNote = downscaled?.let { ImageBudget.downscaleNote(it, linuxPath) },"))
+        assertTrue(vm.contains("imageModelNotes.add(ingested.modelNote)"))
         assertTrue("notes stay parallel when the budget drops images",
             vm.contains("while (imageModelNotes.size > newSize) imageModelNotes.removeAt(imageModelNotes.size - 1)"))
     }

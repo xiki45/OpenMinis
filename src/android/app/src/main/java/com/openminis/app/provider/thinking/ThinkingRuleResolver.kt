@@ -723,39 +723,80 @@ object ThinkingRuleResolver {
     // §1 is a pure refactor — do not "align" them without a deliberate decision.
 
     /**
+     * [OpenMinis#470] The `(major, minor)` of a Gemini id: the first
+     * `gemini-<major>[.-<minor>]` in the lowercased id, so a relay prefix
+     * (`google/…`, `models/…`) and a hyphenated version (`gemini-3-8-flash`)
+     * both parse. Null for ids with no version number (`gemini-flash-latest`,
+     * `gemini-exp-1206`), which keep their old behaviour.
+     */
+    data class GeminiVersion(val major: Int, val minor: Int?)
+
+    private val geminiVersionPattern = Regex("""gemini-(\d+)(?:[.-](\d+))?""")
+
+    fun geminiVersion(modelId: String): GeminiVersion? {
+        val m = geminiVersionPattern.find(modelId.lowercase()) ?: return null
+        val major = m.groupValues[1].toIntOrNull() ?: return null
+        return GeminiVersion(major, m.groupValues[2].toIntOrNull())
+    }
+
+    /**
+     * [OpenMinis#470] Gemini 3 and every later major version speak
+     * `thinkingLevel`; 2.5 and earlier speak `thinkingBudget`. Replaces the old
+     * `contains("gemini-3")` test, which sent gemini-4-argon down the budget /
+     * no-config path: Google answers a budget on Gemini 4 with a hard 400, and
+     * Android, which sent no config, ignored the user's thinking level.
+     */
+    fun isGeminiLevelFamily(modelId: String): Boolean = (geminiVersion(modelId)?.major ?: 0) >= 3
+
+    /**
+     * [T-gemini37-minimal-400 / OpenMinis#470] Whether `thinkingLevel: "minimal"`
+     * is accepted: only 3.0–3.6 Flash. 3.7+ Flash answers it with
+     *   400 "Thinking level MINIMAL is not supported for this model."
+     * (verified on-device), 3.x Pro never had it, and Google documents MINIMAL
+     * as "Not supported on Gemini 4 models". Matched by version rather than an
+     * id list: guessing "low" for a model that would have accepted "minimal"
+     * costs a slightly higher thinking floor; guessing "minimal" for one that
+     * rejects it makes the model unusable outright.
+     */
+    fun geminiAcceptsMinimalLevel(modelId: String): Boolean {
+        val v = geminiVersion(modelId) ?: return false
+        return v.major == 3 && (v.minor == null || v.minor < 7) && modelId.lowercase().contains("flash")
+    }
+
+    /**
+     * [OpenMinis#470] The thinking-config shape a request is forced into after
+     * Google rejected the one this resolver picked (see `GeminiThinkingRetry`):
+     * level instead of budget, budget instead of level, or level with the
+     * "minimal" floor raised to "low".
+     */
+    enum class GeminiThinkingFormat { LEVEL, BUDGET, LEVEL_NO_MINIMAL }
+
+    /**
      * The `generationConfig.thinkingConfig` object for a Gemini request, or null when the
      * model takes no thinking config at all (specialized -tts/-image/-embedding/-vision
      * modalities, 2.5 Flash Lite, and any id matching none of the families).
-     */
-    /**
-     * [T-gemini37-minimal-400] Gemini 3.x Flash models that reject
-     * `thinkingLevel: "minimal"` with a 400 and must use "low" as their OFF floor.
      *
-     * Matched by minor version rather than an exact-id list: 3.7 is where Google
-     * dropped the level, so anything from 3.7 up is assumed to have dropped it
-     * too. Guessing "low" for a model that would have accepted "minimal" costs a
-     * slightly higher thinking floor; guessing "minimal" for one that rejects it
-     * makes the model unusable outright. The asymmetry decides the default.
+     * [format] overrides the family's own shape (null = the family decides); it is
+     * only set by the 400 retry, and never lifts the -tts/-image/... or flash-lite
+     * exclusions, which are about the model taking no thinking at all.
      */
-    private fun rejectsMinimalLevel(lowerId: String): Boolean {
-        val m = Regex("""gemini-3\.(\d+)""").find(lowerId) ?: return false
-        val minor = m.groupValues[1].toIntOrNull() ?: return false
-        return minor >= 7
-    }
-
-    fun geminiThinkingConfig(modelId: String, level: ThinkingLevel): JSONObject? {
+    fun geminiThinkingConfig(
+        modelId: String,
+        level: ThinkingLevel,
+        format: GeminiThinkingFormat? = null,
+    ): JSONObject? {
         // [T-gemini-tts-thinking-400 / OpenMinis#226] Specialized modalities take
         // precedence over EVERY family rule and over the requested level: these models
         // reject the thinking parameter outright, so sending one is a hard 400
         // ("Thinking level is not supported for this model.").
         //
         // Checked FIRST because these ids also match a family pattern —
-        // `gemini-3.1-flash-tts-preview` contains "gemini-3", so any later placement is
+        // `gemini-3.1-flash-tts-preview` is a 3.x id, so any later placement is
         // shadowed. Android previously had no such test at all, so all three Gemini TTS
         // models were unusable; iOS had one but below the family branches, equally dead.
         //
         // Lowercased for the same reason iOS lowercases the whole id: catalog and live
-        // API spellings differ in case. The family checks above deliberately keep their
+        // API spellings differ in case. The 2.5 checks below deliberately keep their
         // original raw-`modelId` form (Phase 2 §1 is a pure refactor).
         val lowerId = modelId.lowercase()
         val noThinkingSuffixes = listOf("-tts", "-image", "-embedding", "-vision")
@@ -763,83 +804,115 @@ object ThinkingRuleResolver {
             return null
         }
 
-        val isGemini3 = modelId.contains("gemini-3")
         val is25Pro = modelId.contains("gemini-2.5-pro")
         val is25Flash = modelId.contains("gemini-2.5-flash") && !modelId.contains("lite")
         val is25FlashLite = modelId.contains("gemini-2.5-flash-lite")
 
         if (is25FlashLite) return null
 
-        return when {
-            isGemini3 -> JSONObject().apply {
-                if (level == ThinkingLevel.OFF) {
-                    // 3.x cannot fully disable thinking; the floor is the weakest
-                    // level the model will accept.
-                    //
-                    // [T-gemini37-minimal-400] "minimal" is NOT universal across the
-                    // 3.x Flash family. Verified on-device (Pixel 4a, Gemini API):
-                    // gemini-3-flash-preview / 3.5-flash / 3.6-flash accept it, but
-                    // gemini-3.7-flash returns a hard
-                    //   400 "Thinking level MINIMAL is not supported for this model."
-                    // on EVERY request — 5/5 consecutive, "all fallbacks exhausted".
-                    // So with Thinking set to Off, 3.7 Flash was completely unusable, not
-                    // merely un-thinking. "low" is accepted by the whole family and is
-                    // the same floor 3.x Pro already used, so fall back to it for the
-                    // models that reject minimal rather than probing at runtime.
-                    val acceptsMinimal = modelId.contains("flash") && !rejectsMinimalLevel(lowerId)
-                    put("thinkingLevel", if (acceptsMinimal) "minimal" else "low")
-                } else {
-                    put(
-                        "thinkingLevel",
-                        when (level) {
-                            ThinkingLevel.LOW -> "low"
-                            ThinkingLevel.MEDIUM -> "medium"
-                            // MAX/ULTRA were appended to ThinkingLevel after this
-                            // branch was written (for GPT-5.6) and fell through the
-                            // old `else -> "low"`, silently sending the WEAKEST level
-                            // when the user asked for the strongest. Gemini's ladder
-                            // tops out at "high", so every tier at or above HIGH maps
-                            // there. Latent today — no catalog rule lifts a Gemini
-                            // ceiling above XHIGH, so the picker doesn't offer
-                            // MAX/ULTRA — but a per-entry maxThinkingLevel override
-                            // reaches it, and a future catalog rule would too.
-                            ThinkingLevel.HIGH, ThinkingLevel.XHIGH,
-                            ThinkingLevel.MAX, ThinkingLevel.ULTRA,
-                            -> "high"
-                            ThinkingLevel.OFF -> "low" // unreachable; OFF handled above
-                        },
-                    )
-                    put("includeThoughts", true)
-                }
+        return when (format) {
+            GeminiThinkingFormat.LEVEL -> geminiLevelConfig(modelId, level, geminiAcceptsMinimalLevel(modelId))
+            GeminiThinkingFormat.LEVEL_NO_MINIMAL -> geminiLevelConfig(modelId, level, allowMinimal = false)
+            GeminiThinkingFormat.BUDGET -> when {
+                is25Pro -> gemini25ProBudget(level)
+                is25Flash -> gemini25FlashBudget(level)
+                else -> geminiFallbackBudget(level)
             }
-            is25Pro -> JSONObject().apply {
-                put(
-                    "thinkingBudget",
-                    when (level) {
-                        ThinkingLevel.OFF -> 128 // minimum; 0 is rejected (df8a823d)
-                        ThinkingLevel.LOW -> 2048
-                        ThinkingLevel.MEDIUM -> 8192
-                        ThinkingLevel.HIGH -> 16384
-                        ThinkingLevel.XHIGH, ThinkingLevel.MAX, ThinkingLevel.ULTRA -> 32768
-                    },
-                )
-                if (level.isEnabled) put("includeThoughts", true)
+            null -> when {
+                // [OpenMinis#470] By major version, not `contains("gemini-3")`:
+                // gemini-4-argon, google/gemini-4-argon and gemini-3-8-flash are
+                // all level models.
+                isGeminiLevelFamily(modelId) ->
+                    geminiLevelConfig(modelId, level, geminiAcceptsMinimalLevel(modelId))
+                is25Pro -> gemini25ProBudget(level)
+                is25Flash -> gemini25FlashBudget(level)
+                // Ids with no version number (gemini-flash-latest) or matching no
+                // family: still no config, as before — a guessed shape could 400.
+                else -> null
             }
-            is25Flash -> JSONObject().apply {
-                put(
-                    "thinkingBudget",
-                    when (level) {
-                        ThinkingLevel.OFF -> 0
-                        ThinkingLevel.LOW -> 1024
-                        ThinkingLevel.MEDIUM -> 4096
-                        ThinkingLevel.HIGH -> 8192
-                        ThinkingLevel.XHIGH, ThinkingLevel.MAX, ThinkingLevel.ULTRA -> 16384
-                    },
-                )
-                if (level.isEnabled) put("includeThoughts", true)
-            }
-            else -> null
         }
+    }
+
+    /**
+     * The `thinkingLevel` shape. OFF cannot disable thinking on these models; it
+     * sends the weakest level the model accepts ("minimal" where [allowMinimal],
+     * otherwise "low") without includeThoughts.
+     */
+    private fun geminiLevelConfig(modelId: String, level: ThinkingLevel, allowMinimal: Boolean): JSONObject =
+        JSONObject().apply {
+            if (level == ThinkingLevel.OFF) {
+                put("thinkingLevel", if (allowMinimal) "minimal" else "low")
+                return@apply
+            }
+            // [OpenMinis#470] gemini-3-pro-preview has only low and high; its
+            // Medium is sent as high. 3.1 Pro and later have medium.
+            val v = geminiVersion(modelId)
+            val lowHighOnly = v?.major == 3 && v.minor == null && modelId.lowercase().contains("-pro")
+            put(
+                "thinkingLevel",
+                when (level) {
+                    ThinkingLevel.LOW -> "low"
+                    ThinkingLevel.MEDIUM -> if (lowHighOnly) "high" else "medium"
+                    // MAX/ULTRA were appended to ThinkingLevel after this
+                    // branch was written (for GPT-5.6) and fell through the
+                    // old `else -> "low"`, silently sending the WEAKEST level
+                    // when the user asked for the strongest. Gemini's ladder
+                    // tops out at "high", so every tier at or above HIGH maps
+                    // there.
+                    ThinkingLevel.HIGH, ThinkingLevel.XHIGH,
+                    ThinkingLevel.MAX, ThinkingLevel.ULTRA,
+                    -> "high"
+                    ThinkingLevel.OFF -> "low" // unreachable; OFF handled above
+                },
+            )
+            put("includeThoughts", true)
+        }
+
+    private fun gemini25ProBudget(level: ThinkingLevel): JSONObject = JSONObject().apply {
+        put(
+            "thinkingBudget",
+            when (level) {
+                ThinkingLevel.OFF -> 128 // minimum; 0 is rejected (df8a823d)
+                ThinkingLevel.LOW -> 2048
+                ThinkingLevel.MEDIUM -> 8192
+                ThinkingLevel.HIGH -> 16384
+                ThinkingLevel.XHIGH, ThinkingLevel.MAX, ThinkingLevel.ULTRA -> 32768
+            },
+        )
+        if (level.isEnabled) put("includeThoughts", true)
+    }
+
+    private fun gemini25FlashBudget(level: ThinkingLevel): JSONObject = JSONObject().apply {
+        put(
+            "thinkingBudget",
+            when (level) {
+                ThinkingLevel.OFF -> 0
+                ThinkingLevel.LOW -> 1024
+                ThinkingLevel.MEDIUM -> 4096
+                ThinkingLevel.HIGH -> 8192
+                ThinkingLevel.XHIGH, ThinkingLevel.MAX, ThinkingLevel.ULTRA -> 16384
+            },
+        )
+        if (level.isEnabled) put("includeThoughts", true)
+    }
+
+    /**
+     * [OpenMinis#470] Budget for a model Google told us takes no level (only
+     * reached by the retry). OFF is 128, the floor 2.5 Pro also accepts, since
+     * an unknown model may not be able to switch thinking off.
+     */
+    private fun geminiFallbackBudget(level: ThinkingLevel): JSONObject = JSONObject().apply {
+        put(
+            "thinkingBudget",
+            when (level) {
+                ThinkingLevel.OFF -> 128
+                ThinkingLevel.LOW -> 1024
+                ThinkingLevel.MEDIUM -> 4096
+                ThinkingLevel.HIGH -> 8192
+                ThinkingLevel.XHIGH, ThinkingLevel.MAX, ThinkingLevel.ULTRA -> 16384
+            },
+        )
+        if (level.isEnabled) put("includeThoughts", true)
     }
 
     /**
@@ -847,15 +920,15 @@ object ThinkingRuleResolver {
      * `thinking` object:
      *   `{effort:"<tier>"}`   → adaptive thinking (Claude 4.6+)
      *   `{budget_tokens:N}`   → legacy budget thinking (≤4.5)
-     *   `{disabled:true}`     → adaptive model at OFF; must be explicit because those
-     *                           models think by DEFAULT when no thinking field is sent.
-     *                           Claude 4.6-4.x ONLY — see
-     *                           `modelAcceptsExplicitThinkingDisabled`.
-     *   `{}`                  → send nothing. Correct for legacy models (OFF is their
-     *                           default) AND for Claude 5+, which rejects
-     *                           `thinking.type.disabled` outright and defaults to
-     *                           adaptive when the field is absent.
-     *                           [T-android-claude5-thinking-disabled-400]
+     *   `{disabled:true}`     → thinking OFF on an adaptive model (4.6+); must be
+     *                           stated because an absent field lets those models think
+     *                           (on Claude 5 at the model's default effort), which burns
+     *                           a small maxTokens on thinking or blows a latency budget.
+     *                           This is the INTENT only: the wire encoding differs per
+     *                           model (disabled / between_tools / adaptive + low) — see
+     *                           `AnthropicProvider.offThinking`.
+     *   `{}`                  → send nothing. Legacy models only (<= 4.5), where OFF is
+     *                           already the default.
      */
     fun anthropicThinkingShape(
         modelId: String,
@@ -876,17 +949,18 @@ object ThinkingRuleResolver {
                 .thinkingBudget(maxTokens, level)
             return if (budget > 0) mapOf("budget_tokens" to budget) else emptyMap()
         }
-        // [T-android-claude5-thinking-disabled-400] Deliberately NOT `adaptive`:
-        // that is true for 4.6+ AND 5+, but only 4.6-4.x accepts the explicit
-        // disabled value. Claude 5+ 400s on it and treats an absent field as
-        // adaptive — which is exactly what OFF wants. Ported from iOS 69be65763.
+        // [T-claude5-thinking-off] Every adaptive model gets the intent, Claude 5+
+        // included: an absent field is NOT off there (it thinks at the default
+        // effort). Which literal reaches the wire is decided per model in
+        // AnthropicProvider's body builder via AnthropicProvider.offThinking, so
+        // Claude 5+ never receives the `disabled` value it 400s on. iOS ef86ed890.
         return if (
-            com.openminis.app.provider.anthropic.AnthropicProvider
-                .modelAcceptsExplicitThinkingDisabled(modelId)
+            com.openminis.app.provider.anthropic.AnthropicProvider.offThinking(modelId) ==
+            com.openminis.app.provider.anthropic.AnthropicProvider.OffThinking.OMIT
         ) {
-            mapOf("disabled" to true)
-        } else {
             emptyMap()
+        } else {
+            mapOf("disabled" to true)
         }
     }
 

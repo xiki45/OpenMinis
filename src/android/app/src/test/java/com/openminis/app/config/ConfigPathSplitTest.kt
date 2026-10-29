@@ -73,6 +73,11 @@ class ConfigPathSplitTest {
         }
         override fun add(payload: ConfigValue) = error("unused")
         override fun remove(id: String) = error("unused")
+        override val readableSubjectFormat = "Model %1\$@ – %2\$@"
+        override fun entityLabel(id: String): String? = null
+        override fun readableForAdd(payload: com.openminis.app.config.readable.RedactedConfigValue) =
+            emptyList<com.openminis.app.config.readable.ReadableLine>()
+        override fun readableForRemove(id: String) = emptyList<com.openminis.app.config.readable.ReadableLine>()
 
         companion object {
             val LEAVES = listOf(
@@ -278,7 +283,8 @@ class ConfigPathSplitTest {
     @Test
     fun `ModelsCollection publishes raw ids and looks up raw first`() {
         val src = android("config/collections/ModelsCollection.kt")
-        assertEquals(12, src.split("path = \"models.\$id.").size - 1)
+        // 12 literal leaves plus the one `$leaf` template temperature and topP share.
+        assertEquals(13, src.split("path = \"models.\$id.").size - 1)
         assertTrue(!src.contains("pathSegment"))
         assertTrue(src.contains("repo.config.value.modelEntries.map { it.id }"))
         assertTrue(src.contains("// Used verbatim as a path id ([T-config-path-dotted-id]).\n        return entry.id"))

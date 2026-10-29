@@ -394,7 +394,7 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun loadPackage(uri: Uri) {
         _isRunning.value = true
-        _statusText.value = "Reading backup…"
+        _statusText.value = getApplication<android.app.Application>().getString(com.openminis.app.R.string.restore_progress_reading)
         _report.value = null
         viewModelScope.launch {
             try {
@@ -456,7 +456,7 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
     /** List the `.minisbak` packages on one configured remote. */
     fun listServerPackages(remote: com.openminis.app.backup.remote.RcloneRemoteStore.Remote) {
         _isRunning.value = true
-        _statusText.value = "Listing…"
+        _statusText.value = getApplication<android.app.Application>().getString(com.openminis.app.R.string.restore_progress_listing)
         _serverPackages.value = emptyList()
         viewModelScope.launch {
             try {
@@ -826,7 +826,7 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         _isRunning.value = true
-        _statusText.value = "Restoring…"
+        _statusText.value = getApplication<android.app.Application>().getString(com.openminis.app.R.string.backup_restoring)
         restoreEta.reset()
         _restoreEtaSeconds.value = null
         restoreJob = viewModelScope.launch {

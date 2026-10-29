@@ -47,8 +47,11 @@ internal object ComposerPlaceholderRotation {
      *                       this session — distinguishes the first focus
      * @param sessionHasMessages whether the conversation already has messages
      * @param screenReaderOn whether a screen reader (TalkBack) is active
-     * @param randomIndex    supplier of a candidate index in [0, POOL_SIZE);
+     * @param randomIndex    supplier of a candidate index in [0, bound);
      *                       injected so tests are deterministic
+     * @param poolSize       entries to pick from. [T-port-composer-hint-carousel]
+     *                       The text entries plus one per usage page of the
+     *                       latest figures (ComposerPlaceholderPool.size).
      */
     fun nextIndex(
         current: Int,
@@ -56,6 +59,7 @@ internal object ComposerPlaceholderRotation {
         sessionHasMessages: Boolean,
         screenReaderOn: Boolean,
         randomIndex: (Int) -> Int,
+        poolSize: Int = POOL_SIZE,
     ): Int {
         // TalkBack: pin whatever is showing. Rotating re-announces the field
         // while the user may be partway through reading it.
@@ -68,7 +72,10 @@ internal object ComposerPlaceholderRotation {
         // Pick anything but what's already displayed, so the rotation is
         // always visible. Drawing from a size-1 space below the cap and
         // shifting past `current` gives a uniform pick without a retry loop.
-        val draw = randomIndex(POOL_SIZE - 1)
+        // A current index outside the pool (usage figures gone since it was
+        // picked) excludes nothing.
+        if (current !in 0 until poolSize) return randomIndex(poolSize)
+        val draw = randomIndex(poolSize - 1)
         return if (draw >= current) draw + 1 else draw
     }
 }

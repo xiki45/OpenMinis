@@ -46,15 +46,20 @@ class WarmUpTrimUndecidedTest {
 
     @Test
     fun `the trim reports undecided when there is no budget, and the caller caches only decisions`() {
-        val trim = vm.substringAfter("private fun trimWarmUpToFit(")
-            .substringBefore("private fun calibrationJsonFields()")
+        // [T-ctx-builder] The trim moved to RequestContextBuilder; its budget is the
+        // same warmUpBudget(...) call, made by ChatViewModel.currentWarmUpBudget.
+        val trim = vm.substringAfter("    fun trimWarmUpToFit(")
+            .substringBefore("\n    }\n")
         assertTrue("returns a WarmUpTrim", trim.contains("): WarmUpTrim {"))
         assertTrue("no budget → undecided", trim.contains(") ?: return WarmUpTrim(warmUp, decided = false)"))
         assertTrue("budget comes from the tested function", trim.contains("val budget = warmUpBudget("))
+        assertTrue(vm.contains("private fun currentWarmUpBudget(): Int? = warmUpBudget(\n        window = effectiveContextWindowTokens(),"))
+        assertTrue(vm.contains("warmUpBudget = ::currentWarmUpBudget,"))
         assertFalse("no early return that would read as decided without a budget",
             trim.contains("?: return warmUp\n"))
 
-        assertTrue(vm.contains("if (trim.decided) warmUpDropByMarker[marker.id] = preAnchorPruned.size - trim.kept.size"))
+        assertTrue(vm.contains("if (trim.decided) compaction.recordWarmUpDrop(marker.id, preAnchorPruned.size - trim.kept.size)"))
+        assertTrue(vm.contains("recordWarmUpDrop = { id, drop -> warmUpDropByMarker[id] = drop },"))
         assertFalse("the unconditional cache write is the bug",
             vm.contains("warmUpDropByMarker[marker.id] = preAnchorPruned.size - it.size"))
     }

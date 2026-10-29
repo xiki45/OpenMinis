@@ -1,10 +1,6 @@
 package com.openminis.app.scheduled
 
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import androidx.core.app.NotificationCompat
 import com.openminis.app.MinisApp
 import com.openminis.app.debug.HeadlessChatRunner
 import com.openminis.app.logging.AppLogger
@@ -21,7 +17,8 @@ import kotlinx.coroutines.withContext
  *
  *  - resolve a session id (NEW_SESSION → create row; APPEND_TO → reuse)
  *  - run the prompt through the existing agent loop (via [HeadlessChatRunner])
- *  - post a "completed" notification with a deep-link back to the session
+ *  - (the completion notification is BackgroundTaskNotifier's, posted when
+ *    the run's agent loop ends - [T-port-sched-notif-single])
  *  - hand the result preview back to [ScheduledTaskManager] for the row
  *
  * Concurrency: serialised per-session by [HeadlessChatRunner]'s VM cache —
@@ -32,6 +29,24 @@ object ScheduledAgentRunner {
 
     private const val TAG = "ScheduledAgentRunner"
     private const val RUN_TIMEOUT_MS = 10 * 60 * 1000L  // 10 min ceiling
+
+    /**
+     * [T-new-limits] How long a child-of-current fire waits for its parent to
+     * have a free sub agent slot before the fire is skipped (logged). Generous
+     * because a busy parent's agents usually finish within their 10 min default
+     * budget; short enough that a stuck parent does not pin a fire forever.
+     */
+    internal const val CHILD_SLOT_WAIT_MS = 30 * 60 * 1000L
+
+    /**
+     * [T-new-limits] Whether a fire of [task] must wait for a sub agent slot:
+     * only a child-of-current task, and only while its parent already runs
+     * AgentJobRegistry.maxConcurrentChildJobsPerParent sub agents. Pure.
+     */
+    internal fun needsChildSlot(task: ScheduledTask): String? {
+        val mode = task.targetMode as? ScheduledTargetMode.ChildOfCurrent ?: return null
+        return mode.sessionId.takeIf { !com.openminis.app.agent.jobs.AgentJobRegistry.canStartChildJob(it) }
+    }
 
     /**
      * App-scoped scope for fire-and-forget completion work when a caller asks
@@ -111,6 +126,44 @@ object ScheduledAgentRunner {
             toolStatus = "Scheduled: ${task.label.ifBlank { "task" }}",
         )
 
+        // [T-new-limits] A child-of-current run counts against its parent's
+        // sub agent cap (AgentJobRegistry.MAX_CONCURRENT_CHILD_JOBS_PER_PARENT)
+        // like any delegation. It used to register without checking, so a fire
+        // landing on a parent with 3 running agents silently made it 4. There
+        // is no tool call to answer "queued" to, so the fire is DEFERRED until
+        // a slot frees (at most CHILD_SLOT_WAIT_MS, then skipped and logged),
+        // and nothing is created meanwhile (no orphan child session).
+        //  - waitForCompletion=false (the alarm receiver, Run now, triggers):
+        //    the wait and the re-run happen on bgScope and this returns at once,
+        //    so a receiver's ~10 s goAsync budget is never spent waiting
+        //    (GH#197). Returns the PARENT session id: the fire is accepted and
+        //    its result will land there.
+        //  - waitForCompletion=true (the CLI, on its own offload thread): waits
+        //    inline.
+        needsChildSlot(task)?.let { parentSid ->
+            val registry = com.openminis.app.agent.jobs.AgentJobRegistry
+            AppLogger.info(
+                TAG,
+                "task ${task.id}: parent ${parentSid.take(8)} runs " +
+                    "${registry.runningChildJobCount(parentSid)}/${registry.maxConcurrentChildJobsPerParent} " +
+                    "sub agents — deferring this fire until a slot frees (wait=$waitForCompletion)",
+            )
+            if (!waitForCompletion) {
+                bgScope.launch {
+                    if (registry.awaitChildSlot(parentSid, CHILD_SLOT_WAIT_MS)) {
+                        run(context, task, waitForCompletion = false, scheduledFire = scheduledFire)
+                    } else {
+                        AppLogger.warning(TAG, "task ${task.id}: no sub agent slot freed in ${CHILD_SLOT_WAIT_MS / 60_000} min for parent ${parentSid.take(8)} — fire skipped, cap not exceeded")
+                    }
+                }
+                return parentSid
+            }
+            if (!registry.awaitChildSlot(parentSid, CHILD_SLOT_WAIT_MS)) {
+                AppLogger.warning(TAG, "task ${task.id}: no sub agent slot freed in ${CHILD_SLOT_WAIT_MS / 60_000} min for parent ${parentSid.take(8)} — fire skipped, cap not exceeded")
+                return null
+            }
+        }
+
         // [T-scheduled-task-detail] One timestamp for this fire, written into
         // its envelope and its run record so the two can be matched.
         val firedAt = System.currentTimeMillis()
@@ -124,12 +177,22 @@ object ScheduledAgentRunner {
                 "mode=${task.targetMode.encode()} session=$sessionId wait=$waitForCompletion",
         )
 
+        // [T-scheduled-active-session-android] The fire counts as running until
+        // its loop ends, so its chat stays processing through the handoff and
+        // through the last fire of a task the alarm already disabled.
+        ScheduledSessionHold.beginRun(task.id)
         if (waitForCompletion) {
-            val result = dispatch(app, task, sessionId, wait = true, firedAt = firedAt)
-            val preview = (result.responseText ?: "").take(200).ifBlank { "(no response)" }
+            val result = try {
+                dispatch(app, task, sessionId, wait = true, firedAt = firedAt, scheduledFire = scheduledFire)
+            } finally {
+                ScheduledSessionHold.endRun(task.id)
+            }
+            // [T-port-sched-notif-single] Blank -> null: the detail sheet hides
+            // an empty preview, where the old hard-coded placeholder showed as
+            // untranslated English.
+            val preview = (result.responseText ?: "").take(200).ifBlank { null }
             val ok = result.status != "Error" && result.status != "Timeout" && result.status != "Rejected"
             ScheduledTaskManager(app).markFired(task.id, sessionId, preview, ok = ok, firedAt = firedAt)
-            postCompletionNotification(app, task, sessionId, preview)
             // [T-android-scheduled-triggers] Tasks waiting on this one run
             // once its whole schedule is over.
             if (scheduledFire) ScheduledCompletionTriggers.onScheduledRunFinished(app, task.id, result.responseText)
@@ -143,11 +206,17 @@ object ScheduledAgentRunner {
         // "task started" without blocking on the agent loop. Leaving the editor
         // can't cancel it because bgScope outlives the screen.
         bgScope.launch {
-            val result = dispatch(app, task, sessionId, wait = true, firedAt = firedAt)
-            val preview = (result.responseText ?: "").take(200).ifBlank { "(no response)" }
+            val result = try {
+                dispatch(app, task, sessionId, wait = true, firedAt = firedAt, scheduledFire = scheduledFire)
+            } finally {
+                ScheduledSessionHold.endRun(task.id)
+            }
+            // [T-port-sched-notif-single] Blank -> null: the detail sheet hides
+            // an empty preview, where the old hard-coded placeholder showed as
+            // untranslated English.
+            val preview = (result.responseText ?: "").take(200).ifBlank { null }
             val ok = result.status != "Error" && result.status != "Timeout" && result.status != "Rejected"
             ScheduledTaskManager(app).markFired(task.id, sessionId, preview, ok = ok, firedAt = firedAt)
-            postCompletionNotification(app, task, sessionId, preview)
             // [T-android-scheduled-triggers] Tasks waiting on this one run
             // once its whole schedule is over.
             if (scheduledFire) ScheduledCompletionTriggers.onScheduledRunFinished(app, task.id, result.responseText)
@@ -171,6 +240,7 @@ object ScheduledAgentRunner {
         sessionId: String,
         wait: Boolean,
         firedAt: Long,
+        scheduledFire: Boolean,
     ): HeadlessChatRunner.PromptResult = runCatching {
         // [T-android-scheduled-task-card] Wrap the prompt so the transcript can
         // tell it apart from something the user typed. Without this the fired
@@ -187,13 +257,14 @@ object ScheduledAgentRunner {
         // so the model knows the scheduler made that call, not itself. A rerun
         // ignores it along with the prompt — it sends nothing new.
         val prefill = listOfNotNull(task.prefillToolCall?.takeIf { it.validationError() == null })
-        val marked = ScheduledTaskMarker(
-            taskId = task.id,
-            label = task.label,
-            nextFireAtMs = task.nextTriggerMs(),
-            prompt = task.prompt,
-            prefilledTool = prefill.firstOrNull()?.toolName,
+        //
+        // [T-scheduled-card-subline] The envelope also numbers the fire and
+        // names its trigger, which the card's status line is built from.
+        val marked = ScheduledTaskMarker.forFire(
+            task = task,
             firedAtMs = firedAt,
+            scheduledFire = scheduledFire,
+            prefilledTool = prefill.firstOrNull()?.toolName,
         ).xml
 
         val mode = task.targetMode
@@ -276,8 +347,25 @@ object ScheduledAgentRunner {
                 //   3. default primary group → write a group binding so the
                 //      session boots through the user's default group.
                 //   4. first visible entry → last-resort fallback.
-                val explicitBinding = task.modelBinding
-                val pinnedModelId = task.modelId
+                // [OpenMinis#445] A task created by an older `minis-scheduled
+                // --model` holds the raw flag in modelId; `entry:<id>`,
+                // `group:<id>` or a bare entry id is honoured here as the
+                // binding it names. A bare model id keeps the legacy path.
+                val healed = if (task.modelBinding == null) {
+                    task.modelId?.let { raw ->
+                        val cfg = app.providerRepository.config.value
+                        ScheduledModelSource.healLegacy(
+                            raw,
+                            ScheduledModelSource.entryRefs(cfg.modelEntries, app.providerRepository.allVisibleEntries()),
+                            ScheduledModelSource.groupRefs(cfg.modelGroups),
+                        )
+                    }
+                } else null
+                if (healed != null) {
+                    AppLogger.info(TAG, "task ${task.id}: legacy --model '${task.modelId}' read as ${healed.display}")
+                }
+                val explicitBinding = healed?.bindingJson ?: task.modelBinding
+                val pinnedModelId = if (healed != null) healed.modelId else task.modelId
                 val defaultGroupId =
                     if (explicitBinding == null && pinnedModelId == null) {
                         app.providerRepository.defaultPrimaryGroupId
@@ -439,40 +527,4 @@ object ScheduledAgentRunner {
             o.optString("entryId").takeIf { it.isNotEmpty() }
         } else null
     }.getOrNull()
-
-    private fun postCompletionNotification(
-        context: Context,
-        task: ScheduledTask,
-        sessionId: String,
-        preview: String,
-    ) {
-        val deepLink = Uri.parse("minis://session/$sessionId")
-        val openIntent = Intent(Intent.ACTION_VIEW, deepLink).apply {
-            setPackage(context.packageName)
-        }
-        val notificationId = task.id.hashCode() and 0x7FFFFFFF
-        val contentPi = PendingIntent.getActivity(
-            context,
-            notificationId,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val title = "Minis: ${task.label.ifBlank { "Scheduled task" }}"
-        val notification = NotificationCompat.Builder(context, ScheduledTaskManager.CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_recent_history)
-            .setContentTitle(title)
-            .setContentText(preview)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
-            .setContentIntent(contentPi)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .build()
-        try {
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE)
-                as android.app.NotificationManager
-            nm.notify(notificationId, notification)
-        } catch (e: SecurityException) {
-            AppLogger.warning(TAG, "POST_NOTIFICATIONS denied — completion notice suppressed")
-        }
-    }
 }

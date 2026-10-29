@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_task_paused_body">Taak gepauzeerd. Open de sessie om verder te gaan.</string>
+</resources>

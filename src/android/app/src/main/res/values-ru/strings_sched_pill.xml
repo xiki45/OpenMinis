@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Выполняется</string>
+    <string name="sched_pill_waiting">Ожидание</string>
+    <string name="sched_pill_run_now">Выполнить сейчас</string>
+    <string name="sched_pill_hide">Скрыть этот отсчёт</string>
+    <string name="sched_pill_cancel_all">Отменить все запланированные задачи</string>
+    <string name="sched_pill_cancel_all_title">Отменить все запланированные задачи?</string>
+    <string name="sched_pill_cancel_all_confirm">Отменить все</string>
+    <string name="sched_pill_not_now">Не сейчас</string>
+    <string name="sched_pill_cancel_all_message">Все ещё запланированные в этом разговоре задачи будут отменены.</string>
+    <string name="sched_pill_a11y_title">Предстоящая запланированная задача</string>
+    <string name="sched_pill_a11y_running">Выполняется</string>
+    <string name="sched_pill_a11y_waiting">Ожидает завершения другой задачи</string>
+    <string name="sched_pill_a11y_upcoming_left">Следующий запуск · осталось %1$d</string>
+    <string name="sched_pill_a11y_upcoming">Следующий запуск</string>
+    <string name="sched_pill_a11y_run_of">Запуск %1$d из %2$d</string>
+    <string name="sched_pill_a11y_run">Запуск %1$d</string>
+    <string name="sched_pill_a11y_next_in">Следующий запуск через %1$s</string>
+    <string name="sched_pill_a11y_more">ещё %1$d</string>
+    <string name="sched_pill_a11y_hint">Открывает сведения о задаче</string>
+</resources>

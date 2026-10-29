@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">Ang \"%1$s\" ay folder na mina-mount dito ng Minis, kaya hindi ito mabubura sa file browser. Walang nabura. Para mag-alis ng external na folder, pumunta sa Mga Setting › I-mount ang Panlabas na Folder.</string>
+</resources>

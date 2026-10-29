@@ -11,6 +11,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -169,26 +171,61 @@ fun MinisTheme(
     }
 }
 
+/**
+ * [T-multi-select-share] Re-themes a subtree light or dark regardless of the app's
+ * own appearance, keeping the app's typography (font scale) and shapes. The chat
+ * export uses it so a dark app can share a light page and the other way round:
+ * every chat row reads its colours from MaterialTheme / LocalChatPalette.
+ */
+@Composable
+fun MinisAppearance(darkTheme: Boolean, content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+        shapes = MaterialTheme.shapes,
+        typography = MaterialTheme.typography,
+    ) {
+        CompositionLocalProvider(
+            LocalChatPalette provides if (darkTheme) DarkChatPalette else LightChatPalette,
+            content = content,
+        )
+    }
+}
+
 private fun TextStyle.scale(factor: Float): TextStyle =
     if (factor == 1f) this else copy(fontSize = fontSize * factor)
+
+/**
+ * [T-fa-locale] Each paragraph takes its direction from its own text, but
+ * stays left-aligned.
+ *
+ * The app keeps a left-to-right layout in every language (LocaleWrap.forceLtr),
+ * and under an LTR layout Compose otherwise lays every paragraph out LTR too.
+ * Persian text that mixes in Latin words ("کلیدهای API و ورود با OAuth") then
+ * comes out in left-to-right word order, which a Persian reader reads
+ * scrambled. Content direction fixes the word order; Left (not Start, which
+ * would follow an RTL paragraph to the right edge) keeps every label where it
+ * sits today. For left-to-right text both are what it already had.
+ */
+private fun TextStyle.bidi(): TextStyle =
+    copy(textDirection = TextDirection.Content, textAlign = TextAlign.Left)
 
 private fun scaledTypography(factor: Float): Typography {
     val base = Typography()
     return Typography(
-        displayLarge = base.displayLarge.scale(factor),
-        displayMedium = base.displayMedium.scale(factor),
-        displaySmall = base.displaySmall.scale(factor),
-        headlineLarge = base.headlineLarge.scale(factor),
-        headlineMedium = base.headlineMedium.scale(factor),
-        headlineSmall = base.headlineSmall.scale(factor),
-        titleLarge = base.titleLarge.scale(factor),
-        titleMedium = base.titleMedium.scale(factor),
-        titleSmall = base.titleSmall.scale(factor),
-        bodyLarge = base.bodyLarge.scale(factor),
-        bodyMedium = base.bodyMedium.scale(factor),
-        bodySmall = base.bodySmall.scale(factor),
-        labelLarge = base.labelLarge.scale(factor),
-        labelMedium = base.labelMedium.scale(factor),
-        labelSmall = base.labelSmall.scale(factor),
+        displayLarge = base.displayLarge.scale(factor).bidi(),
+        displayMedium = base.displayMedium.scale(factor).bidi(),
+        displaySmall = base.displaySmall.scale(factor).bidi(),
+        headlineLarge = base.headlineLarge.scale(factor).bidi(),
+        headlineMedium = base.headlineMedium.scale(factor).bidi(),
+        headlineSmall = base.headlineSmall.scale(factor).bidi(),
+        titleLarge = base.titleLarge.scale(factor).bidi(),
+        titleMedium = base.titleMedium.scale(factor).bidi(),
+        titleSmall = base.titleSmall.scale(factor).bidi(),
+        bodyLarge = base.bodyLarge.scale(factor).bidi(),
+        bodyMedium = base.bodyMedium.scale(factor).bidi(),
+        bodySmall = base.bodySmall.scale(factor).bidi(),
+        labelLarge = base.labelLarge.scale(factor).bidi(),
+        labelMedium = base.labelMedium.scale(factor).bidi(),
+        labelSmall = base.labelSmall.scale(factor).bidi(),
     )
 }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-hidden-models-group] Provider detail: hidden-models group and the delete warning for API-listed models. Source strings. -->
+<resources>
+    <string name="provider_detail_hidden_models_group">Hidden models (%1$d)</string>
+    <string name="provider_detail_delete_api_model_confirm">Delete \"%1$s\"? If the provider lists it again, refreshing the model list may bring it back.</string>
+</resources>

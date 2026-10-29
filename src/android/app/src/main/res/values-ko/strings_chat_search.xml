@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-in-chat-search] Translations from the iOS catalog. -->
+<resources>
+    <string name="chat_search_no_results">결과 없음</string>
+    <string name="chat_search_clear">지우기</string>
+    <string name="chat_search_done">완료</string>
+</resources>

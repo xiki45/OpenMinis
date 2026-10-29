@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- فارسی (fa). Generated from the English base; keep keys in base order. -->
+<resources>
+    <string name="sched_pill_running">در حال اجرا</string>
+    <string name="sched_pill_waiting">در انتظار</string>
+    <string name="sched_pill_run_now">اجرا اکنون</string>
+    <string name="sched_pill_hide">پنهان کردن این شمارش معکوس</string>
+    <string name="sched_pill_cancel_all">لغو همهٔ کارهای زمان‌بندی‌شده</string>
+    <string name="sched_pill_cancel_all_title">همهٔ کارهای زمان‌بندی‌شده لغو شوند؟</string>
+    <string name="sched_pill_cancel_all_confirm">لغو همه</string>
+    <string name="sched_pill_not_now">اکنون نه</string>
+    <string name="sched_pill_cancel_all_message">همهٔ کارهایی که هنوز در این گفتگو برنامه‌ریزی شده‌اند لغو می‌شوند.</string>
+    <string name="sched_pill_a11y_title">کار زمان‌بندی‌شدهٔ پیش رو</string>
+    <string name="sched_pill_a11y_running">اجرا در جریان است</string>
+    <string name="sched_pill_a11y_waiting">در انتظار پایان کار دیگری</string>
+    <string name="sched_pill_a11y_upcoming_left">اجرای پیش رو · %1$d باقی‌مانده</string>
+    <string name="sched_pill_a11y_upcoming">اجرای پیش رو</string>
+    <string name="sched_pill_a11y_run_of">اجرای %1$d از %2$d</string>
+    <string name="sched_pill_a11y_run">اجرای %1$d</string>
+    <string name="sched_pill_a11y_next_in">اجرای بعدی تا %1$s دیگر</string>
+    <string name="sched_pill_a11y_more">+%1$d مورد دیگر</string>
+    <string name="sched_pill_a11y_hint">جزئیات کار را باز می‌کند</string>
+</resources>

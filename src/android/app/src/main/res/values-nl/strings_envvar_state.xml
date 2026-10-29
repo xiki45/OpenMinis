@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Uitgeschakeld</string>
+    <string name="env_var_status_duplicate">Dubbele naam</string>
+    <string name="env_var_enabled_toggle">Ingeschakeld</string>
+    <string name="env_var_enabled_footer">Als dit uit staat, behoudt de variabele haar waarde en notitie, maar wordt ze niet doorgegeven aan shells, terminals of MCP-servers.</string>
+    <string name="env_var_disabled_highlight">Deze variabele is uitgeschakeld. Schakel haar in om haar weer beschikbaar te maken.</string>
+    <string name="env_var_action_disable">Uitschakelen</string>
+    <string name="env_var_action_enable">Inschakelen</string>
+    <string name="mcp_form_env_disabled_warning">%1$s is uitgeschakeld en wordt als lege waarde doorgegeven.</string>
+</resources>

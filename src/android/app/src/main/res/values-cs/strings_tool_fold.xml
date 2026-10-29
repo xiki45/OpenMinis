@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-fold-tools] Fold consecutive tool calls. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="tool_fold_setting_title">Sbalit po sobě jdoucí volání nástrojů</string>
+    <string name="tool_fold_section">Volání nástrojů</string>
+    <string name="tool_fold_setting_footer">Po sobě jdoucí volání nástrojů se zobrazí jako jeden řádek. Klepnutím na něj zobrazíš jednotlivá volání.</string>
+    <string name="tool_fold_ran_n_tools">Spuštěné nástroje: %1$d</string>
+    <string name="tool_fold_n_failed">Neúspěšné: %1$d</string>
+    <string name="tool_fold_n_cancelled">Zrušené: %1$d</string>
+    <string name="tool_fold_expand_hint">Zobrazí jednotlivá volání nástrojů</string>
+    <string name="tool_fold_collapse_hint">Skryje volání nástrojů</string>
+</resources>

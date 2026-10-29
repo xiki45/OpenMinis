@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Onemogućeno</string>
+    <string name="env_var_status_duplicate">Dvostruki naziv</string>
+    <string name="env_var_enabled_toggle">Omogućeno</string>
+    <string name="env_var_enabled_footer">Kad je isključena, varijabla zadržava vrijednost i bilješku, ali se ne prosljeđuje ljuskama, terminalima ni MCP poslužiteljima.</string>
+    <string name="env_var_disabled_highlight">Ova je varijabla onemogućena. Uključite je da biste je ponovno koristili.</string>
+    <string name="env_var_action_disable">Onemogući</string>
+    <string name="env_var_action_enable">Omogući</string>
+    <string name="mcp_form_env_disabled_warning">%1$s je onemogućena i bit će proslijeđena kao prazna vrijednost.</string>
+</resources>

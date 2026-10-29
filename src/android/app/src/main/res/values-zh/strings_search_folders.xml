@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sessionlist_folder_matching_chats">%1$d 个匹配的会话</string>
+    <string name="sessionlist_folder_matches_hidden">已收起 %1$d 个匹配的会话</string>
+</resources>

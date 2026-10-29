@@ -885,6 +885,12 @@ data class SelectionToolbarActions(
      * half-arrived answer would narrate a truncated text.
      */
     val onReadFromStart: ((String) -> Unit)? = null,
+    /**
+     * [T-multi-select-share] Opens the share picker with the round of the message
+     * that owns the selection preselected (null: a cross-message selection, nothing
+     * preselected). Null hides the action. It is the bar's LAST item, as on iOS.
+     */
+    val onShareChat: ((String?) -> Unit)? = null,
 )
 
 @Composable
@@ -1094,6 +1100,8 @@ fun MinisSelectionToolbarHost(
                     com.openminis.app.R.string.markdown_table_copy_table)
                 val labelCopyTableImage = androidx.compose.ui.res.stringResource(
                     com.openminis.app.R.string.markdown_table_copy_table_image)
+                val labelShareChat = androidx.compose.ui.res.stringResource(
+                    com.openminis.app.R.string.chat_share_share_chat)
 
                 // Actions are collected into a list first so the bar can show a
                 // few and push the rest into an overflow menu. Ordered by how
@@ -1247,6 +1255,17 @@ fun MinisSelectionToolbarHost(
                         add(SelectionAction(labelCopyTableImage) {
                             tableActions.copyTableImage()
                             controller.clearSelection()
+                        })
+                    }
+                    // [T-multi-select-share] "Share Chat…" is the bar's last item.
+                    if (actions?.onShareChat != null) {
+                        add(SelectionAction(labelShareChat) {
+                            // A selection across two messages preselects the round
+                            // where it starts (iOS: the reply the menu belongs to).
+                            val messageId = controller.singleMessageId()
+                                ?: controller.selection.value?.start?.shard?.messageId
+                            controller.clearSelection()
+                            actions.onShareChat.invoke(messageId)
                         })
                     }
                 }

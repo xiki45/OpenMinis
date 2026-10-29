@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-backup-restore-semantics / B01] Restore page copy for the restore semantics
+     decided 2026-10-15: the backup wins items present on both sides (API keys
+     included, OAuth sign-ins only when expired); nothing only on this device is
+     deleted. Replaces backup_restore_footer / backup_creds_restored /
+     backup_creds_kept, whose text promised the opposite. -->
+<resources>
+    <string name="backup_restore_merge_footer">A restauração mescla o backup com este dispositivo. Quando um item existe nos dois — um provedor, as configurações de um modelo ou um grupo de modelos com o mesmo nome —, é usada a versão do backup, mesmo que a deste dispositivo seja mais recente. Isso inclui as chaves de API; uma conta conectada neste dispositivo é mantida, a menos que o login tenha expirado. Nada que exista só neste dispositivo é excluído.</string>
+    <string name="backup_restore_creds_restored">As credenciais de %1$d provedor(es) foram restauradas do backup. As chaves de API do backup substituem as deste dispositivo; uma conta conectada neste dispositivo é mantida, a menos que o login tivesse expirado.</string>
+    <string name="backup_restore_creds_kept">Nenhuma credencial foi alterada: as chaves de API deste dispositivo já correspondem ao backup, e as contas conectadas foram mantidas porque o login delas não está marcado como expirado.</string>
+</resources>

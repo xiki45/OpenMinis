@@ -55,6 +55,7 @@ object PerfLongCtx {
      * timestamp the user is waiting on.
      */
     fun click(sessionId: String) {
+        JankDiag.beginOpen(sessionId)
         val now = System.nanoTime()
         clickNsBySession[sessionId] = now
         lastNsBySession[sessionId] = now
@@ -66,6 +67,8 @@ object PerfLongCtx {
      * callsites can pass `count=405 totalChars=1234567` etc.
      */
     fun step(sessionId: String, name: String, extra: String = "") {
+        // [T-android-jankdiag] The chat-open stages, timed in the jank log too.
+        if (name in JANK_OPEN_STAGES) JankDiag.openStage(sessionId, name)
         val now = System.nanoTime()
         val last = lastNsBySession[sessionId] ?: clickNsBySession[sessionId] ?: now
         val elapsedMs = (now - last) / 1_000_000
@@ -139,4 +142,9 @@ object PerfLongCtx {
                 "sinceClickMs=$sinceClickMs ${mem.toLogString()}$extraPart",
         )
     }
+
+    private val JANK_OPEN_STAGES = setOf(
+        "chatScreen.mount", "buildFlatChatItems.firstBuild", "lazyColumn.firstLayout",
+        "lazyColumn.firstItem.compose", "lazyColumn.firstItem.placed", "loadSession.exit",
+    )
 }

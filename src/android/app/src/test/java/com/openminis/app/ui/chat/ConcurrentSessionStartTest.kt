@@ -74,7 +74,8 @@ class ConcurrentSessionStartTest {
         assertTrue(runner.contains("): PromptResult = ChatViewModelStore.holdingForSend(sessionId) {\n        withContext(Dispatchers.Main) {\n            val vm = viewModel(context, sessionId)"))
         assertTrue(runner.contains("): PromptResult = ChatViewModelStore.holdingForSend(sessionId) {\n        withContext(Dispatchers.Main) {\n            val app = app(context)\n            val vm = viewModel(context, sessionId)"))
         val store = ProductionSources.read("ui/chat/ChatViewModelStore.kt")
-        assertTrue("held sessions count as busy", store.contains("return (tracked + inFlight + pendingSends.keys).toSet()"))
+        // [T-new-limits] viewers (an open sub agent transcript) joined the union.
+        assertTrue("held sessions count as busy", store.contains("return (tracked + inFlight + pendingSends.keys + viewers.keys).toSet()"))
     }
 
     @Test

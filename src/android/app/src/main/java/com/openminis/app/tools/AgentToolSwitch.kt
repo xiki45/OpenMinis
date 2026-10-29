@@ -24,6 +24,9 @@ enum class AgentToolSwitch(val key: String, val defaultValue: Boolean) {
      *  (see [migrateLegacyIfNeeded]); flipping the default would silently
      *  disable a feature existing users have. */
     AGENTS("agent.tools.agents.enabled", true),
+
+    /** [T-port-user-ask] user_ask - on by default, as on iOS (UserAskSettings.defaultEnabled). */
+    USER_ASK(com.openminis.app.agent.userask.UserAskSettingsSpec.ENABLED_KEY, com.openminis.app.agent.userask.UserAskSettingsSpec.DEFAULT_ENABLED),
     ;
 
     fun isEnabled(context: Context): Boolean =
@@ -36,7 +39,7 @@ enum class AgentToolSwitch(val key: String, val defaultValue: Boolean) {
     companion object {
         const val PREFS = "agent_settings"
 
-        private fun prefs(context: Context) =
+        internal fun prefs(context: Context) =
             context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
         /** The switch governing a tool name; null = always available. */
@@ -46,6 +49,7 @@ enum class AgentToolSwitch(val key: String, val defaultValue: Boolean) {
             // shipped builds wrote, so the switch still governs a
             // replayed call from an older transcript.
             "subagent_task", "delegate_task", "agent_status" -> AGENTS
+            com.openminis.app.agent.userask.UserAskPromptText.TOOL_NAME -> USER_ASK
             else -> null
         }
 

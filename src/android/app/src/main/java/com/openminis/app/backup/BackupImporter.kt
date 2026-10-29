@@ -81,6 +81,18 @@ class BackupImporter(
         var credentialsRestored: Int = 0,
         var credentialsKept: Int = 0,
         var failed: String? = null,
+        /**
+         * [T-b01-restore-counts] How many of the manifest's declared items this
+         * category accounted for, when that is not simply imported + updated:
+         * providers counts every instance it decoded, including the ones
+         * already up to date. null = use imported + updated.
+         */
+        var declaredAccounted: Int? = null,
+        /**
+         * Sentences for the restore report's notices (they join
+         * [Report.warnings]), e.g. why a file did not decode.
+         */
+        val warnings: MutableList<String> = mutableListOf(),
     )
 
     /**
@@ -175,7 +187,7 @@ class BackupImporter(
 
         try {
             if (!options.skipIntegrityCheck) {
-                onProgress?.invoke("Verifying integrity…")
+                onProgress?.invoke(context.getString(com.openminis.app.R.string.restore_progress_verifying))
                 val failures = reader.verifyIntegrity(manifest)
                 report.integrityChecked = manifest.integrity.size
                 report.integrityFailed = failures
@@ -191,7 +203,7 @@ class BackupImporter(
             // lazily per category so a wrong-key failure surfaces before any
             // data has been written to the device.
             val work = if (keys != null) {
-                onProgress?.invoke("Decrypting…")
+                onProgress?.invoke(context.getString(com.openminis.app.R.string.restore_progress_decrypting))
                 decryptMembers(root, keys)
             } else {
                 root
@@ -207,7 +219,15 @@ class BackupImporter(
                 // [T-restore-cancel-propagation] Stop between categories: most
                 // importers below never check for cancellation themselves.
                 coroutineContext.ensureActive()
-                onProgress?.invoke("Restoring ${category.key}…")
+                // [T-restore-progress-localized] The line is shown verbatim on the
+                // restore button: the category's localized name, not its wire key
+                // ("shared_files"), and no English literal (port of iOS f587513fc).
+                onProgress?.invoke(
+                    context.getString(
+                        com.openminis.app.R.string.backup_restoring_category,
+                        context.getString(com.openminis.app.ui.settings.backup.categoryNameRes(category)),
+                    ),
+                )
                 // The manifest's own count for this category — what the button
                 // needs for the "/ total" half. Absent on an older package, in
                 // which case the UI shows a bare running count.
@@ -239,6 +259,7 @@ class BackupImporter(
                 }
                 categoryReport?.let {
                     report.categories.add(it)
+                    report.warnings.addAll(it.warnings)
                     // [T-android-restore-logging] Per-category outcome, on
                     // disk. The summary below only reports totals, so a
                     // category that wrote 500 of 2350 records read exactly like
@@ -260,14 +281,7 @@ class BackupImporter(
                     // A category that wrote materially less than the manifest
                     // promised is the signal that matters, and it is easy to
                     // miss inside a line of counters.
-                    val wrote = it.imported + it.updated
-                    if (total != null && wrote < total) {
-                        AppLogger.warning(
-                            TAG,
-                            "[Restore] ${it.category}: SHORT — package declared $total, " +
-                                "wrote $wrote (skipped=${it.skipped}, unreadable=${it.unreadable})"
-                        )
-                    }
+                    shortfallWarning(it, total)?.let { line -> AppLogger.warning(TAG, line) }
                 }
             }
 
@@ -705,17 +719,20 @@ class BackupImporter(
         get() = context.applicationContext as? com.openminis.app.MinisApp
 
     /**
-     * Restore `data/provider_config.json` via an order-preserving union merge
-     * ([ProviderRepository.mergeBackupProviderConfig]), then custom thinking
-     * rules from `data/thinking_rules.jsonl`, then credentials from
-     * `secrets.json`. Mirrors iOS `importProviders`.
+     * Restore `data/provider_config.json` via the restore-only merge
+     * ([ProviderRepository.mergeBackupProviderConfig]; the backup wins items
+     * on both sides, B01), then custom thinking rules from
+     * `data/thinking_rules.jsonl`, then credentials from `secrets.json`.
+     * Mirrors iOS `importProviders`.
      *
-     * Counting (iOS parity, fix 93cad55ae): imported = instances added; skipped
-     * = package instances already present (union-by-id, not overwritten) —
-     * NEVER reported as "updated". credentialsRestored/Kept come from the
-     * secrets restore and drive the UI's credentials message.
+     * Counting ([T-b01-restore-counts], see [BackupProviderMerge.counts]): an
+     * instance is imported when new, updated when the backup really changed its
+     * content (fields, model entries or a credential), skipped when the backup
+     * matched it exactly; restored groups add to imported, changed or
+     * same-name-merged groups to updated. credentialsRestored/Kept come from
+     * the secrets restore and drive the UI's credentials message.
      */
-    private fun importProviders(root: File): CategoryReport {
+    private suspend fun importProviders(root: File): CategoryReport {
         val report = CategoryReport(BackupCategory.PROVIDERS.key)
         val repo = app?.providerRepositoryOrNull ?: run {
             report.failed = "provider repository unavailable"
@@ -728,7 +745,11 @@ class BackupImporter(
             parseProviderConfigLeniently(configFile.readText())
         } catch (e: Exception) {
             report.unreadable += 1
-            AppLogger.error(TAG, "[Restore] provider_config.json unreadable: ${e.message}")
+            // [B01 cross-platform read] The reason goes to the report too, not
+            // only the log: "unreadable 1" alone left the cause to be
+            // reconstructed offline.
+            AppLogger.error(TAG, "[Restore] provider_config.json unreadable: ${e::class.simpleName}: ${e.message}")
+            report.warnings += providerConfigWarnings(null, e)
             return report
         }
         val config = parsed.config
@@ -736,6 +757,7 @@ class BackupImporter(
         // Counted individually so the report says "1 of 8 unreadable" rather
         // than failing the whole category.
         report.unreadable += parsed.droppedInstances
+        report.warnings += providerConfigWarnings(parsed, null)
         if (parsed.droppedInstances > 0) {
             AppLogger.warning(
                 TAG,
@@ -744,11 +766,19 @@ class BackupImporter(
             )
         }
 
-        val (before, after) = repo.mergeBackupProviderConfig(config)
-        report.imported = maxOf(0, after - before)
-        // Everything the package carried that did not newly insert was already
-        // present and left untouched — skipped, not updated.
-        report.skipped = maxOf(0, config.instances.size - report.imported)
+        val merge = repo.mergeBackupProviderConfig(config)
+        // [T-backup-restore-semantics / B01] A backup group merged into a local
+        // one of the same name keeps the LOCAL id; anything outside the config
+        // still naming the backup's id - the chats restored just before, a
+        // scheduled task - would point at a group that no longer exists.
+        val groupIdRewrites = merge.groupIdRewrites
+        if (groupIdRewrites.isNotEmpty()) {
+            rewriteSessionGroupBindings(groupIdRewrites)
+            rewriteScheduledTaskGroupBindings(groupIdRewrites)
+        }
+        // Every instance the package carried is accounted for: new, changed or
+        // already up to date. What does not decode is `unreadable`, above.
+        report.declaredAccounted = config.instances.map { it.id }.distinct().size
 
         // Thinking rules AFTER the instance merge, so a rule's instance exists.
         val ruleRecords = readJsonlList(File(root, "data"), "thinking_rules").mapNotNull { env ->
@@ -779,7 +809,7 @@ class BackupImporter(
                     BackupFormat.json.decodeFromJsonElement(BackupSubAgentRecord.serializer(), it)
                 }.getOrNull()?.let { r -> BackupSubAgentMapping.fromRecord(r) }
             }
-        }
+        }.let { BackupProviderMerge.rewriteSubAgents(it, groupIdRewrites) }
         if (agents.isNotEmpty()) {
             val (written, skipped) = repo.restoreBackupSubAgents(agents)
             report.imported += written
@@ -789,16 +819,71 @@ class BackupImporter(
 
         // Credentials (secrets.json lives at the work root, already decrypted).
         val secrets = readSecrets(root)
+        val credentialsWritten = mutableSetOf<String>()
         if (secrets != null) {
             var restored = 0
             var kept = 0
             for (s in secrets.providers) {
-                if (repo.restoreBackupProviderSecret(s)) restored++ else kept++
+                if (repo.restoreBackupProviderSecret(s)) {
+                    restored++
+                    credentialsWritten += s.instanceId
+                } else kept++
             }
             report.credentialsRestored = restored
             report.credentialsKept = kept
         }
+
+        // After the credentials: a key the backup wrote over a different one
+        // changes its instance as much as a new base URL does.
+        merge.merge?.let { m ->
+            val c = BackupProviderMerge.counts(m, config.instances.map { it.id }, credentialsWritten)
+            report.imported += c.imported
+            report.updated += c.updated
+            report.skipped += c.skipped
+            AppLogger.info(
+                TAG,
+                "[Restore] providers counted: instances new=${m.instancesAdded.size} " +
+                    "changed=${c.updated - m.groupsChanged} upToDate=${c.skipped} " +
+                    "credentialsWritten=${credentialsWritten.size} groups new=${m.groupsAdded} " +
+                    "changed=${m.groupsChanged} (mergedByName=${m.groupIdRewrites.size})",
+            )
+        }
         return report
+    }
+
+    /** [T-backup-restore-semantics / B01] Rewrite chat bindings to merged-away groups. */
+    private suspend fun rewriteSessionGroupBindings(rewrites: Map<String, String>) {
+        val dao = db.chatDao()
+        var n = 0
+        for (from in rewrites.keys) {
+            for (s in dao.sessionsWithBindingLike(from)) {
+                val next = BackupProviderMerge.rewriteBindingJson(s.modelBinding, rewrites)
+                if (next != null && next != s.modelBinding) {
+                    dao.updateSessionBindingOnly(s.id, next)
+                    n++
+                }
+            }
+        }
+        AppLogger.info(TAG, "[Restore] session bindings rewritten to merged groups: $n")
+    }
+
+    /** [T-backup-restore-semantics / B01] Same for scheduled tasks (binding + legacy modelId). */
+    private fun rewriteScheduledTaskGroupBindings(rewrites: Map<String, String>) {
+        val store = com.openminis.app.scheduled.ScheduledTaskStore(context)
+        var n = 0
+        for (t in store.all()) {
+            val binding = BackupProviderMerge.rewriteBindingJson(t.modelBinding, rewrites)
+            val modelId = BackupProviderMerge.rewriteLegacyModelId(t.modelId, rewrites)
+            if (binding == t.modelBinding && modelId == t.modelId) continue
+            store.update(t.id) { cur ->
+                cur.copy(
+                    modelBinding = BackupProviderMerge.rewriteBindingJson(cur.modelBinding, rewrites),
+                    modelId = BackupProviderMerge.rewriteLegacyModelId(cur.modelId, rewrites),
+                )
+            }
+            n++
+        }
+        AppLogger.info(TAG, "[Restore] scheduled tasks rewritten to merged groups: $n")
     }
 
     /**
@@ -880,7 +965,11 @@ class BackupImporter(
                 report.skipped += 1
                 continue
             }
-            if (repo.add(meta.key, restored, meta.note)) report.imported += 1
+            // [T-envvar-disable] A NEW variable takes the package's enabled state
+            // (absent in older / iOS-before-the-feature packages = enabled). An
+            // existing one above keeps its own: like its value, a restore never
+            // overwrites what the user has on this device.
+            if (repo.add(meta.key, restored, meta.note, enabled = meta.enabled)) report.imported += 1
             else report.skipped += 1
         }
         return report
@@ -1006,6 +1095,23 @@ class BackupImporter(
         private const val TAG = "Restore"
 
         /**
+         * The SHORT line for a category that accounted for materially less than
+         * the manifest declared, or null. Providers no longer trips it for
+         * instances that were already here and merged ([CategoryReport.declaredAccounted]):
+         * "declared 27, wrote 0" was a false alarm on every restore onto the
+         * device that made the package. An instance that did not decode still
+         * leaves the count short, and so still warns.
+         */
+        internal fun shortfallWarning(r: CategoryReport, declared: Int?): String? {
+            if (declared == null) return null
+            val accounted = r.declaredAccounted ?: (r.imported + r.updated)
+            if (accounted >= declared) return null
+            val verb = if (r.declaredAccounted != null) "accounted for" else "wrote"
+            return "[Restore] ${r.category}: SHORT — package declared $declared, " +
+                "$verb $accounted (skipped=${r.skipped}, unreadable=${r.unreadable})"
+        }
+
+        /**
          * [T-android-restore-cancel-empty-sessions] Deletes each of [sessionIds]
          * whose [messageCount] is zero; returns the ids deleted. Callers pass
          * only sessions the current run newly inserted, so a pre-existing
@@ -1044,7 +1150,26 @@ class BackupImporter(
         internal data class LenientProviderConfig(
             val config: com.openminis.app.data.model.ProviderConfig,
             val droppedInstances: Int,
+            /** Why each dropped instance could not be read, one line each. */
+            val dropReasons: List<String> = emptyList(),
         )
+
+        /**
+         * The restore report's lines for a provider_config.json that did not
+         * fully decode: [failure] when the whole file was unreadable, else one
+         * line per instance [parsed] had to drop.
+         */
+        internal fun providerConfigWarnings(parsed: LenientProviderConfig?, failure: Throwable?): List<String> {
+            if (failure != null) {
+                // ProviderConfigDecodeException already reads "<type>: <message> (at <path>)".
+                val detail = if (failure is ProviderConfigDecodeException) failure.message
+                else "${failure::class.simpleName}: ${failure.message?.trim()}"
+                return listOf("Providers: provider_config.json could not be read, so no provider was restored ($detail)")
+            }
+            return parsed?.dropReasons.orEmpty().map { reason ->
+                "Providers: a provider in the backup could not be read and was skipped ($reason)"
+            }
+        }
 
         /**
          * [T-android-restore-provider-type-tolerance] Decode provider_config.json
@@ -1080,19 +1205,19 @@ class BackupImporter(
             // No instances array at all — nothing to be tolerant about; let the
             // ordinary decode handle (or reject) the document.
             if (rawInstances == null) {
-                return LenientProviderConfig(
-                    BackupFormat.json.decodeFromJsonElement(
-                        com.openminis.app.data.model.ProviderConfig.serializer(), root,
-                    ),
-                    droppedInstances = 0,
-                )
+                return LenientProviderConfig(decodeLocatingFailure(root), droppedInstances = 0)
             }
 
             val knownTypes = com.openminis.app.data.model.ProviderType.entries.map { it.name }.toSet()
             val kept = mutableListOf<kotlinx.serialization.json.JsonElement>()
             var dropped = 0
+            val reasons = mutableListOf<String>()
             for (element in rawInstances) {
-                val obj = element as? JsonObject ?: run { dropped++; null } ?: continue
+                val obj = element as? JsonObject ?: run {
+                    dropped++
+                    reasons.add("an entry of instances is not an object")
+                    null
+                } ?: continue
                 val rawType = (obj["providerType"] as? kotlinx.serialization.json.JsonPrimitive)
                     ?.contentOrNull
                 val normalized = if (rawType != null && rawType !in knownTypes) {
@@ -1118,21 +1243,57 @@ class BackupImporter(
                     kept.add(normalized)
                 } else {
                     dropped++
+                    val e = decodes.exceptionOrNull()
+                    val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: "?"
+                    reasons.add("instance $id: ${e?.let { it::class.simpleName }}: ${e?.message?.trim()}")
                     AppLogger.warning(
                         TAG,
-                        "[Restore] provider instance dropped (undecodable): " +
-                            "${decodes.exceptionOrNull()?.message}",
+                        "[Restore] provider instance dropped (undecodable): ${reasons.last()}",
                     )
                 }
             }
 
             val patched = JsonObject(root + ("instances" to kotlinx.serialization.json.JsonArray(kept)))
             return LenientProviderConfig(
-                BackupFormat.json.decodeFromJsonElement(
-                    com.openminis.app.data.model.ProviderConfig.serializer(), patched,
-                ),
+                decodeLocatingFailure(patched),
                 droppedInstances = dropped,
+                dropReasons = reasons,
             )
+        }
+
+        /**
+         * A provider_config.json that did not decode, with where: kotlinx's
+         * errors from a JsonElement decode name the key but not the array
+         * element it sits in.
+         */
+        internal class ProviderConfigDecodeException(val path: String?, cause: Throwable) : Exception(
+            "${cause::class.simpleName}: ${cause.message?.trim()}" + (path?.let { " (at $it)" } ?: ""),
+            cause,
+        )
+
+        /** Decodes [root]; on failure finds the first array element that fails. */
+        private fun decodeLocatingFailure(root: JsonObject): com.openminis.app.data.model.ProviderConfig =
+            try {
+                BackupFormat.json.decodeFromJsonElement(com.openminis.app.data.model.ProviderConfig.serializer(), root)
+            } catch (e: Exception) {
+                throw ProviderConfigDecodeException(locateFailure(root), e)
+            }
+
+        private fun locateFailure(root: JsonObject): String? {
+            val sections = listOf(
+                "modelEntries" to com.openminis.app.data.model.ModelEntry.serializer(),
+                "modelGroups" to com.openminis.app.data.model.ModelGroup.serializer(),
+                "subAgents" to com.openminis.app.data.model.SubAgentDefinition.serializer(),
+            )
+            for ((key, serializer) in sections) {
+                val items = root[key] as? kotlinx.serialization.json.JsonArray ?: continue
+                items.forEachIndexed { index, item ->
+                    if (runCatching { BackupFormat.json.decodeFromJsonElement(serializer, item) }.isFailure) {
+                        return "$.$key[$index]"
+                    }
+                }
+            }
+            return null
         }
 
         /** Shared with the exporter: the two must never run at once. */

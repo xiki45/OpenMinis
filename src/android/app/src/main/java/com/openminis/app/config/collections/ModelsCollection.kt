@@ -7,6 +7,14 @@ import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.ConfigSchema
 import com.openminis.app.config.ConfigValue
 import com.openminis.app.config.fields.ClosureField
+import com.openminis.app.config.readable.ConfigReadable
+import com.openminis.app.config.readable.ConfigRefKind
+import com.openminis.app.config.readable.ConfigRefResolver
+import com.openminis.app.config.readable.ConfigValueFormatter
+import com.openminis.app.config.readable.NumberUnit
+import com.openminis.app.config.readable.ReadableArg
+import com.openminis.app.config.readable.ReadableLine
+import com.openminis.app.config.readable.RedactedConfigValue
 import com.openminis.app.config.fields.ReadOnlyField
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ModelEntry
@@ -82,6 +90,8 @@ class ModelsCollection(
             contextWindowOverrideField(id),
             supportsToolsField(id),
             supportsVisionField(id),
+            temperatureField(id),
+            topPField(id),
         )
     }
 
@@ -154,6 +164,42 @@ class ModelsCollection(
         repo.removeEntry(entry.id)
     }
 
+    // -- [T-config-readable] Readable descriptions (mirrors iOS ModelsCollection) --
+
+    override val readableSubjectFormat: String get() = "Model %1\$@ – %2\$@"
+
+    override fun entityLabel(id: String): String? =
+        lookup(id)?.let { ConfigRefResolver.names.modelEntryLabel(it.id) }
+
+    /** Modality names → label keys, for the override list. */
+    private val modalityLabels: Map<String, String> = mapOf(
+        "text_input" to "Text input", "text_output" to "Text output",
+        "image_input" to "Image input", "pdf_input" to "PDF input",
+        "audio_input" to "Audio input", "video_input" to "Video input",
+        "image_output" to "Image output", "audio_output" to "Audio output",
+        "video_output" to "Video output",
+    )
+
+    override fun readableForAdd(payload: RedactedConfigValue): List<ReadableLine> {
+        val d = (payload.value as? ConfigValue.Obj)?.value ?: return emptyList()
+        val modelId = (d["model_id"] as? ConfigValue.Str)?.value ?: "?"
+        val name = (d["display_name"] as? ConfigValue.Str)?.value?.takeIf { it.isNotEmpty() } ?: modelId
+        val instance = ((d["instance_id"] ?: d["provider_id"]) as? ConfigValue.Str)?.value
+        val provider = instance?.let { ConfigRefResolver.name(ConfigRefKind.ProviderInstance, it) } ?: ReadableArg.Text("?")
+        return listOf(ReadableLine("Add custom model %1\$@ to “%2\$@”", listOf(ReadableArg.Text(name), provider)))
+    }
+
+    override fun readableForRemove(id: String): List<ReadableLine> {
+        val e = lookup(id) ?: return emptyList()
+        val label = ConfigRefResolver.names.modelEntryLabel(e.id) ?: e.model.displayName.ifEmpty { e.baseModel.id }
+        val lines = mutableListOf(ReadableLine("Delete custom model %@", listOf(ReadableArg.Text(label))))
+        val groups = ConfigRefResolver.names.groupsContaining(e.id)
+        if (groups.isNotEmpty()) {
+            lines.add(ReadableLine("It is also in: %@", listOf(ReadableArg.Items(groups.map { ReadableArg.Text(it) }))))
+        }
+        return lines
+    }
+
     // -- Field factories --
 
     /** Exact match on the raw entry id. Callers with a path id use [lookup]. */
@@ -209,6 +255,7 @@ class ModelsCollection(
             valueSchema = ConfigSchema.Str(maxLength = 200),
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Text(empty = "Default")),
             reader = {
                 val e = entry(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Str(e.overrides.displayName ?: e.baseModel.displayName)
@@ -230,6 +277,7 @@ class ModelsCollection(
             valueSchema = ConfigSchema.Int(min = 0, max = 1_000_000),
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Number(NumberUnit.TOKENS, zero = "Default")),
             reader = {
                 val e = entry(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Int(e.overrides.maxOutputTokens ?: e.baseModel.maxOutputTokens ?: 0)
@@ -250,6 +298,7 @@ class ModelsCollection(
             valueSchema = ConfigSchema.Bool,
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Bool(on = "Hidden", off = "Shown"), label = "Visibility"),
             reader = {
                 val e = entry(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Bool(e.isHidden)
@@ -358,6 +407,7 @@ class ModelsCollection(
             valueSchema = ConfigSchema.Array(ConfigSchema.Str()),
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.StringList(ordered = false, labels = modalityLabels)),
             reader = {
                 val e = entry(id) ?: return@ClosureField ConfigValue.Null
                 val ov = e.overrides
@@ -390,6 +440,69 @@ class ModelsCollection(
             },
         )
 
+    /**
+     * [T-minis-config-coverage] The model's request tuning from its detail
+     * page (ModelOverrides.temperature / topP). null = not set: the parameter
+     * is left out of the request and the provider's default applies - 0 is a
+     * real value (deterministic), so it cannot double as "unset". The other
+     * two overrides on that page, custom headers and extra body parameters,
+     * are not exposed: headers can carry credentials, and raw body JSON would
+     * let a write change any request field.
+     */
+    private fun samplingField(
+        id: String,
+        leaf: String,
+        displayName: String,
+        what: String,
+        max: Double,
+        get: (ModelOverrides) -> Double?,
+        set: (ModelOverrides, Double?) -> ModelOverrides,
+    ): ConfigField =
+        ClosureField(
+            path = "models.$id.$leaf",
+            displayName = displayName,
+            description = "$what 0.0..$max, or null to clear the override (the provider's default applies and the parameter is not sent). Some models reject or ignore it (reasoning models often require the default).",
+            valueSchema = ConfigSchema.Optional(ConfigSchema.Double(min = 0.0, max = max)),
+            risk = ConfigRisk.SENSITIVE,
+            revertable = true,
+            readable = ConfigReadable(
+                ConfigValueFormatter.Custom { v ->
+                    when (v) {
+                        is ConfigValue.Double -> ReadableArg.Text(trimNumber(v.value))
+                        is ConfigValue.Int -> ReadableArg.Text("${v.value}")
+                        else -> ReadableArg.Key("Not set")
+                    }
+                },
+            ),
+            reader = {
+                val e = entry(id) ?: return@ClosureField ConfigValue.Null
+                get(e.overrides)?.let { ConfigValue.Double(it) } ?: ConfigValue.Null
+            },
+            writer = { v ->
+                val d: Double? = when (v) {
+                    ConfigValue.Null -> null
+                    is ConfigValue.Double -> v.value
+                    is ConfigValue.Int -> v.value.toDouble()
+                    else -> throw ConfigError.TypeMismatch("double or null")
+                }
+                mutate(id) { e -> e.copy(overrides = set(e.overrides, d)) }
+            },
+        )
+
+    /** 0.7, not 0.7000000001; 1, not 1.0. */
+    private fun trimNumber(d: Double): String =
+        java.math.BigDecimal(d).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+
+    private fun temperatureField(id: String): ConfigField = samplingField(
+        id, "temperatureOverride", "Temperature", "Sampling temperature sent with every request to this model.", 2.0,
+        get = { it.temperature }, set = { o, d -> o.copy(temperature = d) },
+    )
+
+    private fun topPField(id: String): ConfigField = samplingField(
+        id, "topPOverride", "Top P", "Nucleus-sampling top_p sent with every request to this model.", 1.0,
+        get = { it.topP }, set = { o, d -> o.copy(topP = d) },
+    )
+
     private fun contextWindowField(id: String): ConfigField =
         ReadOnlyField(
             path = "models.$id.contextWindow",
@@ -411,6 +524,7 @@ class ModelsCollection(
             valueSchema = ConfigSchema.Int(min = 0, max = 10_000_000),
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Number(NumberUnit.TOKENS, zero = "Default")),
             reader = {
                 val e = entry(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Int(e.overrides.contextWindow ?: 0)

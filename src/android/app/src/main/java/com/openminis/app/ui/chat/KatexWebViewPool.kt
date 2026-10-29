@@ -222,6 +222,13 @@ internal object KatexWebViewPool {
                 pending?.complete(Triple(w, h, err))
             }, "AndroidBridge")
             webViewClient = object : WebViewClient() {
+                // [T-net-android-phase3] Settings > Network: answer the local entry's
+                // proxy challenge (WebViewNetworkProxy); any other auth request as before.
+                override fun onReceivedHttpAuthRequest(view: android.webkit.WebView?, handler: android.webkit.HttpAuthHandler?, host: String?, realm: String?) {
+                    if (handler != null && com.openminis.app.network.WebViewNetworkProxy.answerAuth(handler, host, realm, view?.url)) return
+                    super.onReceivedHttpAuthRequest(view, handler, host, realm)
+                }
+
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     isReady = true

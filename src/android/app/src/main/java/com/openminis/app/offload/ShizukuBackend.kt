@@ -234,6 +234,8 @@ class ShizukuBackend(private val appContext: Context) {
             }
         }
         outThread.isDaemon = true; errThread.isDaemon = true
+        // GH #453: per-name thread counts.
+        outThread.name = com.openminis.app.diagnostics.ThreadNames.of("shizuku-out"); errThread.name = com.openminis.app.diagnostics.ThreadNames.of("shizuku-err")
         outThread.start(); errThread.start()
 
         val exited: Boolean = try {

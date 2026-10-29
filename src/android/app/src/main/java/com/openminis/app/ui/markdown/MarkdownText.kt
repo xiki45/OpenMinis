@@ -75,6 +75,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -232,7 +233,7 @@ private fun CodeBlockView(block: MarkdownParser.Block.CodeBlock) {
             ) {
                 Icon(
                     Icons.Default.ContentCopy,
-                    contentDescription = "Copy code",
+                    contentDescription = androidx.compose.ui.res.stringResource(com.openminis.app.R.string.copy_code_block),
                     modifier = Modifier.height(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -569,6 +570,8 @@ private fun parseInline(
 ): AnnotatedString = buildAnnotatedString {
     var i = 0
     val len = text.length
+    // [T-md-inline-html] Built on the first whitelisted open tag only.
+    var htmlPairs: InlineHtmlTags.LazyPairs? = null
 
     while (i < len) {
         // Escaped character
@@ -669,10 +672,72 @@ private fun parseInline(
             }
         }
 
+        // [T-md-inline-html] An entity is its decoded text (`&lt;br&gt;` shows
+        // `<br>`), appended as is and never scanned as a tag.
+        if (text[i] == '&') {
+            val entity = InlineHtmlTags.entityAt(text, i)
+            if (entity != null) {
+                append(entity.first)
+                i += entity.second
+                continue
+            }
+        }
+
+        // [T-md-inline-html] <br> and the whitelisted inline tags; anything
+        // else (and an open tag whose close is not on this line) stays literal.
+        if (text[i] == '<' && InlineHtmlTags.mayStartTag(text, i)) {
+            val br = InlineHtmlTags.brLength(text, i)
+            if (br > 0) {
+                append('\n')
+                i = InlineHtmlTags.afterBr(text, i, br)
+                continue
+            }
+            val open = InlineHtmlTags.openAt(text, i)
+            val close = if (open != null) {
+                (htmlPairs ?: InlineHtmlTags.LazyPairs(text).also { htmlPairs = it }).closeOf(i)
+            } else {
+                -1
+            }
+            if (open != null && close != -1) {
+                val content = text.substring(i + open.length, close)
+                if (open.kind == InlineHtmlTags.Kind.CODE) {
+                    withStyle(SpanStyle(
+                        fontFamily = FontFamily.Monospace,
+                        color = inlineCodeColor,
+                        background = inlineCodeBg,
+                        fontSize = (baseStyle.fontSize.value * 0.85).sp,
+                    )) { append(content) }
+                } else {
+                    withStyle(inlineHtmlStyle(open.kind)) {
+                        append(parseInline(content, color, baseStyle, inlineCodeBg, inlineCodeColor, linkColor, linkListener))
+                    }
+                }
+                i = InlineHtmlTags.closeEnd(text, close, open)
+                continue
+            }
+        }
+
         // Regular character
         append(text[i])
         i++
     }
+}
+
+/** [T-md-inline-html] The span for a whitelisted inline tag (not `<code>`). */
+private fun inlineHtmlStyle(kind: InlineHtmlTags.Kind): SpanStyle = when (kind) {
+    InlineHtmlTags.Kind.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
+    InlineHtmlTags.Kind.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
+    InlineHtmlTags.Kind.UNDERLINE -> SpanStyle(textDecoration = TextDecoration.Underline)
+    InlineHtmlTags.Kind.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
+    InlineHtmlTags.Kind.SUB -> SpanStyle(
+        baselineShift = androidx.compose.ui.text.style.BaselineShift.Subscript,
+        fontSize = 0.75.em,
+    )
+    InlineHtmlTags.Kind.SUP -> SpanStyle(
+        baselineShift = androidx.compose.ui.text.style.BaselineShift.Superscript,
+        fontSize = 0.75.em,
+    )
+    InlineHtmlTags.Kind.CODE -> SpanStyle(fontFamily = FontFamily.Monospace)
 }
 
 // ─── Media blocks (inline image / video / audio) ────────────────────────────

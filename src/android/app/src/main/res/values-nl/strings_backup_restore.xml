@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-backup-restore-semantics / B01] Restore page copy for the restore semantics
+     decided 2026-10-15: the backup wins items present on both sides (API keys
+     included, OAuth sign-ins only when expired); nothing only on this device is
+     deleted. Replaces backup_restore_footer / backup_creds_restored /
+     backup_creds_kept, whose text promised the opposite. -->
+<!-- Not translated yet: English source on purpose (B01, 2026-10-15). -->
+<resources>
+    <string name="backup_restore_merge_footer">Restore merges the backup into this device. When an item exists in both — a provider, a model\'s settings or a model group with the same name — the backup\'s version is used, even if the one on this device is newer. That includes API keys; an account signed in on this device is kept unless its sign-in has expired. Nothing that exists only on this device is deleted.</string>
+    <string name="backup_restore_creds_restored">Credentials were restored for %1$d provider(s) from the backup. The backup\'s API keys replace the ones on this device; an account signed in on this device is kept unless its sign-in had expired.</string>
+    <string name="backup_restore_creds_kept">No credentials were changed: the API keys on this device already match the backup, and accounts signed in here were kept because their sign-in is not marked as expired.</string>
+</resources>

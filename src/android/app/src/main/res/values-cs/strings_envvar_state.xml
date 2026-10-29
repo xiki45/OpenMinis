@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-envvar-disable] Environment variable enable / disable. -->
+<resources>
+    <string name="env_var_status_disabled">Vypnuto</string>
+    <string name="env_var_status_duplicate">Duplicitní název</string>
+    <string name="env_var_enabled_toggle">Zapnuto</string>
+    <string name="env_var_enabled_footer">Když je vypnutá, proměnná si ponechá hodnotu i poznámku, ale nepředává se shellům, terminálům ani serverům MCP.</string>
+    <string name="env_var_disabled_highlight">Tato proměnná je vypnutá. Zapni ji, aby byla znovu k dispozici.</string>
+    <string name="env_var_action_disable">Vypnout</string>
+    <string name="env_var_action_enable">Zapnout</string>
+    <string name="mcp_form_env_disabled_warning">%1$s je vypnutá a předá se jako prázdná hodnota.</string>
+</resources>

@@ -1,6 +1,7 @@
 package com.openminis.app.config.confirm
 
 import com.openminis.app.config.ConfigRisk
+import com.openminis.app.config.readable.ReadableSummary
 import java.util.UUID
 
 /**
@@ -21,6 +22,11 @@ data class PendingConfigChangeItem(
     /** Verb shown in the row (set / append / remove / add / hide / revert). */
     val verb: String,
     val risk: ConfigRisk,
+    /**
+     * [T-config-readable] Human-readable description of this row, shown under
+     * the raw old → new. User-facing only; never sent to the CLI.
+     */
+    val readable: ReadableSummary? = null,
     /** Per-row reject toggle, defaults true (allow). */
     val isApproved: Boolean = true,
 )

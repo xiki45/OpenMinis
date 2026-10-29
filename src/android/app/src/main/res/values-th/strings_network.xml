@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">เครือข่าย</string>
+    <string name="network_status">สถานะ</string>
+    <string name="network_status_starting">กำลังเริ่ม…</string>
+    <string name="network_status_connecting">กำลังเชื่อมต่อ…</string>
+    <string name="network_status_off">ปิด</string>
+    <string name="network_device_name">ชื่ออุปกรณ์</string>
+    <string name="network_device_name_automatic">อัตโนมัติ</string>
+    <string name="network_exit_node_none">ไม่มี</string>
+    <string name="network_sign_out">ออกจากระบบ</string>
+    <string name="network_scope_shell">เชลล์</string>
+    <string name="network_scope_browser">เบราว์เซอร์</string>
+    <string name="network_scope_backup">ข้อมูลสำรอง</string>
+    <string name="network_proxy_type">ประเภท</string>
+    <string name="network_proxy_server">เซิร์ฟเวอร์</string>
+    <string name="network_proxy_authentication">การยืนยันตัวตน</string>
+    <string name="network_proxy_password">รหัสผ่าน</string>
+    <string name="network_proxy_bypass">ข้าม</string>
+    <string name="network_proxy_test">ทดสอบการเชื่อมต่อ</string>
+    <string name="network_cancel">ยกเลิก</string>
+    <string name="network_save">บันทึก</string>
+    <string name="network_provider_route">เครือข่าย</string>
+</resources>

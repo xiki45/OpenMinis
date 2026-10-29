@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">«%1$s» — папка, которую Minis подключает здесь, поэтому её нельзя удалить из браузера файлов. Ничего не удалено. Чтобы убрать внешнюю папку, откройте Настройки › Подключить внешние папки.</string>
+</resources>

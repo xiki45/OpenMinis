@@ -7,6 +7,8 @@
 // Bionic libc exposes forkpty() since API 21 (Android 5.0). This file wraps
 // that plus read/write/ioctl on the master fd and process waitpid.
 
+#include <sys/syscall.h>
+#include <sys/resource.h>
 #include <jni.h>
 #include <pty.h>
 #include <sys/ioctl.h>
@@ -18,6 +20,8 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <time.h>
+#include <pthread.h>
 #include <android/log.h>
 
 #define LOG_TAG "PtyBridge"
@@ -27,6 +31,24 @@
 // Fork the process into a new PTY and exec the child command.
 // Returns the PTY master fd on success. Child pid stored into outPid[0].
 // On failure returns -errno.
+/*
+ * [T-pty-close-fds] Close fds >= 3 in a just-forked child, async-signal-safe.
+ * close_range (Linux 5.9+) when available, else a bounded close loop.
+ */
+static void closeInheritedFds(void) {
+#ifdef __NR_close_range
+    if (syscall(__NR_close_range, 3U, ~0U, 0U) == 0) return;
+#endif
+    long maxFd = 65536;
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < (rlim_t) maxFd) {
+        maxFd = (long) rl.rlim_cur;
+    }
+    for (long fd = 3; fd < maxFd; fd++) {
+        syscall(__NR_close, (int) fd);
+    }
+}
+
 JNIEXPORT jint JNICALL
 Java_com_openminis_app_sandbox_PtyBridge_forkExec(
     JNIEnv *env, jclass clazz,
@@ -125,6 +147,16 @@ Java_com_openminis_app_sandbox_PtyBridge_forkExec(
         sigemptyset(&empty);
         sigprocmask(SIG_SETMASK, &empty, NULL);
         for (int s = 1; s < NSIG; s++) signal(s, SIG_DFL);
+
+        // [T-pty-close-fds] Close every inherited fd above stdio before exec.
+        // ProcessBuilder's child does this; forkpty does not, so the terminal's
+        // proot and every guest process under it inherited whatever the app
+        // had open - the native-offload listening socket, the debug server
+        // port, database files - and a guest that outlived the app could keep
+        // them. Only raw syscalls here: this is a fork of a multithreaded
+        // process (no malloc/opendir), and bionic's close() would run fdsan
+        // ownership checks on fds this child does not own.
+        closeInheritedFds();
 
         execve(cmd, argv, envp);
         // execve() only returns on failure.
@@ -233,4 +265,63 @@ Java_com_openminis_app_sandbox_PtyBridge_waitFor(
     if (WIFEXITED(status)) return (jint) WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return (jint) -(128 + WTERMSIG(status));
     return -1;
+}
+
+// [T-shell-stall-yes-head] ART blocks SIGPIPE (with SIGQUIT and SIGUSR1) in
+// every app thread (Runtime::BlockSignals), and ProcessBuilder's child keeps
+// the caller's signal mask across execve. Agent shells spawned that way ran
+// with SIGPIPE blocked, so a writer whose reader had exited got EPIPE instead
+// of dying: busybox `yes foobar | head -c 50000` then spins forever and the
+// tool call hangs until its timeout. forkExec above clears the mask in its
+// own child; ProcessBuilder offers no such hook, so the caller unblocks
+// SIGPIPE on the spawning thread around start() and restores it afterwards.
+// The child inherits that thread's mask. Only SIGPIPE: it is thread-directed
+// (raised by this thread's own writes), so the brief window cannot catch a
+// process-wide SIGQUIT meant for ART's signal catcher.
+//
+// Returns a bit set: 1 = SIGPIPE was blocked before (caller must re-block),
+// 2 = SIGPIPE's disposition is SIG_IGN (a child would inherit that too, so
+// unblocking alone does not help - logged by the caller). -errno on failure.
+//
+// [T-sigpipe-pending-drain] A SIGPIPE already PENDING on this thread is
+// consumed first. The thread is a shared IO-dispatcher thread: an earlier
+// write of its own to a broken pipe or socket (a provider upload the server
+// dropped, a dead shell's stdin) raised SIGPIPE, which stayed pending while
+// blocked. Unblocking would deliver it at once, the disposition is SIG_DFL
+// and the app installs no handler, so the whole app would die with no
+// exception and no tombstone. While SIGPIPE is still blocked, a zero-timeout
+// sigtimedwait takes it off the pending set; this thread makes no write in
+// the window, so none can arrive before the re-block.
+JNIEXPORT jint JNICALL
+Java_com_openminis_app_sandbox_PtyBridge_unblockSigpipe(
+    JNIEnv *env, jclass clazz)
+{
+    sigset_t set, old, pending;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPIPE);
+    if (sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1) {
+        struct timespec zero = { 0, 0 };
+        int drained = 0;
+        while (drained < 8 && sigtimedwait(&set, NULL, &zero) == SIGPIPE) drained++;
+        __android_log_print(ANDROID_LOG_WARN, "PtyBridge",
+            "[T-sigpipe-pending-drain] drained %d pending SIGPIPE before unblock", drained);
+    }
+    int rc = pthread_sigmask(SIG_UNBLOCK, &set, &old);
+    if (rc != 0) return -rc;
+    jint result = sigismember(&old, SIGPIPE) == 1 ? 1 : 0;
+    struct sigaction sa;
+    if (sigaction(SIGPIPE, NULL, &sa) == 0 && sa.sa_handler == SIG_IGN) result |= 2;
+    return result;
+}
+
+// [T-shell-stall-yes-head] Re-block SIGPIPE on the calling thread. 0 or -errno.
+JNIEXPORT jint JNICALL
+Java_com_openminis_app_sandbox_PtyBridge_blockSigpipe(
+    JNIEnv *env, jclass clazz)
+{
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPIPE);
+    int rc = pthread_sigmask(SIG_BLOCK, &set, NULL);
+    return rc == 0 ? 0 : -rc;
 }

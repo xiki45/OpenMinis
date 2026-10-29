@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -543,6 +544,10 @@ private fun BorderedMarkdownTable(
 
 @Composable
 internal fun FallbackInfoBlock(block: AssistantBlock, onRevert: (() -> Unit)? = null) {
+    if (isModelSwitchNotice(block)) {
+        ModelSwitchNoticeCard(block)
+        return
+    }
     val divider = ChatColors.separator
     val fg = ChatColors.secondaryText
     val icon = when (block.toolName) {
@@ -598,7 +603,8 @@ internal fun FallbackInfoBlock(block: AssistantBlock, onRevert: (() -> Unit)? = 
                     modifier = Modifier.size(10.dp),
                 )
                 Text(
-                    text = block.content,
+                    // [T-in-chat-search] matches painted in place
+                    text = com.openminis.app.ui.chat.search.rememberChatSearchHighlighted(block.content, com.openminis.app.ui.chat.search.ChatSearchUnits.BODY),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Medium,
                     color = fg,
@@ -662,6 +668,94 @@ internal fun FallbackInfoBlock(block: AssistantBlock, onRevert: (() -> Unit)? = 
 }
 
 /**
+ * A group fallback's notice: the models that failed (one "⚠️ model: reason"
+ * line each) and the one the turn switched to. Written by the agent loop as
+ * an `info` block titled "Switched model"; a notice synced from iOS has the
+ * same reason lines and a plain "Switched to …" line.
+ */
+internal fun isModelSwitchNotice(block: AssistantBlock): Boolean =
+    block.kind == "info" && block.toolName.isEmpty() &&
+        (block.toolTitle == "Switched model" || block.content.lineSequence().any { it.startsWith("⚠️") })
+
+/**
+ * iOS `AssistantBlockView` `.info` case: the reason lines (middle elided past
+ * nine), then the switched line behind an orange swap icon, all on a faint
+ * orange card. Every line is shown, two rows at most each — the divider this
+ * replaces held one line, so the failure read "GPT-5.6 Terra: Invalid API
+ * key…" with the switch cut off. Long-press copies the whole notice.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ModelSwitchNoticeCard(block: AssistantBlock) {
+    val context = LocalContext.current
+    val lines = remember(block.content) { block.content.lines().filter { it.isNotBlank() } }
+    val reasons = remember(lines) {
+        val all = lines.filter { it.startsWith("⚠️") }
+        if (all.size <= 9) all else all.take(4) + "⋯ +${all.size - 8}" + all.takeLast(4)
+    }
+    // Android writes "🔄 Switched to …"; the icon is drawn, so the emoji goes.
+    val switched = remember(lines) {
+        lines.firstOrNull { !it.startsWith("⚠️") }?.removePrefix("🔄")?.trim()
+    }
+    val orange = Color(0xFFFF9500)
+    val shape = RoundedCornerShape(8.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(shape)
+            .background(orange.copy(alpha = 0.08f))
+            .border(0.5.dp, orange.copy(alpha = 0.14f), shape)
+            .combinedClickable(
+                onClick = {},
+                onLongClick = {
+                    val cb = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    cb.setPrimaryClip(android.content.ClipData.newPlainText("error", block.content))
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.image_copied_toast),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                },
+            )
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        for (line in reasons) {
+            Text(
+                text = line,
+                fontSize = 10.sp,
+                color = ChatColors.primaryText.copy(alpha = 0.45f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (!switched.isNullOrEmpty()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Sync,
+                    contentDescription = null,
+                    tint = orange.copy(alpha = 0.8f),
+                    modifier = Modifier.size(11.dp),
+                )
+                Text(
+                    text = switched,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = ChatColors.primaryText.copy(alpha = 0.75f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/**
  * Bottom sheet showing the full compact summary. Mirrors iOS
  * `CompactSummarySheet`: scrollable, copy-to-clipboard, dismiss button.
  */
@@ -691,7 +785,7 @@ private fun CompactSummarySheet(
             }) {
                 Icon(
                     imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
-                    contentDescription = "Copy",
+                    contentDescription = stringResource(R.string.common_copy),
                     tint = if (copied) Color(0xFF34C759) else ChatColors.secondaryText,
                 )
             }

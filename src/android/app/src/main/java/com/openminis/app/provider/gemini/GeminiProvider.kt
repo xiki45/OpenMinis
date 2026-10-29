@@ -37,10 +37,10 @@ class GeminiProvider(
     private val apiKey: String,
     override var model: LLMModel = LLMModel.gemini25Flash,
     private val basePath: String = "https://generativelanguage.googleapis.com/v1beta",
-) : LLMProvider {
+) : LLMProvider, com.openminis.app.network.NetworkTagged {
     override val name = "Google"
 
-    private val client = OkHttpClient.Builder()
+    private val baseClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -48,6 +48,17 @@ class GeminiProvider(
         // Network-transition eviction must reach provider connections.
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
         .build()
+
+    /** [T-net-android-phase3] Policy tag (prov:<instanceId>), set by ProviderFactory. */
+    override var netTag: String? = null
+
+    /**
+     * [T-net-android-phase3] The client for this request: [baseClient] itself
+     * unless Settings > Network routes this provider through the local entry
+     * (NetworkHttp). Read per request, so a route change applies to the next
+     * request without rebuilding the provider.
+     */
+    private val client: OkHttpClient get() = com.openminis.app.network.NetworkHttp.client(netTag, baseClient)
 
     override suspend fun sendMessageClamped(
         messages: List<LLMMessage>,
@@ -58,18 +69,9 @@ class GeminiProvider(
         tools: List<AgentToolDefinition>,
         thinkingLevel: ThinkingLevel,
     ): LLMResponse = withContext(Dispatchers.IO) {
-        val body = buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel)
-        val url = "$basePath/models/${model.id}:generateContent?key=$apiKey"
-        val request = Request.Builder()
-            .url(url)
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
-            // [T-android-default-ua] Brand the outbound UA so server logs
-            // can trace the request back to the Minis build. Gemini has no
-            // SDK-specific UA requirement, so the helper's default kicks in.
-            .applyUserAgentOverride(null)
-            .build()
-
-        val response = client.newCall(request).execute()
+        val response = executeWithThinkingRetry("generateContent") { format ->
+            buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel, format)
+        }
         val responseBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
@@ -113,6 +115,54 @@ class GeminiProvider(
         })
     }
 
+    /**
+     * [OpenMinis#470] POSTs the body [bodyFor] builds to `models/<id>:<method>`.
+     * A 400 whose text is about the thinking parameter (see
+     * [GeminiThinkingRetry.formatFor]) is sent once more in the other shape;
+     * when that succeeds the shape is remembered for this instance and model.
+     * Never a second retry, and never through the group fallback chain: the
+     * caller gets the retry's response (or the first 400) like any other.
+     */
+    private fun executeWithThinkingRetry(
+        method: String,
+        bodyFor: (ThinkingRuleResolver.GeminiThinkingFormat?) -> JSONObject,
+    ): okhttp3.Response {
+        val separator = if ('?' in method) "&" else "?"
+        val url = "$basePath/models/${model.id}:$method${separator}key=$apiKey"
+        fun post(body: JSONObject) = client.newCall(
+            Request.Builder()
+                .url(url)
+                .post(body.toString().toRequestBody("application/json".toMediaType()))
+                // [T-android-default-ua] Brand the outbound UA so server logs
+                // can trace the request back to the Minis build. Gemini has no
+                // SDK-specific UA requirement, so the helper's default kicks in.
+                .applyUserAgentOverride(null)
+                .build(),
+        ).execute()
+
+        val instance = netTag ?: basePath
+        val modelId = model.id
+        val first = bodyFor(GeminiThinkingRetry.preferred(instance, modelId))
+        val response = post(first)
+        if (response.code != 400) return response
+        val sent = GeminiThinkingRetry.thinkingConfigOf(first) ?: return response
+        val errorBody = response.body?.string() ?: ""
+        response.close()
+        val format = GeminiThinkingRetry.formatFor(errorBody) ?: throw mapHttpError(400, errorBody)
+        val second = bodyFor(format)
+        val resent = GeminiThinkingRetry.thinkingConfigOf(second)
+        // The other shape would send the same thing again: nothing to try.
+        if (resent == sent) throw mapHttpError(400, errorBody)
+        com.openminis.app.logging.AppLogger.info(
+            "Thinking",
+            "[GeminiThinkingRetry] model=$modelId 400 on thinkingConfig " +
+                "${GeminiThinkingRetry.describe(sent)} -> retrying as $format ${GeminiThinkingRetry.describe(resent)}",
+        )
+        val retried = post(second)
+        if (retried.isSuccessful) GeminiThinkingRetry.remember(instance, modelId, format)
+        return retried
+    }
+
     private fun rawStreamMessage(
         messages: List<LLMMessage>,
         systemPrompt: String?,
@@ -122,17 +172,11 @@ class GeminiProvider(
         tools: List<AgentToolDefinition>,
         thinkingLevel: ThinkingLevel,
     ): Flow<LLMStreamChunk> = callbackFlow {
-        val body = buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel)
-        val url = "$basePath/models/${model.id}:streamGenerateContent?alt=sse&key=$apiKey"
-        val request = Request.Builder()
-            .url(url)
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
-            // [T-android-default-ua] same intent as the non-streaming
-            // branch above — brand outbound requests with Minis/<version>.
-            .applyUserAgentOverride(null)
-            .build()
-
-        val response = client.newCall(request).execute()
+        // [OpenMinis#470] A thinking-parameter 400 arrives before any byte of the
+        // stream, so the retry inside never follows output already sent.
+        val response = executeWithThinkingRetry("streamGenerateContent?alt=sse") { format ->
+            buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel, format)
+        }
         if (!response.isSuccessful) {
             val errorBody = response.body?.string() ?: ""
             response.close()
@@ -205,15 +249,18 @@ class GeminiProvider(
         // [T-android-thinking-level-arch] Already clamped to the model ceiling by
         // LLMProvider.streamMessage/sendMessage before reaching here.
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
+        // [OpenMinis#470] Set only by executeWithThinkingRetry.
+        thinkingFormat: ThinkingRuleResolver.GeminiThinkingFormat? = null,
     ): JSONObject {
         val body = JSONObject()
 
         // [T-android-gemini3-thoughtsig / #179] Gemini 3.x REQUIRES a
         // thoughtSignature on every historical functionCall part; a bare
         // functionCall 400s ("Function call is missing a thought_signature").
-        // Only gemini-3.x enforces this, so gate the whole special-case on it
+        // Only gemini-3.x and later enforce this, so gate the whole special-case on it
         // to leave 1.x/2.x/flash behaviour byte-for-byte unchanged.
-        val requiresSig = model.id.lowercase().contains("gemini-3")
+        // [OpenMinis#470] By major version (3+), so gemini-4 is covered too.
+        val requiresSig = ThinkingRuleResolver.isGeminiLevelFamily(model.id)
         // Tool-call ids we CANNOT safely replay as a functionCall because their
         // signature is missing (old sessions, non-3.x-origin history, dropped
         // field). For these, both the functionCall AND its paired functionResponse
@@ -261,7 +308,16 @@ class GeminiProvider(
             val parts = JSONArray()
 
             if (msg.contentParts.isNotEmpty()) {
-                for (part in msg.contentParts) {
+                // [T-404-summary-after-tool-results] In a user turn that carries tool
+                // results, emit the results (each with its image) before anything
+                // else, so every functionResponse follows its functionCall; a text
+                // part ahead of them (#404: a compaction summary) breaks that.
+                // Other turns keep their order.
+                val ordered = if (msg.role == LLMMessage.Role.USER && msg.contentParts.any { it is AgentContentPart.ToolResult }) {
+                    msg.contentParts.filter { it is AgentContentPart.ToolResult } +
+                        msg.contentParts.filter { it !is AgentContentPart.ToolResult }
+                } else msg.contentParts
+                for (part in ordered) {
                     when (part) {
                         is AgentContentPart.Text -> {
                             // Gemini rejects {"text": ""} with oneof 400; skip empty text parts.
@@ -403,7 +459,7 @@ class GeminiProvider(
         }
 
         // Thinking configuration (model-specific)
-        buildThinkingConfig(thinkingLevel)?.let { thinkingConfig ->
+        buildThinkingConfig(thinkingLevel, thinkingFormat)?.let { thinkingConfig ->
             config.put("thinkingConfig", thinkingConfig)
         }
 
@@ -427,18 +483,21 @@ class GeminiProvider(
 
     /**
      * Build model-specific thinking config.
-     * - Gemini 3.x: uses thinkingLevel string + includeThoughts
+     * - Gemini 3.x and later (by major version): uses thinkingLevel string + includeThoughts
      * - Gemini 2.5 Pro: uses thinkingBudget (128-16384)
      * - Gemini 2.5 Flash: uses thinkingBudget (0-8192)
      * - Gemini 2.5 Flash Lite: no thinking support
      */
-    private fun buildThinkingConfig(level: ThinkingLevel): JSONObject? {
+    private fun buildThinkingConfig(
+        level: ThinkingLevel,
+        format: ThinkingRuleResolver.GeminiThinkingFormat? = null,
+    ): JSONObject? {
         // [T-thinking-rules-phase2] The per-family rules now live in
         // ThinkingRuleResolver.geminiThinkingConfig so every vendor's thinking contract
         // is described in ONE place. Behaviour is byte-for-byte unchanged — verified by
         // a reflection cross-check against this method's previous body (0 diffs across
         // 10 models x 7 levels) and pinned by ThinkingWireGeminiAnthropicSnapshotTest.
-        val cfg = ThinkingRuleResolver.geminiThinkingConfig(model.id, level)
+        val cfg = ThinkingRuleResolver.geminiThinkingConfig(model.id, level, format)
         com.openminis.app.logging.AppLogger.info(
             "Thinking",
             "[resolve] provider=gemini model=${model.id} level=${level.name} " +
@@ -620,27 +679,12 @@ class GeminiProvider(
         }
 
         /** Exposed for tests and for any other endpoint speaking this protocol. */
-        fun parseUsageMetadata(usage: JSONObject): LLMUsage {
-            val promptTokens = usage.optInt("promptTokenCount", 0)
-            val candidatesTokens = usage.optInt("candidatesTokenCount", 0)
-            val thoughtsTokens = usage.optInt("thoughtsTokenCount", 0)
-            // Absent or 0 both mean "no cache to report" — keep null so a
-            // cache-less chunk stays distinguishable from a measured zero.
-            val cachedTokens = usage.optInt("cachedContentTokenCount", 0).takeIf { it > 0 }
-
-            val totalOutput = candidatesTokens + thoughtsTokens
-            // Clamped: a relay reporting a cache larger than the prompt must not
-            // yield a negative input count.
-            val freshInput = cachedTokens?.let { (promptTokens - it).coerceAtLeast(0) } ?: promptTokens
-
-            return LLMUsage(
-                inputTokens = freshInput,
-                outputTokens = totalOutput,
-                cacheCreationInputTokens = null,
-                cacheReadInputTokens = cachedTokens,
-                latestContextTokens = promptTokens,
-            )
-        }
+        fun parseUsageMetadata(usage: JSONObject): LLMUsage =
+            // [T-usage-step1] Shared parser: input = promptTokenCount minus
+            // cachedContentTokenCount (clamped at 0), output = candidates +
+            // thoughts, and thoughtsTokenCount is now also kept as
+            // reasoningTokens. A cache count of 0 still surfaces as null.
+            com.openminis.app.usage.ProviderUsageParser.gemini(usage).toLLMUsage()
     }
 
     private fun mapHttpError(statusCode: Int, body: String): LLMError {
@@ -655,6 +699,9 @@ class GeminiProvider(
 
     private fun mapError(error: Throwable): LLMError {
         if (error is LLMError) return error
+        // [T-android-tls-trust-error] A rejected certificate is not a network
+        // blip: named, not retried on the same model, explained to the user.
+        com.openminis.app.provider.TlsFailure.toLLMError(error, basePath)?.let { return it }
         if (error is java.io.IOException) return LLMError.NetworkError(error)
         return LLMError.Unknown(error)
     }

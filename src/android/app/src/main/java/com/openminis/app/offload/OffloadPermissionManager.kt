@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
@@ -119,7 +120,36 @@ object OffloadPermissionManager {
     private val _pendingRequest = MutableStateFlow<PermissionRequest?>(null)
     val pendingRequest: StateFlow<PermissionRequest?> = _pendingRequest.asStateFlow()
 
-    private var pendingContinuation: kotlin.coroutines.Continuation<Response>? = null
+    @Volatile private var pendingContinuation: kotlin.coroutines.Continuation<Response>? = null
+
+    /**
+     * [GH #453] Longest a caller waits for the user to answer one of the
+     * in-app dialogs below (the tool-permission dialog and the settings
+     * gate's dialog), and, separately, for its turn when another request is
+     * already showing.
+     *
+     * These waits had no bound, and their callers are often an offload
+     * worker thread blocked in runBlocking: the offload protocol has no
+     * cancel message, so a call whose dialog nobody answers - the app is in
+     * the background, the dialog only renders on one screen, or a second
+     * request replaced the first one's single continuation slot - kept its
+     * thread forever. An agent retrying `android-notification list` without
+     * Notification Access while backgrounded leaked one thread per call. Five
+     * minutes leaves a person who stepped away time to come back to the
+     * dialog; a timed-out call answers like a denial, but without recording a
+     * session denial.
+     */
+    const val DECISION_TIMEOUT_MS: Long = 5 * 60_000L
+
+    /**
+     * [GH #453] One dialog of each kind at a time. Both were single-slot: a
+     * second request overwrote the first one's continuation, which then never
+     * resumed. Queued callers now wait (bounded by [DECISION_TIMEOUT_MS]).
+     */
+    private val permissionDialogTurn = Mutex()
+    private val settingsGateTurn = Mutex()
+
+    private const val TAG = "OffloadPermission"
 
     // ── Android system runtime permission request (for location etc.) ──────────
 
@@ -221,7 +251,18 @@ object OffloadPermissionManager {
     private val _pendingSettingsGate = MutableStateFlow<SettingsGateRequest?>(null)
     val pendingSettingsGate: StateFlow<SettingsGateRequest?> = _pendingSettingsGate.asStateFlow()
 
-    private var settingsGateContinuation: kotlin.coroutines.Continuation<SettingsGateDecision>? = null
+    @Volatile private var settingsGateContinuation: kotlin.coroutines.Continuation<SettingsGateDecision>? = null
+    private val settingsGateLock = Any()
+
+    /** Acquire [turn] within [DECISION_TIMEOUT_MS]; false when the wait ran out. */
+    private suspend fun lockWithin(turn: Mutex): Boolean =
+        withTimeoutOrNull(DECISION_TIMEOUT_MS) { turn.lock(); true } == true
+
+    private fun timedOut(what: String) {
+        runCatching {
+            com.openminis.app.logging.AppLogger.warning(TAG, "[GH453] $what within ${DECISION_TIMEOUT_MS / 1000}s; answering as not granted")
+        }
+    }
 
     /**
      * Show an in-app dialog explaining why a settings trip is needed, then
@@ -239,13 +280,45 @@ object OffloadPermissionManager {
         request: SettingsGateRequest,
         check: () -> Boolean,
     ): AndroidPermissionResult {
-        val decision = suspendCancellableCoroutine<SettingsGateDecision> { cont ->
-            settingsGateContinuation = cont
-            _pendingSettingsGate.value = request
-            cont.invokeOnCancellation {
-                _pendingSettingsGate.value = null
-                settingsGateContinuation = null
+        if (!lockWithin(settingsGateTurn)) {
+            timedOut("settings gate '${request.id}': no turn")
+            return AndroidPermissionResult.TIMEOUT
+        }
+        // Held through the settings trip below, so a queued request for the
+        // same capability sees the grant instead of a second dialog.
+        try {
+            if (check()) return AndroidPermissionResult.GRANTED
+            return settingsGateLocked(request, check)
+        } finally {
+            settingsGateTurn.unlock()
+        }
+    }
+
+    private suspend fun settingsGateLocked(
+        request: SettingsGateRequest,
+        check: () -> Boolean,
+    ): AndroidPermissionResult {
+        val decision = withTimeoutOrNull(DECISION_TIMEOUT_MS) {
+            suspendCancellableCoroutine<SettingsGateDecision> { cont ->
+                synchronized(settingsGateLock) {
+                    settingsGateContinuation = cont
+                    _pendingSettingsGate.value = request
+                }
+                // [T-settings-gate-stale-dialog] Clears only its own request:
+                // the next queued gate may already be showing.
+                cont.invokeOnCancellation {
+                    synchronized(settingsGateLock) {
+                        if (_pendingSettingsGate.value === request) {
+                            _pendingSettingsGate.value = null
+                            settingsGateContinuation = null
+                        }
+                    }
+                }
             }
+        }
+        if (decision == null) {
+            timedOut("settings gate '${request.id}': not answered")
+            return AndroidPermissionResult.TIMEOUT
         }
         if (decision == SettingsGateDecision.CANCEL) return AndroidPermissionResult.DENIED
 
@@ -283,11 +356,26 @@ object OffloadPermissionManager {
         return granted == true
     }
 
-    /** Called from UI after the in-app "go to settings" dialog closes. */
-    fun respondToSettingsGate(decision: SettingsGateDecision) {
-        _pendingSettingsGate.value = null
-        settingsGateContinuation?.resume(decision)
-        settingsGateContinuation = null
+    /**
+     * Called from UI after the in-app "go to settings" dialog for [request]
+     * closes. Returns false, and does nothing, when [request] is no longer the
+     * pending gate.
+     *
+     * [T-settings-gate-stale-dialog] Since the 5-minute decision timeout
+     * (43b53fc9d) a dialog can outlive its request. Its answer used to resume
+     * whatever gate was pending by then - one the user never saw - and the
+     * slot was cleared after resume(), which could wipe the continuation the
+     * next queued gate had just stored. The answer is now matched by identity
+     * and the slot is taken atomically before resuming.
+     */
+    fun respondToSettingsGate(request: SettingsGateRequest, decision: SettingsGateDecision): Boolean {
+        val cont = synchronized(settingsGateLock) {
+            if (_pendingSettingsGate.value !== request) return false
+            _pendingSettingsGate.value = null
+            settingsGateContinuation.also { settingsGateContinuation = null }
+        }
+        cont?.resume(decision)
+        return true
     }
 
     /**
@@ -370,30 +458,48 @@ object OffloadPermissionManager {
 
                 // Show dialog and wait for response.
                 val info = toolRegistry.find { it.toolName == toolName }
-                val response = suspendCancellableCoroutine<Response> { cont ->
-                    pendingContinuation = cont
-                    _pendingRequest.value = PermissionRequest(
-                        toolName = toolName,
-                        toolTitle = toolTitle,
-                        description = "Allow ${info?.displayName ?: toolName} access?",
-                        sessionId = sessionId,
-                    )
-                    cont.invokeOnCancellation {
-                        _pendingRequest.value = null
-                        pendingContinuation = null
-                    }
+                if (!lockWithin(permissionDialogTurn)) {
+                    timedOut("permission dialog for '$toolName': no turn")
+                    return false
                 }
-
-                when (response) {
-                    Response.ALLOW_SESSION -> {
-                        grants.add(toolName)
-                        true
+                // The answer is recorded before the turn is released, so a queued
+                // call for the same tool sees it instead of showing a second dialog.
+                try {
+                    // A dialog answered while this call queued may already have decided for it.
+                    if (toolName in denials) return false
+                    if (toolName in grants) return true
+                    val response = withTimeoutOrNull(DECISION_TIMEOUT_MS) {
+                        suspendCancellableCoroutine<Response> { cont ->
+                            pendingContinuation = cont
+                            _pendingRequest.value = PermissionRequest(
+                                toolName = toolName,
+                                toolTitle = toolTitle,
+                                description = "Allow ${info?.displayName ?: toolName} access?",
+                                sessionId = sessionId,
+                            )
+                            cont.invokeOnCancellation {
+                                _pendingRequest.value = null
+                                pendingContinuation = null
+                            }
+                        }
                     }
-                    Response.ALLOW_ONCE -> true  // no caching; next call re-prompts
-                    Response.DENY_SESSION -> {
-                        denials.add(toolName)
-                        false
+                    when (response) {
+                        null -> {
+                            timedOut("permission dialog for '$toolName': not answered")
+                            false
+                        }
+                        Response.ALLOW_SESSION -> {
+                            grants.add(toolName)
+                            true
+                        }
+                        Response.ALLOW_ONCE -> true  // no caching; next call re-prompts
+                        Response.DENY_SESSION -> {
+                            denials.add(toolName)
+                            false
+                        }
                     }
+                } finally {
+                    permissionDialogTurn.unlock()
                 }
             }
         }

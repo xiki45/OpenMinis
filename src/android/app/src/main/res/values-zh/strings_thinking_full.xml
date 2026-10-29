@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="thinking_show_full">显示全部思考</string>
+    <string name="thinking_full_title">完整思考</string>
+    <string name="thinking_full_char_count">%1$s 个字符</string>
+    <string name="thinking_full_load_more">加载更多</string>
+    <string name="thinking_full_copy_failed">内容太长，无法复制</string>
+</resources>

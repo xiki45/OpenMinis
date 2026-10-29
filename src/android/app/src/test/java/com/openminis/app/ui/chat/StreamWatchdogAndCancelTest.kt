@@ -152,7 +152,13 @@ class StreamWatchdogAndCancelTest {
         assertEquals(STREAM_UPLOAD_CAP_MS, sourceLongConst("STREAM_UPLOAD_CAP_MS"))
         assertTrue(providerSrc.contains("val uploadDoneAt = watchState.uploadDoneAtNanos.get()"))
         assertTrue(providerSrc.contains("""if (elapsedMs >= STREAM_UPLOAD_CAP_MS) { timedOutPhase = "upload"; break }"""))
-        assertTrue(providerSrc.contains("""if (sinceUploadMs >= STREAM_TTFB_TIMEOUT_MS) { timedOutPhase = "ttfb"; break }"""))
+        assertTrue(providerSrc.contains("""if (sinceUploadMs >= ttfbBudgetMs) { timedOutPhase = "ttfb"; break }"""))
+        // [T-sse-idle-timeout] The TTFB budget is the per-provider setting on
+        // Chat Completions (default 120 s = this constant) and the constant
+        // everywhere else.
+        assertTrue(providerSrc.contains(
+            "val ttfbBudgetMs = if (usesChatCompletionsAPI) responseIdleTimeoutSec * 1000L else STREAM_TTFB_TIMEOUT_MS"))
+        assertEquals(STREAM_TTFB_TIMEOUT_MS, com.openminis.app.provider.ResponseIdleTimeoutSetting.DEFAULT_SECONDS * 1000L)
         assertTrue("upload completion is signalled from requestBodyEnd", providerSrc.contains("override fun requestBodyEnd"))
         assertTrue(providerSrc.contains("?.uploadDoneAtNanos?.set(System.nanoTime())"))
         // Retry after a timeout must get a NEW connection: this call's socket is
@@ -301,7 +307,7 @@ class StreamWatchdogAndCancelTest {
 
     @Test
     fun `production cancelStream keeps the mute → drop → cancel order`() {
-        val body = vmSrc.substringAfter("fun cancelStream() {").substringBefore("streamJob?.cancel()")
+        val body = vmSrc.substringAfter("fun cancelStream(keepBackground: Boolean = false) {").substringBefore("streamJob?.cancel()")
         val mute = body.indexOf("AgentJobRegistry.muteDelegationResults(activeSessionId)")
         val drop = body.indexOf("AgentJobRegistry.dropQueuedDelegations(activeSessionId, \"user-stopped\")")
         val cancel = body.indexOf("AgentJobRegistry.cancelAll(activeSessionId, \"user-stopped\")")
@@ -309,7 +315,7 @@ class StreamWatchdogAndCancelTest {
         assertTrue("drop must come before cancel", drop in 0 until cancel)
         assertTrue(
             "the streaming flag flips only after the fan-out is stopped",
-            vmSrc.substringAfter("fun cancelStream() {").indexOf("_isStreaming.value = false") > cancel,
+            vmSrc.substringAfter("fun cancelStream(keepBackground: Boolean = false) {").indexOf("_isStreaming.value = false") > cancel,
         )
     }
 }

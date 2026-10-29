@@ -101,10 +101,19 @@ class ViewModelInitOrderTest {
         // Class-body properties declared after `init` with a plain initialiser.
         // `by lazy` is exempt: it resolves on first read, not in declaration
         // order, which is exactly the hazard being tested for.
+        //
+        // Only the class body counts: it ends at the first column-0 `}` after
+        // `init`. Top-level declarations below it are not constructed by the
+        // ViewModel, and a top-level function's 4-space-indented locals (e.g.
+        // warmUpBudget's `w` / `threshold` / `line`) look like members to the
+        // line regex.
+        val classEnd = (init until lines.size).firstOrNull { lines[it].trimEnd() == "}" }
+        assertTrue("end of the ChatViewModel class body not found", classEnd != null)
         val offenders = mutableListOf<String>()
         for ((i, line) in lines.withIndex()) {
             val lineNo = i + 1
             if (lineNo <= init) continue
+            if (i >= classEnd!!) break
             val m = Regex("""^    (?:private |internal )?(?:val|var) (\w+)\s*(?::[^=]+)?=""")
                 .find(line) ?: continue
             if ("by lazy" in line) continue

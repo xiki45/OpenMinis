@@ -73,7 +73,16 @@ class PhotosOffloadHandler(private val context: Context) : NativeOffloadHandler 
                 "near" -> handleNear(args)
                 "albums" -> handleAlbums(args)
                 "album" -> handleAlbum(args)
-                "export" -> handleExport(args, request.sessionId)
+                // [T-offload-caller-session] The session whose /var/minis this
+                // shell sees: the PARENT for a sub agent. With the raw
+                // MINIS_CHAT_SESSION_ID a sub agent's export was written to
+                // the helper's own offloads dir while the result pointed it at
+                // /var/minis/offloads/..., a path its shell then could not read.
+                "export" -> {
+                    val caller = OffloadCallerSession.resolve(request.sessionId)
+                    AppLogger.info(TAG, "export caller=${caller.sid?.take(8) ?: "nil"} via=${caller.source}")
+                    handleExport(args, caller.sid)
+                }
                 "import", "save" -> handleImport(args)
                 "create-album" -> handleCreateAlbum(args)
                 "favorite" -> handleFavorite(args)

@@ -7,6 +7,11 @@ import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.ConfigSchema
 import com.openminis.app.config.ConfigValue
 import com.openminis.app.config.fields.ClosureField
+import com.openminis.app.config.readable.ConfigReadable
+import com.openminis.app.config.readable.ConfigValueFormatter
+import com.openminis.app.config.readable.ReadableArg
+import com.openminis.app.config.readable.ReadableLine
+import com.openminis.app.config.readable.RedactedConfigValue
 import com.openminis.app.config.fields.HiddenField
 import com.openminis.app.config.fields.ReadOnlyField
 import com.openminis.app.data.repository.EnvVarRepository
@@ -49,6 +54,7 @@ class EnvVarsCollection(
         return listOf(
             createdAtField(forId),
             noteField(forId),
+            enabledField(forId),
             // Hidden guard: an agent attempt to read or write the
             // value gets a precise permission_denied.
             HiddenField(
@@ -72,6 +78,26 @@ class EnvVarsCollection(
         repo.delete(entry.id)
     }
 
+    // -- [T-config-readable] Readable descriptions (mirrors iOS EnvVarsCollection) --
+    //
+    // Only the variable NAME ever appears; there is no code path here that can
+    // reach a value (values live in the encrypted store and minis-config
+    // never reads them).
+
+    override val readableSubjectFormat: String get() = "Environment variable $%1\$@ – %2\$@"
+
+    override fun entityLabel(id: String): String? = repo.entries.value.firstOrNull { it.key == id }?.key
+
+    /** `add` is refused (a value is required); nothing to describe. */
+    override fun readableForAdd(payload: RedactedConfigValue): List<ReadableLine> = emptyList()
+
+    override fun readableForRemove(id: String): List<ReadableLine> {
+        val e = repo.entries.value.firstOrNull { it.key == id } ?: return emptyList()
+        return listOf(
+            ReadableLine("Delete environment variable $%@ (its value is removed from Keychain)", listOf(ReadableArg.Text(e.key))),
+        )
+    }
+
     private fun createdAtField(key: String): ConfigField =
         ReadOnlyField(
             path = "envvars.$key.createdAt",
@@ -85,6 +111,33 @@ class EnvVarsCollection(
             },
         )
 
+    /**
+     * [T-envvar-disable] On / off without touching the value. SENSITIVE: turning
+     * a variable back on hands its secret to every later shell, so the user sees
+     * it in the confirmation sheet like any other credential change.
+     */
+    private fun enabledField(key: String): ConfigField =
+        ClosureField(
+            path = "envvars.$key.enabled",
+            displayName = "Enabled",
+            description = "Whether the variable is injected into shells, terminals and MCP servers. " +
+                "A disabled variable keeps its value and note.",
+            valueSchema = ConfigSchema.Bool,
+            risk = ConfigRisk.SENSITIVE,
+            revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Bool(on = "Enabled", off = "Disabled"), label = "Status"),
+            reader = {
+                val e = repo.entries.value.firstOrNull { it.key == key }
+                if (e == null) ConfigValue.Null else ConfigValue.Bool(e.enabled)
+            },
+            writer = { v ->
+                val b = (v as? ConfigValue.Bool)?.value ?: throw ConfigError.TypeMismatch("bool")
+                val e = repo.entries.value.firstOrNull { it.key == key }
+                    ?: throw ConfigError.UnknownPath("envvars.$key")
+                repo.setEnabled(e.id, b)
+            },
+        )
+
     private fun noteField(key: String): ConfigField =
         ClosureField(
             path = "envvars.$key.note",
@@ -93,6 +146,7 @@ class EnvVarsCollection(
             valueSchema = ConfigSchema.Str(maxLength = 500),
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Text(preview = 60)),
             reader = {
                 val e = repo.entries.value.firstOrNull { it.key == key }
                 if (e == null) ConfigValue.Null

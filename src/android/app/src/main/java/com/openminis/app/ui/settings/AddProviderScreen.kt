@@ -661,8 +661,10 @@ private fun ColumnScope.ApiKeyConfigSection(
 
     // ── Save button (outside any section — terminal action) ────────────
     Spacer(Modifier.height(20.dp))
+    val saveOnce = rememberSaveOnce()
     MinisButton(
         onClick = {
+            if (!saveOnce.claim()) return@MinisButton
             val trimmedBase = customBaseURL.trim()
             val instance = ProviderInstance(
                 id = UUID.randomUUID().toString(),
@@ -825,8 +827,10 @@ private fun ColumnScope.OAuthConfigSection(
             }
         }
         Spacer(Modifier.height(20.dp))
+        val saveOnce = rememberSaveOnce()
         MinisButton(
             onClick = {
+                if (!saveOnce.claim()) return@MinisButton
                 val instance = ProviderInstance(
                     id = pendingInstanceId,
                     label = label.ifBlank { providerType.displayName },
@@ -1074,8 +1078,10 @@ private fun ColumnScope.OAuthConfigSection(
         }
 
         Spacer(Modifier.height(20.dp))
+        val saveOnce = rememberSaveOnce()
         MinisButton(
             onClick = {
+                if (!saveOnce.claim()) return@MinisButton
                 val trimmedBase = customBaseURL.trim()
                 val instance = ProviderInstance(
                     id = UUID.randomUUID().toString(),
@@ -1108,3 +1114,19 @@ private fun maskOAuthToken(token: String): String {
     val edge = minOf(10, token.length / 3)
     return token.take(edge) + "*".repeat(10) + token.takeLast(edge)
 }
+
+/**
+ * One save per Add Provider screen. A fast double tap reached the button's
+ * onClick twice before the screen popped: each made a new UUID and
+ * addInstance'd it (two identical providers), and the second onSaved()
+ * popped the provider list as well - several taps popped past it into a
+ * blank screen (kilolonion, 10-19). The first tap claims the save; later
+ * taps do nothing.
+ */
+internal class SaveOnce {
+    private val claimed = java.util.concurrent.atomic.AtomicBoolean(false)
+    fun claim(): Boolean = claimed.compareAndSet(false, true)
+}
+
+@Composable
+private fun rememberSaveOnce(): SaveOnce = remember { SaveOnce() }

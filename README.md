@@ -181,8 +181,8 @@ git push --force-with-lease
 | `src/ios/Agent/Session/SystemPromptProseStore.swift` | 持久化 store（默认文本 + 读写/重置/上限/清洗） |
 | `src/ios/Views/Settings/SystemPromptSettingsView.swift` | 设置页编辑器（计数、超限提示、保存、重置、未保存守卫） |
 | `src/ios/Shared/Config/ConfigRegistry+Builtins.swift` | `system_prompt.prose`（`minis-config` 字段） |
-| `src/ios/Agent/Chat/AIChatViewModel.swift` | `baseSystemPrompt` 从 store 取 prose 并拼接工具 bullet + 时间/语言行 |
-| `src/ios/Views/ContentView.swift` / `Shared/DeepLinkRouter.swift` / `Shared/DeepLinkCoordinator.swift` | 路由与设置入口（含 `minis://settings/system-prompt` 深链） |
+| `src/ios/Agent/Chat/AIChatViewModel+SystemPrompt.swift` | `baseSystemPrompt` 从 store 取 prose 并拼接工具 bullet + 时间/语言行 |
+| `src/ios/Views/Settings/SettingsSheet.swift` / `Shared/DeepLinkRouter.swift` / `Shared/DeepLinkCoordinator.swift` | 路由与设置入口（含 `minis://settings/system-prompt` 深链） |
 
 > iOS 侧为 Android 实现的镜像，`DEFAULT_CONTENT` 文案按平台分别提取（iSH/Safari/`apple-*` vs PRoot/Chrome/`android-*`），API 一致；上限规则也随平台（iOS：统一 2000 token）。
 > iOS 编译验证按请求推迟，尚未跑过 `xcodebuild`。

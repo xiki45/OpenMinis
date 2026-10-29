@@ -227,7 +227,8 @@ class TitleCandidatesTest {
         assertTrue(gaveUp.contains("applyFallbackTitleFromFirstMessage(\"all title candidates failed\")"))
         assertTrue("the single-model resolver is gone", !vm.contains("fun resolveTitleProvider("))
 
-        val list = ProductionSources.read("ui/sessions/SessionListViewModel.kt")
+        // [T-sessions-cli-update] Regenerate Title moved to SessionTitleRegenerator.
+        val list = ProductionSources.read("ui/sessions/SessionTitleRegenerator.kt")
         assertTrue(list.contains("com.openminis.app.ui.chat.TitleCandidates.forSession("))
         assertTrue(list.contains("PrimarySource.parse(session.modelBinding)"))
         assertTrue(list.contains("com.openminis.app.ui.chat.TitleCandidates.walk(candidates, origin = origin)"))

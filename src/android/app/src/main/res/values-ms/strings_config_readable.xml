@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">Kunci API</string>
+    <string name="cfgr_all_models">Semua model</string>
+    <string name="cfgr_allow_minis_config">Benarkan minis-config</string>
+    <string name="cfgr_applies_to">Terpakai untuk</string>
+    <string name="cfgr_audio_input">Input audio</string>
+    <string name="cfgr_audio_output">Output audio</string>
+    <string name="cfgr_automatic">Automatik</string>
+    <string name="cfgr_chinese">Cina</string>
+    <string name="cfgr_custom">Tersuai</string>
+    <string name="cfgr_custom_user_agent">User-Agent Tersuai</string>
+    <string name="cfgr_dark">Gelap</string>
+    <string name="cfgr_default">Lalai</string>
+    <string name="cfgr_disabled">Tidak aktif</string>
+    <string name="cfgr_display_name">Nama paparan</string>
+    <string name="cfgr_enabled">Aktif</string>
+    <string name="cfgr_english">Inggeris</string>
+    <string name="cfgr_hidden">Tersembunyi</string>
+    <string name="cfgr_high">Tinggi</string>
+    <string name="cfgr_image_input">Input imej</string>
+    <string name="cfgr_image_output">Output imej</string>
+    <string name="cfgr_label">Label</string>
+    <string name="cfgr_light">Cerah</string>
+    <string name="cfgr_low">Rendah</string>
+    <string name="cfgr_max">Maks</string>
+    <string name="cfgr_med">Sederhana</string>
+    <string name="cfgr_medium">Sederhana</string>
+    <string name="cfgr_models">Model</string>
+    <string name="cfgr_name">Nama</string>
+    <string name="cfgr_not_set">Belum ditetapkan</string>
+    <string name="cfgr_note">Nota</string>
+    <string name="cfgr_off">Tidak Aktif</string>
+    <string name="cfgr_on">Aktif</string>
+    <string name="cfgr_pdf_input">Input PDF</string>
+    <string name="cfgr_privacy_mode">Mod Privasi</string>
+    <string name="cfgr_send">Hantar</string>
+    <string name="cfgr_status">Status</string>
+    <string name="cfgr_system">Sistem</string>
+    <string name="cfgr_theme">Tema</string>
+    <string name="cfgr_ultra">Ultra</string>
+    <string name="cfgr_video_input">Input video</string>
+    <string name="cfgr_video_output">Output video</string>
+    <string name="cfgr_xhigh">Sangat Tinggi</string>
+    <string name="cfgr_fold_consecutive_tool_calls">Lipat panggilan alat berturut-turut</string>
+</resources>

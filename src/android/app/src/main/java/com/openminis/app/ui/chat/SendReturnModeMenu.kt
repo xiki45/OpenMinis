@@ -1,5 +1,6 @@
 package com.openminis.app.ui.chat
 
+import com.openminis.app.ui.components.DecorativeSpinner
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
@@ -30,6 +31,9 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -200,6 +204,12 @@ fun ComposerSendButton(
     canActivate: Boolean,
     onSend: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * [T-voice-send-busy] A voice send is waiting for recognition: a greyed
+     * circle with a spinner that takes no taps, until the message has gone
+     * out or the wait was abandoned (iOS b48cfdbfe).
+     */
+    busy: Boolean = false,
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -217,12 +227,13 @@ fun ComposerSendButton(
         modifier = modifier
             .size(38.dp)
             .background(
-                if (canActivate) ChatColors.sendButton else ChatColors.sendButtonDisabled,
+                if (canActivate && !busy) ChatColors.sendButton else ChatColors.sendButtonDisabled,
                 CircleShape,
             )
             .clip(CircleShape)
             .combinedClickable(
                 onClick = {
+                    if (busy) return@combinedClickable
                     val since = if (lastDismissAt < 0) -1L else SystemClock.uptimeMillis() - lastDismissAt
                     if (SendReturnMode.tapShouldSend(canActivate, menuVisible, since)) onSend()
                 },
@@ -241,13 +252,21 @@ fun ComposerSendButton(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            Icons.Default.ArrowUpward,
-            contentDescription = "Send",
-            tint = if (canActivate) ChatColors.background
-            else ChatColors.primaryText.copy(alpha = 0.5f),
-            modifier = Modifier.size(20.dp),
-        )
+        if (busy) {
+            DecorativeSpinner(
+                color = ChatColors.primaryText.copy(alpha = 0.6f),
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 1.5.dp,
+            )
+        } else {
+            Icon(
+                Icons.Default.ArrowUpward,
+                contentDescription = "Send",
+                tint = if (canActivate) ChatColors.background
+                else ChatColors.primaryText.copy(alpha = 0.5f),
+                modifier = Modifier.size(20.dp),
+            )
+        }
         SendReturnModeMenu(
             expanded = menuVisible,
             sendsOnReturn = sendsOnReturn,
@@ -282,6 +301,38 @@ private fun SendReturnModeMenu(
     sendsOnReturn: Boolean,
     onSelect: (Boolean) -> Unit,
     onDismissRequest: () -> Unit,
+) {
+    ComposerChoiceMenu(
+        expanded = expanded,
+        header = stringResource(R.string.appearance_section_return_key),
+        onDismissRequest = onDismissRequest,
+    ) {
+        ReturnModeRow(
+            label = stringResource(R.string.send_return_mode_sends),
+            icon = Icons.AutoMirrored.Outlined.Send,
+            selected = sendsOnReturn,
+            onClick = { onSelect(true) },
+        )
+        ReturnModeRow(
+            label = stringResource(R.string.send_return_mode_newline),
+            icon = Icons.AutoMirrored.Outlined.KeyboardReturn,
+            selected = !sendsOnReturn,
+            onClick = { onSelect(false) },
+        )
+    }
+}
+
+/**
+ * The popup shell shared by the Send button's Return-key chooser and
+ * (since [T-stop-mode-longpress]) the Stop button's stop-mode chooser: a
+ * header plus single-choice [rows], growing out of the anchor button.
+ */
+@Composable
+private fun ComposerChoiceMenu(
+    expanded: Boolean,
+    header: String,
+    onDismissRequest: () -> Unit,
+    rows: @Composable () -> Unit,
 ) {
     val progress = remember { Animatable(0f) }
     var mounted by remember { mutableStateOf(false) }
@@ -364,7 +415,6 @@ private fun SendReturnModeMenu(
             border = border,
         ) {
             Column(modifier = Modifier.padding(vertical = 6.dp).selectableGroup()) {
-                val header = stringResource(R.string.appearance_section_return_key)
                 Text(
                     text = header,
                     style = MaterialTheme.typography.labelMedium,
@@ -373,18 +423,7 @@ private fun SendReturnModeMenu(
                         .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 4.dp)
                         .semantics { heading() },
                 )
-                ReturnModeRow(
-                    label = stringResource(R.string.send_return_mode_sends),
-                    icon = Icons.AutoMirrored.Outlined.Send,
-                    selected = sendsOnReturn,
-                    onClick = { onSelect(true) },
-                )
-                ReturnModeRow(
-                    label = stringResource(R.string.send_return_mode_newline),
-                    icon = Icons.AutoMirrored.Outlined.KeyboardReturn,
-                    selected = !sendsOnReturn,
-                    onClick = { onSelect(false) },
-                )
+                rows()
             }
         }
     }
@@ -427,6 +466,121 @@ private fun ReturnModeRow(
             )
         } else {
             Spacer(modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/**
+ * [T-stop-mode-longpress] Observable read of Confirm Before Stopping, so the
+ * chooser's check mark follows a change made in Settings or minis-config.
+ * Same listener pattern as [rememberReturnKeySendsMessage].
+ */
+@Composable
+fun rememberConfirmBeforeStopping(context: Context): State<Boolean> {
+    val prefs = remember(context) { getAppearancePrefs(context) }
+    val read = { p: SharedPreferences -> p.getBoolean(StopConfirmPolicy.SETTINGS_KEY, StopConfirmPolicy.DEFAULT_ENABLED) }
+    val state = remember(prefs) { mutableStateOf(read(prefs)) }
+    DisposableEffect(prefs) {
+        // Held strongly by this effect: SharedPreferences keeps listeners weakly.
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
+            if (key == StopConfirmPolicy.SETTINGS_KEY) state.value = read(p)
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        state.value = read(prefs)
+        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    return state
+}
+
+/** [T-stop-mode-longpress] Single writer used by the stop-mode chooser. */
+fun setConfirmBeforeStopping(context: Context, confirm: Boolean) {
+    getAppearancePrefs(context).edit().putBoolean(StopConfirmPolicy.SETTINGS_KEY, confirm).apply()
+}
+
+/**
+ * [T-stop-mode-longpress] The composer's Stop button. Tap = [onStop] (the
+ * caller decides whether to confirm first, via [StopConfirmPolicy]);
+ * long-press = a chooser between Stop Immediately and Confirm Before Stopping,
+ * writing the same preference as Settings > Appearance. Mirrors iOS
+ * ChatSendButton.stopModeMenu.
+ *
+ * The dismiss-tap guard matters more here than on Send: the outside tap that
+ * closes the chooser often lands on this very button, and must not stop the task.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ComposerStopButton(
+    contentDescription: String,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    val confirmBeforeStopping by rememberConfirmBeforeStopping(context)
+    var menuVisible by remember { mutableStateOf(false) }
+    var lastDismissAt by remember { mutableLongStateOf(-1L) }
+    val closeMenu = {
+        if (menuVisible) {
+            menuVisible = false
+            lastDismissAt = SystemClock.uptimeMillis()
+        }
+    }
+    val a11yLabel = stringResource(R.string.stop_mode_a11y_action)
+    Box(
+        modifier = modifier
+            .size(38.dp)
+            .background(Color(0xFFFF3B30), CircleShape)
+            .clip(CircleShape)
+            .combinedClickable(
+                onClick = {
+                    val since = if (lastDismissAt < 0) -1L else SystemClock.uptimeMillis() - lastDismissAt
+                    if (SendReturnMode.tapShouldSend(canActivate = true, menuVisible = menuVisible, msSinceMenuDismiss = since)) onStop()
+                },
+                onLongClick = { menuVisible = true },
+            )
+            .semantics {
+                customActions = listOf(
+                    CustomAccessibilityAction(a11yLabel) {
+                        menuVisible = true
+                        true
+                    },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Default.Stop,
+            contentDescription = contentDescription,
+            tint = Color.White,
+            modifier = Modifier.size(20.dp),
+        )
+        ComposerChoiceMenu(
+            expanded = menuVisible,
+            header = stringResource(R.string.stop_mode_menu_title),
+            onDismissRequest = closeMenu,
+        ) {
+            val select = { confirm: Boolean ->
+                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                if (confirm != confirmBeforeStopping) {
+                    setConfirmBeforeStopping(context, confirm)
+                    com.openminis.app.logging.AppLogger.info(
+                        "ChatScreen", "[StopConfirm] set from stop-button menu: ${if (confirm) "confirm" else "immediate"}",
+                    )
+                }
+                closeMenu()
+            }
+            ReturnModeRow(
+                label = stringResource(R.string.stop_mode_immediately),
+                icon = Icons.Outlined.StopCircle,
+                selected = !confirmBeforeStopping,
+                onClick = { select(false) },
+            )
+            ReturnModeRow(
+                label = stringResource(R.string.appearance_confirm_before_stopping_title),
+                icon = Icons.Outlined.HelpOutline,
+                selected = confirmBeforeStopping,
+                onClick = { select(true) },
+            )
         }
     }
 }

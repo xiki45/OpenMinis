@@ -59,6 +59,23 @@ object MarkdownParser {
     /** Regex for a standalone `![alt](url)` node on its own line. */
     private val standaloneImageRegex = Regex("""^\s*!\[([^\]]*)\]\(([^)\s]+)\)\s*$""")
 
+    // Block patterns are compiled once. Each Regex(...) built inside the
+    // per-line loop compiled a fresh ICU pattern whose native memory waits for
+    // a GC to be freed; parsing a long session that way piled up native
+    // mappings until vm.max_map_count was hit and Scudo aborted (OpenMinis#426).
+    private val thematicBreakRegex = Regex("^\\s{0,3}([-*_])\\s*\\1\\s*\\1(\\s*\\1)*\\s*$")
+    private val headingRegex = Regex("^(#{1,6})\\s+(.+)$")
+    private val bulletItemRegex = Regex("^\\s{0,3}[-*+]\\s+(.*)$")
+    private val bulletMarkerRegex = Regex("^\\s{0,3}[-*+]\\s")
+    private val bulletStartRegex = Regex("^\\s{0,3}[-*+]\\s+")
+    // Marker digits capped at 2; keep the two numbered-list patterns in sync.
+    private val numberedItemRegex = Regex("^\\s{0,3}(\\d{1,2})[.)\\s]\\s*(.*)$")
+    private val numberedStartRegex = Regex("^\\s{0,3}\\d{1,2}[.)\\s]\\s")
+    private val tableSeparatorCellRegex = Regex("^:?-+:?$")
+    private val blankLineRegex = Regex("\\n[ \\t]*\\n")
+    private val trailingNewlineRegex = Regex("\\n[ \\t]*$")
+    private val mathPlaceholderRegex = Regex("$ORC" + "MATH(\\d+)" + "$ORC")
+
     /**
      * Classify a media URL by file extension. Extracts the extension from the
      * *last path segment only* so filenames that contain '#' or '?' (either
@@ -124,14 +141,14 @@ object MarkdownParser {
             }
 
             // Thematic break
-            if (line.matches(Regex("^\\s{0,3}([-*_])\\s*\\1\\s*\\1(\\s*\\1)*\\s*$"))) {
+            if (line.matches(thematicBreakRegex)) {
                 blocks.add(Block.ThematicBreak)
                 i++
                 continue
             }
 
             // ATX Heading
-            val headingMatch = Regex("^(#{1,6})\\s+(.+)$").find(line)
+            val headingMatch = headingRegex.find(line)
             if (headingMatch != null) {
                 val level = headingMatch.groupValues[1].length
                 val content = headingMatch.groupValues[2].trimEnd().removeSuffix("#").trimEnd()
@@ -164,17 +181,17 @@ object MarkdownParser {
             }
 
             // Bullet list (-, *, +)
-            val bulletMatch = Regex("^\\s{0,3}[-*+]\\s+(.*)$").find(line)
+            val bulletMatch = bulletItemRegex.find(line)
             if (bulletMatch != null) {
                 val items = mutableListOf<ListItem>()
                 while (i < lines.size) {
-                    val bm = Regex("^\\s{0,3}[-*+]\\s+(.*)$").find(lines[i])
+                    val bm = bulletItemRegex.find(lines[i])
                     if (bm == null) break
                     val content = bm.groupValues[1]
                     items.add(parseListItem(content))
                     i++
                     // Collect continuation lines (indented)
-                    while (i < lines.size && lines[i].startsWith("  ") && !Regex("^\\s{0,3}[-*+]\\s").matches(lines[i])) {
+                    while (i < lines.size && lines[i].startsWith("  ") && !bulletMarkerRegex.matches(lines[i])) {
                         items[items.lastIndex] = items.last().copy(
                             content = items.last().content + "\n" + lines[i].trimStart()
                         )
@@ -190,12 +207,12 @@ object MarkdownParser {
             // misparsed as ordered-list item #2020 (user report). Real lists
             // rarely exceed 99 items; CommonMark itself caps markers at 9
             // digits, we deliberately go tighter.
-            val numMatch = Regex("^\\s{0,3}(\\d{1,2})[.)\\s]\\s*(.*)$").find(line)
+            val numMatch = numberedItemRegex.find(line)
             if (numMatch != null) {
                 val startNum = numMatch.groupValues[1].toIntOrNull() ?: 1
                 val items = mutableListOf<ListItem>()
                 while (i < lines.size) {
-                    val nm = Regex("^\\s{0,3}(\\d{1,2})[.)\\s]\\s*(.*)$").find(lines[i])
+                    val nm = numberedItemRegex.find(lines[i])
                     if (nm == null) break
                     items.add(ListItem(nm.groupValues[2]))
                     i++
@@ -233,10 +250,10 @@ object MarkdownParser {
                 val pl = lines[i]
                 if (pl.isBlank() || pl.trimStart().startsWith("```") ||
                     pl.trimStart().startsWith("# ") || pl.trimStart().startsWith("> ") ||
-                    Regex("^\\s{0,3}[-*+]\\s+").containsMatchIn(pl) ||
+                    bulletStartRegex.containsMatchIn(pl) ||
                     // Keep in sync with the numbered-list marker above (≤2 digits).
-                    Regex("^\\s{0,3}\\d{1,2}[.)\\s]\\s").containsMatchIn(pl) ||
-                    pl.matches(Regex("^\\s{0,3}([-*_])\\s*\\1\\s*\\1(\\s*\\1)*\\s*$")) ||
+                    numberedStartRegex.containsMatchIn(pl) ||
+                    pl.matches(thematicBreakRegex) ||
                     standaloneImageRegex.containsMatchIn(pl)
                 ) break
                 paraLines.add(pl)
@@ -263,7 +280,7 @@ object MarkdownParser {
         val trimmed = line.trim()
         if (!trimmed.contains('-')) return false
         val cells = trimmed.split('|').filter { it.isNotBlank() }
-        return cells.all { it.trim().matches(Regex("^:?-+:?$")) }
+        return cells.all { it.trim().matches(tableSeparatorCellRegex) }
     }
 
     private fun parseTable(lines: List<String>, startIdx: Int): Pair<Block.Table, Int>? {
@@ -468,11 +485,17 @@ object MarkdownParser {
             }
 
             // $ … $ — inline math (with currency-skip heuristic).
-            if (chars[i] == '$' && i + 1 < n && chars[i + 1] != '$' && chars[i + 1] != ' ') {
+            // [T-math-dollar-rules] `${NAME}` and `$NAME` are shell variables,
+            // not openers (rules 2 and 3 above `variableNameLength`).
+            if (chars[i] == '$' && i + 1 < n && chars[i + 1] != '$' && chars[i + 1] != ' ' &&
+                !opensVariable(chars, i)
+            ) {
                 val end = findSingleDollar(chars, i + 1, codeMask)
                 if (end != null) {
                     val latex = chars.substring(i + 1, end)
-                    if (looksLikeMath(latex)) {
+                    // [T-android-table-cell-katex-false-positive] Also skip a
+                    // span that is really a table-cell artifact (iOS 5b1d72515).
+                    if (looksLikeMath(latex) && !isTablePipeArtifact(latex)) {
                         spans.add(MathSpan(makePlaceholder(spans.size), latex, false))
                         out.append(spans.last().placeholder)
                         i = end + 1
@@ -635,13 +658,13 @@ object MarkdownParser {
     private fun isPlausibleDisplayBody(body: String): Boolean {
         if (!body.contains('\n')) return true
         // A blank line means a paragraph break — prose, not one formula.
-        if (Regex("\\n[ \\t]*\\n").containsMatchIn(body)) return false
+        if (blankLineRegex.containsMatchIn(body)) return false
         // The conventional block shape puts the closing `$$` alone on its own
         // line, i.e. the body ends with a newline (plus optional indent). That
         // is a strong enough signal on its own — requiring a LaTeX glyph here
         // too would wrongly demote glyph-free but valid math such as
         // "$$\n1 + 2 = 3\n$$" to plain text.
-        if (Regex("\\n[ \\t]*$").containsMatchIn(body)) return true
+        if (trailingNewlineRegex.containsMatchIn(body)) return true
         // Otherwise the closer is mid-line, which is the shape a stray
         // delimiter in prose produces — require a LaTeX-ish glyph.
         return body.any { it == '\\' || it == '^' || it == '_' || it == '{' || it == '}' }
@@ -664,13 +687,126 @@ object MarkdownParser {
         var i = from
         while (i < n) {
             if (chars[i] == '\\' && i + 1 < n) { i += 2; continue }
-            if (chars[i] == '$' && (i == 0 || chars[i - 1] != ' ') &&
-                (codeMask == null || !codeMask[i])
-            ) return i
+            val plainDollar = chars[i] == '$' && (codeMask == null || !codeMask[i])
+            // [T-math-dollar-rules] Rule 1: the dollar of an amount or of a
+            // variable starts that, it does not end a formula
+            // (`$5-$10`, `$HOME/bin:$PATH`).
+            if (plainDollar && startsAmountOrVariable(chars, i)) return null
+            if (plainDollar && (i == 0 || chars[i - 1] != ' ')) return i
+            // Rule 4: after a blank it opens the next thing. What began with a
+            // digit ends there, as the amount it was: in "$10 and $x+1$" the
+            // formula is x+1.
+            if (plainDollar && from < n && isAsciiDigit(chars[from])) return null
             if (chars[i] == '\n') return null
             i++
         }
         return null
+    }
+
+    // ─── Amounts and shell variables ─────────────────────────────────────────
+    //
+    // [T-math-dollar-rules] Port of iOS 216160978 + 23635b48e (the Windows
+    // port has the same rules in minis-markdown/src/math.rs). All three run
+    // one list of test vectors: DollarMathRulesTest here,
+    // MathExtractorDollarRulesTests.swift on iOS, DOLLAR_VECTORS on Windows.
+    //
+    // A dollar is also money and a shell's variable mark: "$5-$10" lost both
+    // dollars and became the italic formula "5-", and PATH=$HOME/bin:$PATH
+    // lost its dollars the same way, because the closer was simply the first
+    // `$` not after a blank. Four rules keep those out of the formulas;
+    // everything else is the extraction as it was.
+    //  1. A `$` followed by a digit (`$10`), by `{NAME}` or by an upper-case
+    //     name (`$HOME`) never *closes* a formula - it begins something.
+    //  2. `${NAME}` never opens a formula.
+    //  3. `$NAME` (upper case, two characters or more) does not open one when
+    //     the name is followed by what follows a variable - the end of the
+    //     line, one of `/ : ; , . " ' ) ]`, or a blank and then a word. It
+    //     still does when a formula goes on: `$AB$`, `$PV = nRT$`,
+    //     `$AB \parallel CD$`.
+    //  4. What opens with `$` and a digit (`$2x+1=5$` is a formula, `$10` an
+    //     amount) does not reach past a later `$` that stands after a blank.
+    // A `$` followed by a digit may still open a formula: an amount on its own
+    // was never one ([looksLikeMath]). Known, accepted losses: `$AB/CD$` and
+    // `$AB:CD$` read as variables.
+
+    private fun isAsciiDigit(c: Char): Boolean = c in '0'..'9'
+    private fun isAsciiUpper(c: Char): Boolean = c in 'A'..'Z'
+    private fun isAsciiLower(c: Char): Boolean = c in 'a'..'z'
+
+    /**
+     * The length of an upper-case variable name at [from], 0 when there is
+     * none: two or more of `A-Z 0-9` starting with a letter, then any number
+     * of `_WORD` parts that each start with a letter (`HOME`, `MY_VAR`,
+     * `XDG_CONFIG_HOME`), with no lower-case letter after it (`$NaCl`).
+     *
+     * An underscore is also a subscript, so the name stops short of one that
+     * is followed by a digit, and a single letter is no name: `$X_1, X_2$`,
+     * `$H_0: \mu = 0$`, `$P_1 V_1 = P_2 V_2$` are formulas (iOS 23635b48e: the
+     * first version counted `_` and digits into the name).
+     */
+    private fun variableNameLength(chars: String, from: Int): Int {
+        val n = chars.length
+        fun upper(i: Int) = i < n && isAsciiUpper(chars[i])
+        fun part(i: Int) = i < n && (isAsciiUpper(chars[i]) || isAsciiDigit(chars[i]))
+        if (!upper(from)) return 0
+        var len = 1
+        while (part(from + len)) len++
+        if (len < 2) return 0
+        while (from + len < n && chars[from + len] == '_' && upper(from + len + 1)) {
+            len += 2
+            while (part(from + len)) len++
+        }
+        // What follows continues the word (`NaCl`) or is a subscript (`AB_1`):
+        // a formula's, not a variable's.
+        val continued = from + len < n && isAsciiLower(chars[from + len])
+        val subscripted = from + len < n && chars[from + len] == '_'
+        return if (continued || subscripted) 0 else len
+    }
+
+    /**
+     * `{NAME}` at [from], any case: `[A-Za-z_][A-Za-z0-9_]*` in braces - and
+     * not followed by `^` or `_`, which make it a formula's group
+     * (`${a}^{2}+{b}^{2}$`, `${x}^2$`).
+     */
+    private fun isBracedVariable(chars: String, from: Int): Boolean {
+        val n = chars.length
+        if (from >= n || chars[from] != '{') return false
+        var name = 0
+        while (from + 1 + name < n) {
+            val c = chars[from + 1 + name]
+            if (!(c in 'a'..'z' || isAsciiUpper(c) || isAsciiDigit(c) || c == '_')) break
+            name++
+        }
+        if (name == 0 || isAsciiDigit(chars[from + 1])) return false
+        if (from + 1 + name >= n || chars[from + 1 + name] != '}') return false
+        val after = from + 2 + name
+        return !(after < n && (chars[after] == '^' || chars[after] == '_'))
+    }
+
+    /** Rule 1: the `$` at [at] begins an amount or a variable. */
+    private fun startsAmountOrVariable(chars: String, at: Int): Boolean {
+        if (at + 1 < chars.length && isAsciiDigit(chars[at + 1])) return true
+        return isBracedVariable(chars, at + 1) || variableNameLength(chars, at + 1) > 0
+    }
+
+    /** Rules 2 and 3: the `$` at [at] is a variable's, not a formula's opener. */
+    private fun opensVariable(chars: String, at: Int): Boolean {
+        val n = chars.length
+        if (isBracedVariable(chars, at + 1)) return true
+        val len = variableNameLength(chars, at + 1)
+        if (len == 0) return false
+        val after = at + 1 + len
+        if (after >= n) return true
+        val c = chars[after]
+        if (c == '\n' || c == '\r') return true
+        if (c in "/:;,.\"')]") return true
+        if (c == ' ' || c == '\t') {
+            var k = after
+            while (k < n && (chars[k] == ' ' || chars[k] == '\t')) k++
+            if (k >= n) return true
+            return chars[k].isLetterOrDigit() || chars[k] == '\n' || chars[k] == '\r'
+        }
+        return false
     }
 
     /**
@@ -701,6 +837,36 @@ object MarkdownParser {
         // 30 chars is almost certainly a variable reference.
         if (content.length <= 30 && content.all { it.isLetterOrDigit() }) return true
         return content.length > 2
+    }
+
+    /**
+     * [T-android-table-cell-katex-false-positive] True when an inline `$ … $`
+     * candidate is really a markdown table-cell artifact — a `$` that paired
+     * across `|` column separators — rather than a formula. Port of iOS
+     * `isTablePipeArtifact` (5b1d72515); Windows has the same rule
+     * (`is_table_pipe_artifact`, minis-markdown/src/math.rs).
+     *
+     * Math is extracted from the raw markdown before table structure is known,
+     * so a row like `| a | $x-1 | y$ |` paired the two dollars and rendered
+     * "x-1 | y" as one serif-italic formula across two cells. Two signals,
+     * both of which a real formula avoids:
+     *  1. An unescaped pipe with whitespace on a side — the column separator
+     *     is written ` | ` / `| ` / ` |`; real LaTeX keeps bars flush.
+     *  2. An ODD number of unescaped pipes — absolute-value / norm bars come in
+     *     pairs (`|x|`, `\frac{|a|}{|b|}`), so `n+1|` is a stray separator.
+     * Escaped `\|` (a LaTeX norm) is never counted.
+     */
+    private fun isTablePipeArtifact(content: String): Boolean {
+        var bare = 0
+        for (idx in content.indices) {
+            if (content[idx] != '|') continue
+            if (idx > 0 && content[idx - 1] == '\\') continue // escaped norm bar
+            bare++
+            val prevIsSpace = idx > 0 && content[idx - 1].isWhitespace()
+            val nextIsSpace = idx + 1 < content.length && content[idx + 1].isWhitespace()
+            if (prevIsSpace || nextIsSpace) return true
+        }
+        return bare % 2 == 1
     }
 
     /**
@@ -745,7 +911,7 @@ object MarkdownParser {
 
         val out = mutableListOf<Block>()
         val buf = StringBuilder()
-        val regex = Regex("$ORC" + "MATH(\\d+)" + "$ORC")
+        val regex = mathPlaceholderRegex
         var lastEnd = 0
         for (match in regex.findAll(content)) {
             val full = match.value

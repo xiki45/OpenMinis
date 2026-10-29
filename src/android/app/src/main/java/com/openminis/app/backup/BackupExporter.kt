@@ -433,11 +433,7 @@ class BackupExporter(
         val repo = app?.providerRepositoryOrNull
         val config = repo?.config?.value ?: com.openminis.app.data.model.ProviderConfig()
         val url = File(dataDir, "provider_config.json")
-        url.writeText(
-            BackupFormat.json.encodeToString(
-                com.openminis.app.data.model.ProviderConfig.serializer(), config
-            )
-        )
+        url.writeText(BackupProviderWire.encode(config))
         var bytes = url.length()
 
         val ruleCount = exportThinkingRules(dataDir)
@@ -529,7 +525,7 @@ class BackupExporter(
 
     /**
      * Env-var METADATA only → `data/env_vars.json` (a JSON array of
-     * id/key/note/createdAt). VALUES ride in secrets.json under the credential
+     * id/key/note/createdAt, plus enabled=false for a disabled one). VALUES ride in secrets.json under the credential
      * policy. Returns null when there are no variables, so an empty list adds
      * no category. Mirrors iOS `exportEnvironmentVariables`.
      */
@@ -538,7 +534,7 @@ class BackupExporter(
         val entries = repo?.entries?.value ?: emptyList()
         if (entries.isEmpty()) return null
         val meta = entries.map {
-            BackupEnvVarMeta(id = it.id, key = it.key, note = it.note, createdAt = it.createdAt)
+            BackupEnvVarMeta(id = it.id, key = it.key, note = it.note, createdAt = it.createdAt, enabled = it.enabled)
         }
         val url = File(dataDir, "env_vars.json")
         url.writeText(
@@ -583,9 +579,9 @@ class BackupExporter(
         if (providerSecrets.isEmpty() && envSecrets.isEmpty()) return
 
         val secrets = BackupSecrets(providers = providerSecrets, envVars = envSecrets)
-        File(staging, "secrets.json").writeText(
-            BackupFormat.json.encodeToString(BackupSecrets.serializer(), secrets)
-        )
+        // [T-port-backup-secrets-defaults] Written with defaults, so older
+        // iOS builds that require every section can read it (see encodeSecrets).
+        File(staging, "secrets.json").writeText(BackupFormat.encodeSecrets(secrets))
         AppLogger.warning(
             TAG,
             "[Backup] package contains UNENCRYPTED credentials (stage 3a): " +

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">A(z) „%1$s” egy mappa, amelyet a Minis csatol ide, ezért a fájlböngészőből nem törölhető. Semmi sem lett törölve. Külső mappát a Beállítások › Külső mappák csatolása menüben távolíthatsz el.</string>
+</resources>

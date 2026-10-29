@@ -293,28 +293,106 @@ object ScheduledTaskDetailModel {
 
     // ── chat card subtitle ──────────────────────────────────────────────────
 
-    sealed class CardSubtitle {
-        object Cancelled : CardSubtitle()
-        data class Next(val atMs: Long) : CardSubtitle()
-        object LastRun : CardSubtitle()
-        /** Nothing to say: this fire's "next" time has already gone by. */
-        object None : CardSubtitle()
+    /** Localized pieces of a card's status line (iOS keys in comments). */
+    data class CardPhrases(
+        /** "Run %d" */
+        val run: String,
+        /** "%d left" */
+        val left: String,
+        /** "Next %@" — takes the relative time, e.g. "in 4 min." */
+        val next: String,
+        /** "Task complete" */
+        val complete: String,
+        /** Android-only local echo after cancelling from this card. */
+        val cancelled: String,
+    )
+
+    /** Joins the parts of a card's status line, as iOS does. */
+    const val CARD_SEPARATOR = " · "
+
+    /**
+     * [T-scheduled-card-subline] The second line of a fire's chat card, port of
+     * iOS `AgentCallbackCellView.subline` for a scheduled callback:
+     * "Run N" · "N left" · "Next <relative>" or "Task complete" · trigger, and
+     * the prompt's first line when all of those are empty, so the card is
+     * never just a title.
+     *
+     * Field report: once a task's next fire had passed or it was stopped, every
+     * card of it showed its title over an empty line — the old rule said only
+     * "next fire", and a passed next-fire time says nothing.
+     *
+     * The envelope is a snapshot taken when the fire started, so its next-fire
+     * time goes stale: every card scrolled back to is past it. Only "this fire
+     * had no next one" (no next time, or nothing left) means the task is
+     * complete; a passed time says nothing about it (iOS cbf9c6961 fixed
+     * "Run 1 · 4 left · Task complete" on a task still firing), and the detail
+     * page shows the live state.
+     *
+     * [cancelled] is Android's local echo of a cancel made from this card; it
+     * takes the next-fire slot. [live] is whether the task is still an enabled
+     * timer: when it is not, a next fire still ahead is a promise that will not
+     * be kept, so that slot says cancelled too (iOS keeps saying "Next" until
+     * the time passes). A passed or absent next fire is unaffected, so a task
+     * that ran out its count still reads "Task complete" on its last card.
+     */
+    fun cardSubline(
+        marker: ScheduledTaskMarker,
+        cancelled: Boolean,
+        now: Long,
+        p: CardPhrases,
+        live: Boolean = true,
+        relative: (atMs: Long) -> String,
+    ): String {
+        val parts = mutableListOf<String>()
+        marker.fireIndex?.takeIf { it > 0 }?.let { parts += p.run.format(it) }
+        marker.remaining?.let { parts += p.left.format(it) }
+        val next = marker.nextFireAtMs?.takeIf { it > now }
+        when {
+            cancelled -> parts += p.cancelled
+            next != null -> parts += if (live) p.next.format(relative(next)) else p.cancelled
+            isLastFire(marker) -> parts += p.complete
+        }
+        marker.triggerLabel?.takeIf { it.isNotEmpty() }?.let { parts += it }
+        if (parts.isEmpty()) {
+            marker.prompt.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.let { parts += it }
+        }
+        return parts.joinToString(CARD_SEPARATOR)
+    }
+
+    enum class RelativeUnit { SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, YEAR }
+
+    /**
+     * [T-scheduled-card-subline] The unit and value a relative "in …" label
+     * uses for [seconds] ahead: the largest non-zero unit, truncated, as
+     * Foundation's `RelativeDateTimeFormatter` picks it (90 s → 1 min, 59 min →
+     * 59 min, 25 h → 1 day). Months and years are 30 / 365 days.
+     */
+    fun relativeUnit(seconds: Long): Pair<Long, RelativeUnit> {
+        val s = seconds.coerceAtLeast(0)
+        return when {
+            s < 60 -> s to RelativeUnit.SECOND
+            s < 3_600 -> s / 60 to RelativeUnit.MINUTE
+            s < 86_400 -> s / 3_600 to RelativeUnit.HOUR
+            s < 7 * 86_400 -> s / 86_400 to RelativeUnit.DAY
+            s < 30 * 86_400 -> s / (7 * 86_400) to RelativeUnit.WEEK
+            s < 365 * 86_400 -> s / (30 * 86_400) to RelativeUnit.MONTH
+            else -> s / (365 * 86_400) to RelativeUnit.YEAR
+        }
     }
 
     /**
-     * The second line of a fire's chat card. The envelope is a snapshot
-     * taken when the fire started, so its next-fire time goes stale: every
-     * card scrolled back to is past it. Claiming "Next: <a time in the past>"
-     * there is wrong, and so is the iOS fallback this mirrors the fix for
-     * (cbf9c6961), which said "Task complete" on a task still firing. Only
-     * "this fire had no next one" means last run; a passed time says nothing,
-     * and the detail page shows the live state.
+     * [T-scheduled-card-subline] How long to wait before re-reading the clock
+     * for a relative "in N min." label [waitMs] before the fire: to the next
+     * whole-minute boundary, so the truncated minute count is never a minute
+     * behind (iOS computes it at each render), and to the fire itself inside
+     * the last minute, when the "Next" part goes away.
      */
-    fun cardSubtitle(marker: ScheduledTaskMarker, cancelled: Boolean, now: Long): CardSubtitle {
-        if (cancelled) return CardSubtitle.Cancelled
-        val next = marker.nextFireAtMs ?: return CardSubtitle.LastRun
-        return if (next > now) CardSubtitle.Next(next) else CardSubtitle.None
-    }
+    fun nextTickMs(waitMs: Long): Long =
+        if (waitMs <= 60_000L) waitMs + 1 else (waitMs % 60_000L).let { if (it == 0L) 60_000L else it } + 1
+
+    /** iOS `isLastFire`: the envelope promises no next fire, or nothing is left. */
+    fun isLastFire(marker: ScheduledTaskMarker): Boolean =
+        marker.nextFireAtMs == null || marker.remaining == 0
 
     // ── durations ───────────────────────────────────────────────────────────
 

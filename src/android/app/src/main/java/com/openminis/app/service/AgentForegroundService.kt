@@ -27,6 +27,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -87,6 +89,16 @@ class AgentForegroundService : Service() {
             nowWallMs: Long,
         ): Long = nowWallMs - (nowElapsedMs - instantElapsedMs)
 
+        /**
+         * [T-fgs-idle-revival] Whether a start command should satisfy the FG
+         * contract and then stop, because nothing needs the service. A null
+         * [action] is both an ordinary start and a START_STICKY revival (null
+         * intent); neither may keep an idle service alive. Only Stop is exempt -
+         * it has its own branch.
+         */
+        internal fun startHasNothingToRun(action: String?, shouldRun: Boolean): Boolean =
+            action != ACTION_STOP && !shouldRun
+
         // [T-bg-overlay phase 2 fix] Separate channel + notification id
         // for the SYSTEM_ALERT_WINDOW permission nudge so it can have a
         // higher importance than the ongoing FGS status row (which is
@@ -118,15 +130,53 @@ class AgentForegroundService : Service() {
         /**
          * Starts or updates the foreground service with current status.
          */
-        fun startService(context: Context, sessionCount: Int, toolStatus: String) {
+        /**
+         * [T-scheduled-active-session-android] True between onCreate and
+         * onDestroy. Lets the scheduled hold refresh or stop a running service
+         * without ever starting one from the background.
+         */
+        @Volatile
+        var isAlive: Boolean = false
+            private set
+
+        /**
+         * Start or refresh the service. Returns false when the system refused
+         * the start.
+         *
+         * [T-fgs-start-not-allowed-guard] On Android 12+ a
+         * startForegroundService() from the background without a start
+         * exemption throws ForegroundServiceStartNotAllowedException (an
+         * IllegalStateException). Nothing caught it, so a turn that started
+         * in the background - a debug chat.prompt, or a continuation after an
+         * alarm's allow-list window closed - crashed the whole process from
+         * SessionActivityTracker.setActive, and two such crashes put the app
+         * in safe mode (Pixel 4a, 18:45:46 and 18:53:02). The run itself does
+         * not need the service to proceed: the refusal is logged, the run
+         * continues without it, and SessionActivityTracker retries when the
+         * app comes back to the foreground.
+         */
+        fun startService(context: Context, sessionCount: Int, toolStatus: String): Boolean {
             val intent = Intent(context, AgentForegroundService::class.java).apply {
                 putExtra(EXTRA_SESSION_COUNT, sessionCount)
                 putExtra(EXTRA_TOOL_STATUS, toolStatus)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            return try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                true
+            } catch (e: IllegalStateException) {
+                val kind = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    e is android.app.ForegroundServiceStartNotAllowedException
+                ) "ForegroundServiceStartNotAllowedException" else e.javaClass.simpleName
+                com.openminis.app.logging.AppLogger.warning(
+                    TAG,
+                    "start refused ($kind): ${e.message} - the run continues without the foreground service; " +
+                        "retried when the app comes to the foreground",
+                )
+                false
             }
         }
 
@@ -186,6 +236,7 @@ class AgentForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        isAlive = true
         // Safe-mode bail-out. When CrashFrequencyDetector tripped in
         // MinisApp.onCreate, the Application skipped its lateinit init
         // for repositories — but a sticky FG service that was running
@@ -205,6 +256,7 @@ class AgentForegroundService : Service() {
         startTimeMs = SystemClock.elapsedRealtime()
         acquireWakeLock()
         startOverlayObserver()
+        startAskingObserver()
         Log.d(TAG, "Service created")
     }
 
@@ -281,7 +333,15 @@ class AgentForegroundService : Service() {
         // pair completes within one main-thread message, well under the frame
         // the shade would need to draw it. This is the pattern Android's own
         // docs prescribe for "started, but no longer needed".
-        if (intent != null && intent.action != ACTION_STOP && !SessionActivityTracker.shouldRunServiceNow()) {
+        //
+        // [T-fgs-idle-revival] This also covers `intent == null`: the system
+        // re-creating the service under START_STICKY in a fresh process. The
+        // tracker there is empty (presence, streams and overlay state live in
+        // memory only), so the old `intent != null` exemption promoted a
+        // "0 sessions | Idle" notification and returned START_STICKY again -
+        // an ongoing notification and status-bar chip that nothing would ever
+        // stop, reported as "the Agent is running" with no chat open.
+        if (startHasNothingToRun(intent?.action, SessionActivityTracker.shouldRunServiceNow())) {
             Log.d(TAG, "start with nothing to run — satisfying the FG contract, then stopping")
             try {
                 val stub = buildNotification(0, "Idle")
@@ -317,13 +377,18 @@ class AgentForegroundService : Service() {
             // keep firing in the background. SessionActivityTracker holds
             // the per-session cancel callbacks registered by each VM at
             // streamJob start.
-            SessionActivityTracker.cancelAllActiveStreams()
+            // [T-scheduled-active-session-android] ...and turn off the
+            // scheduled tasks keeping chats active: otherwise their hold keeps
+            // shouldRunService() true and the next refresh restarts the service.
+            SessionActivityTracker.stopAllByUser()
             stopSelf()
             return START_NOT_STICKY
         }
 
-        val sessionCount = intent?.getIntExtra(EXTRA_SESSION_COUNT, 0) ?: 0
-        val toolStatus = intent?.getStringExtra(EXTRA_TOOL_STATUS) ?: "Idle"
+        val sessionCount = intent?.getIntExtra(EXTRA_SESSION_COUNT, 0)
+            ?: SessionActivityTracker.sessionCountForNotification()
+        val toolStatus = intent?.getStringExtra(EXTRA_TOOL_STATUS)
+            ?: SessionActivityTracker.statusForNotification()
 
         val notification = buildNotification(sessionCount, toolStatus)
 
@@ -363,7 +428,8 @@ class AgentForegroundService : Service() {
         println(
             "[T-STALL-DIAG] FGS onTaskRemoved pid=${android.os.Process.myPid()} " +
                 "activeSessions=${activeAtRemoval.size}[${activeAtRemoval.joinToString(",")}] " +
-                "decision=${if (activeAtRemoval.isEmpty()) "stopSelf" else "KEEP-ALIVE"} " +
+                "scheduled=${SessionActivityTracker.scheduledSessions.value.size} " +
+                "decision=${if (activeAtRemoval.isEmpty() && SessionActivityTracker.scheduledSessions.value.isEmpty()) "stopSelf" else "KEEP-ALIVE"} " +
                 "slots=${SessionConcurrencyManager.diagSnapshot()}",
         )
         // T166: swiping from recents kills the Activity but the FG
@@ -372,8 +438,13 @@ class AgentForegroundService : Service() {
         // longer a reason to keep alive — they explicitly dismissed
         // the app, so clear presence here and re-evaluate.
         SessionActivityTracker.clearPresence()
-        if (SessionActivityTracker.activeSessions.value.isEmpty()) {
-            Log.d(TAG, "onTaskRemoved with no active sessions, stopping self")
+        // [T-scheduled-active-session-android] A chat waiting on its own
+        // scheduled task is still processing: swiping the app away keeps the
+        // service, as a running loop does.
+        if (SessionActivityTracker.activeSessions.value.isEmpty() &&
+            SessionActivityTracker.scheduledSessions.value.isEmpty()
+        ) {
+            Log.d(TAG, "onTaskRemoved with no active or scheduled sessions, stopping self")
             stopSelf()
             return
         }
@@ -383,8 +454,8 @@ class AgentForegroundService : Service() {
         // down. Without this, OEM ROMs sometimes downgrade us to a plain
         // background service and reclaim within ~60 s.
         val notification = buildNotification(
-            SessionActivityTracker.activeSessions.value.size,
-            SessionActivityTracker.currentToolStatus.value,
+            SessionActivityTracker.sessionCountForNotification(),
+            SessionActivityTracker.statusForNotification(),
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -409,6 +480,7 @@ class AgentForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        isAlive = false
         releaseWakeLock()
         try {
             overlayController?.hide()
@@ -431,6 +503,28 @@ class AgentForegroundService : Service() {
      * backgrounded. Foreground transitions always hide instantly so the
      * overlay doesn't draw on top of the chat itself.
      */
+    /**
+     * [T-android-user-ask-chip] Re-post the ongoing notification whenever a
+     * user_ask question starts or ends waiting (or its deadline moves), so the
+     * ASKING phase - and the chip promotion that depends on the phase - is
+     * right without waiting for the tracker's next start command.
+     */
+    private fun startAskingObserver() {
+        overlayScope.launch {
+            com.openminis.app.agent.userask.UserAskCenter.asks
+                .map { askingStateFor(it.values) }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    refreshOngoingNotification()
+                    ensureChipTicker()
+                }
+        }
+    }
+
+    /** [T-android-user-ask-chip] The question the notification shows while ASKING. */
+    private fun askingNow() = askingStateFor(com.openminis.app.agent.userask.UserAskCenter.asks.value.values)
+
     private fun startOverlayObserver() {
         val app = applicationContext as? MinisApp ?: return
         overlayController = ToolOverlayController(applicationContext).apply {
@@ -480,6 +574,9 @@ class AgentForegroundService : Service() {
                 // [T-android-live-update-content] Thinking vs generating for
                 // the capsule's streaming row.
                 SessionActivityTracker.isThinking,
+                // [T-port-sched-overlay-waiting] A chat waiting for its next
+                // scheduled run: the capsule shows that, not "completed".
+                SessionActivityTracker.scheduledWait,
             ) { values: Array<Any?> ->
                 @Suppress("UNCHECKED_CAST")
                 val activeSessions = values[13] as Set<String>
@@ -501,6 +598,7 @@ class AgentForegroundService : Service() {
                     dynamicIslandEnabled = values[14] as Boolean,
                     soulIdentity = (values[15] as SoulMetadata).let { it.name to it.icon },
                     isThinking = values[16] as Boolean,
+                    scheduledWait = values[17] as com.openminis.app.scheduled.ScheduledWait?,
                 )
             }.distinctUntilChanged().collect { state -> applyOverlayState(state) }
         }
@@ -547,6 +645,9 @@ class AgentForegroundService : Service() {
         // [T-android-live-update-content] Model is emitting reasoning, no
         // visible text yet for this turn.
         val isThinking: Boolean,
+        // [T-port-sched-overlay-waiting] The next scheduled run of a chat its
+        // task keeps active, or null.
+        val scheduledWait: com.openminis.app.scheduled.ScheduledWait? = null,
     )
 
     private fun applyOverlayState(state: OverlayState) {
@@ -768,6 +869,36 @@ class AgentForegroundService : Service() {
                     taskIndex = slot?.second ?: 0,
                     taskTotal = slot?.third ?: 0,
                 )
+            } else if (overlayWaitFor(state.scheduledWait, state.currentSessionId) != null) {
+                // [T-port-sched-overlay-waiting] Between two fires of a scheduled
+                // task the chat is not finished, it is waiting (iOS fa7adaf9e:
+                // the Live Activity card turns into a countdown to the next run
+                // instead of a completed card). Show that - "Next run · 2/3"
+                // counting down - not the last run's "completed" and reply.
+                // No 5-minute cap here: the schedule itself keeps the service,
+                // and the capsule goes on its own when the run starts (busy) or
+                // the schedule ends (wait gone -> the ordinary linger below).
+                val wait = overlayWaitFor(state.scheduledWait, state.currentSessionId)!!
+                lingerJob?.cancel()
+                lingerJob = null
+                controller.show(
+                    toolName = null,
+                    statusText = "",
+                    isRunning = false,
+                    outcome = ToolOutcome.Unknown,
+                    replyExcerpt = null,
+                    targetSessionId = state.currentSessionId ?: wait.sessionId,
+                    toolTitle = null,
+                    sessionTitle = slot?.first?.title ?: wait.chatTitle,
+                    taskIndex = slot?.second ?: 0,
+                    taskTotal = slot?.third ?: 0,
+                    waiting = ToolOverlayController.Waiting(
+                        statusText = waitStatusText(getString(R.string.scheduled_detail_next_run), wait.runCounter),
+                        nextRunElapsedMs = wait.nextRunMs?.let {
+                            wallClockToElapsedRealtime(it, System.currentTimeMillis(), SystemClock.elapsedRealtime())
+                        },
+                    ),
+                )
             } else {
                 // [T-android-overlay-completion-pending] Completion linger:
                 // the turn ended while backgrounded. Render the controller's
@@ -871,23 +1002,76 @@ class AgentForegroundService : Service() {
      * ticks locally with no notify() traffic.
      */
     private fun ensureChipTicker() {
-        if (chipTickerJob?.isActive == true) return
-        if (!isPromotedChipActive()) return
+        // [T-port-sched-wait-notification] Restarted on every start command
+        // (each one has just posted a fresh notification), so a change of
+        // phase - running <-> waiting - always gets the right cadence. While
+        // WAITING it does NOT tick per second: once a minute for the chip's
+        // "12m" text, or (no chip) once when the countdown ends.
+        chipTickerJob?.cancel()
+        chipTickerJob = null
+        if (!isPromotedChipActive() && waitingNow() == null) return
         chipTickerJob = overlayScope.launch {
             while (true) {
-                delay(CHIP_TICK_MS)
-                if (!isPromotedChipActive()) break
-                val finished = SessionActivityTracker.lastTaskFinishedAtMs.value != null &&
-                    SessionActivityTracker.activeSessions.value.isEmpty()
-                if (finished) break
+                val wait = waitingNow()
+                val delayMs = if (wait != null) {
+                    waitRefreshDelayMs(
+                        wait.nextRunMs?.let { it - System.currentTimeMillis() },
+                        promotedChip = isPromotedChipActive(),
+                    ) ?: break
+                } else {
+                    if (!isPromotedChipActive()) break
+                    // [T-android-user-ask-chip] A question with no deadline
+                    // shows a static "?"; nothing to tick.
+                    askingNow()?.let { if (it.expiresAtMs == null) return@launch }
+                    CHIP_TICK_MS
+                }
+                delay(delayMs)
                 if (!SessionActivityTracker.shouldRunServiceNow()) break
+                if (waitingNow() == null) {
+                    // [T-fgs-presence-no-chip] Dropped to presence only without a
+                    // start command (none is expected, but nothing guarantees
+                    // it): re-post once so the chip is demoted, then stop.
+                    if (presenceOnlyNow()) {
+                        refreshOngoingNotification()
+                        break
+                    }
+                    if (!isPromotedChipActive()) break
+                    val finished = SessionActivityTracker.lastTaskFinishedAtMs.value != null &&
+                        SessionActivityTracker.activeSessions.value.isEmpty()
+                    if (finished) break
+                }
                 refreshOngoingNotification()
             }
         }
     }
 
+    /**
+     * [T-fgs-presence-no-chip] The same decision buildNotification makes, from
+     * the same tracker state, for the chip ticker.
+     */
+    private fun presenceOnlyNow(): Boolean {
+        val active = SessionActivityTracker.activeSessions.value
+        val scheduledWait = SessionActivityTracker.scheduledWait.value?.takeIf { active.isEmpty() }
+        val phase = resolveAgentPhase(
+            isCompleted = scheduledWait == null &&
+                SessionActivityTracker.lastTaskFinishedAtMs.value != null && active.isEmpty(),
+            toolName = SessionActivityTracker.currentToolName.value,
+            isThinking = SessionActivityTracker.isThinking.value,
+            hasActiveSessions = active.isNotEmpty(),
+            isScheduledWaiting = scheduledWait != null,
+            isAwaitingAnswer = askingNow() != null,
+        )
+        return isPresenceOnly(phase, SessionActivityTracker.scheduledSessions.value.isNotEmpty())
+    }
+
+    /** [T-port-sched-wait-notification] The wait the notification shows, if WAITING. */
+    private fun waitingNow() = SessionActivityTracker.scheduledWait.value
+        ?.takeIf { SessionActivityTracker.activeSessions.value.isEmpty() }
+
     private fun isPromotedChipActive(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) return false
+        // [T-fgs-presence-no-chip] No chip while merely present, so nothing to tick.
+        if (presenceOnlyNow()) return false
         val minisApp = (applicationContext as? MinisApp)?.takeIf { it.subsystemsReady() }
         val userEnabled = minisApp?.backgroundSettingsRepository?.dynamicIslandEnabled?.value == true
         return DynamicIslandSupport.isDynamicIslandActive(this, userEnabled)
@@ -895,9 +1079,13 @@ class AgentForegroundService : Service() {
 
     private fun refreshOngoingNotification() {
         try {
+            // [T-fgs-idle-revival] Same count and status the tracker's own
+            // starts post. Reading activeSessions / currentToolStatus here
+            // turned the once-a-second chip refresh of a chat the user is
+            // merely present in into "0 sessions | Idle".
             val notification = buildNotification(
-                SessionActivityTracker.activeSessions.value.size,
-                SessionActivityTracker.currentToolStatus.value,
+                SessionActivityTracker.sessionCountForNotification(),
+                SessionActivityTracker.statusForNotification(),
             )
             getSystemService(NotificationManager::class.java)
                 ?.notify(NOTIFICATION_ID, notification)
@@ -1041,7 +1229,17 @@ class AgentForegroundService : Service() {
         // uptime forever — the reported bug was a completed task whose dynamic
         // island kept ticking as though it were still running.
         val finishedAtMs = SessionActivityTracker.lastTaskFinishedAtMs.value
-        val isCompleted = finishedAtMs != null && SessionActivityTracker.activeSessions.value.isEmpty()
+        // [T-port-sched-wait-notification] Nothing running and a chat waiting
+        // for its next scheduled run: the WAITING phase, not "completed" - the
+        // previous run's finish stamp is still set between fires, and resting
+        // on it hid Stop (stopAllByUser) for exactly the window it was built
+        // for.
+        val scheduledWait = SessionActivityTracker.scheduledWait.value
+            ?.takeIf { SessionActivityTracker.activeSessions.value.isEmpty() }
+        // [T-android-user-ask-chip] A question waiting for the user.
+        val asking = askingNow()
+        val isCompleted = scheduledWait == null && asking == null &&
+            finishedAtMs != null && SessionActivityTracker.activeSessions.value.isEmpty()
         val endMs = if (isCompleted) finishedAtMs!! else SystemClock.elapsedRealtime()
         // Anchor to the current run's start, not the service's. The service is
         // created once per presence window and outlives individual tasks, so
@@ -1103,7 +1301,9 @@ class AgentForegroundService : Service() {
         // The system Doze-friendly setOnlyAlertOnce keeps repeated rebuilds silent.
         val toolName = SessionActivityTracker.currentToolName.value
         val toolTitle = SessionActivityTracker.currentToolTitle.value
-        val isToolRunning = SessionActivityTracker.isToolRunning.value
+        // [T-android-user-ask-chip] While a question waits, user_ask is the
+        // "running" tool; a spinning progress bar would say the agent is busy.
+        val isToolRunning = SessionActivityTracker.isToolRunning.value && askingNow() == null
         val hasActiveSessions = SessionActivityTracker.activeSessions.value.isNotEmpty()
 
         // [T-android-live-update-content] One phase drives icon, title and
@@ -1120,40 +1320,87 @@ class AgentForegroundService : Service() {
             toolName = toolName,
             isThinking = SessionActivityTracker.isThinking.value,
             hasActiveSessions = hasActiveSessions,
+            isScheduledWaiting = scheduledWait != null,
+            isAwaitingAnswer = asking != null,
         )
-        val smallIcon = notificationSmallIconFor(phase, toolName)
+        // [T-fgs-presence-no-chip] Merely present in a chat: a plain row, see
+        // isPresenceOnly. Re-evaluated on every rebuild, so the start command a
+        // run's setActive dispatches re-posts it promoted, and the one the
+        // tracker dispatches when the last reason other than presence goes
+        // away re-posts it demoted.
+        val presenceOnly = isPresenceOnly(
+            phase,
+            hasScheduledHold = SessionActivityTracker.scheduledSessions.value.isNotEmpty(),
+        )
+        val smallIcon = notificationSmallIconFor(phase, toolName, waitHasClock = scheduledWait?.nextRunMs != null)
         val soulName = SoulStore.cachedMetadata.value.name.ifBlank { SoulMetadata.DEFAULT.name }
         val titleText = when (phase) {
             AgentPhase.COMPLETED -> getString(R.string.bg_service_notification_title_completed)
             AgentPhase.TOOL -> toolRowTitle(toolName!!, toolTitle)
             AgentPhase.THINKING, AgentPhase.GENERATING -> soulName
             AgentPhase.IDLE -> getString(R.string.bg_service_notification_title)
+            // iOS's waiting card is titled with the conversation.
+            AgentPhase.WAITING -> scheduledWait?.chatTitle
+                ?: scheduledWait?.label?.takeIf { it.isNotBlank() }
+                ?: getString(R.string.notif_scheduled_waiting)
+            // The chat that asks, like the question's own notification.
+            AgentPhase.ASKING -> asking?.sessionTitle ?: getString(R.string.user_ask_needs_answer)
         }
+        // [T-port-sched-running-counter] While a scheduled fire runs in a chat
+        // it keeps active, the running status carries the run counter.
+        val firingCounter = SessionActivityTracker.scheduledFiring.value
+            ?.takeIf { it.sessionId in SessionActivityTracker.activeSessions.value }
+            ?.runCounter
         val collapsedText = when (phase) {
             // Completed is a RESTING state: the chronometer is off, so the
             // total run time has to stay in the text or it would vanish.
-            AgentPhase.COMPLETED ->
-                getString(R.string.bg_service_notification_text_completed, sessionLabel, timeString)
+            // [T-port-sched-completed-copy] No "0 sessions" when nothing is left.
+            AgentPhase.COMPLETED -> if (sessionCount > 0) {
+                getString(completedTextResFor(sessionCount), sessionLabel, timeString)
+            } else {
+                getString(completedTextResFor(sessionCount), timeString)
+            }
             // [T-android-notification-chronometer] No baked-in time while
             // running — the system Chronometer (compat branch) or the ticked
             // shortCriticalText (promoted branch) renders the clock.
             AgentPhase.TOOL -> getString(
                 R.string.bg_service_notification_text_running,
                 sessionLabel,
-                humanizeToolStatus(toolStatus, toolName),
+                withRunCounter(humanizeToolStatus(toolStatus, toolName), firingCounter),
             )
             AgentPhase.THINKING -> getString(
                 R.string.bg_service_notification_text_running,
                 sessionLabel,
-                getString(R.string.overlay_thinking),
+                withRunCounter(getString(R.string.overlay_thinking), firingCounter),
             )
             AgentPhase.GENERATING -> getString(
                 R.string.bg_service_notification_text_running,
                 sessionLabel,
-                getString(R.string.overlay_streaming),
+                withRunCounter(getString(R.string.overlay_streaming), firingCounter),
             )
             AgentPhase.IDLE -> getString(R.string.bg_service_notification_text_running, sessionLabel, toolStatus)
+            // "1 session | Next run · 2/30"; the countdown is the chronometer.
+            AgentPhase.WAITING -> getString(
+                R.string.bg_service_notification_text_running,
+                sessionLabel,
+                waitStatusText(getString(R.string.scheduled_detail_next_run), scheduledWait?.runCounter),
+            )
+            // "1 session | Waiting for your answer…"; the countdown is the chronometer.
+            AgentPhase.ASKING -> getString(
+                R.string.bg_service_notification_text_running,
+                sessionLabel,
+                getString(R.string.user_ask_waiting),
+            )
         }
+        val clock = notificationClockFor(
+            phase = phase,
+            runStartWallMs = runStartWallMs,
+            finishedWallMs = finishedWallMs,
+            nextRunWallMs = scheduledWait?.nextRunMs,
+            nowWallMs = nowWallMs,
+            presenceOnly = presenceOnly,
+            askExpiresWallMs = asking?.expiresAtMs,
+        )
 
         // [T-android-live-update-chip] Short critical text — the ≤7-char
         // string the Android 16 status-bar chip shows next to the small icon.
@@ -1165,7 +1412,16 @@ class AgentForegroundService : Service() {
         // user recorded. With the timer always present the chip is
         // [tool glyph][m:ss] on every skin — the same compact shape as the
         // iOS Dynamic Island and the system screen-recorder chip.
-        val shortCritical = chipTimerText(elapsedMs)
+        // [T-port-sched-wait-notification] WAITING: minutes left to the run
+        // (re-posted once a minute by ensureChipTicker), else the run counter.
+        val shortCritical = when (phase) {
+            AgentPhase.WAITING -> waitChipText(scheduledWait?.nextRunMs?.let { it - nowWallMs })
+                ?: scheduledWait?.runCounter
+                ?: "…"
+            // [T-android-user-ask-chip] Time left to answer.
+            AgentPhase.ASKING -> askChipText(asking?.expiresAtMs?.let { it - nowWallMs })
+            else -> chipTimerText(elapsedMs)
+        }
 
         // [T-android-dynamic-island] Tier 3: Android 16 (Baklava) Live Updates.
         // When the device is capable AND the user enabled the toggle, build the
@@ -1191,7 +1447,7 @@ class AgentForegroundService : Service() {
             this,
             dynamicIslandUserEnabled,
         )
-        if (dynamicIslandOn && Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+        if (dynamicIslandOn && !presenceOnly && Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
             return buildPromotedNotification(
                 titleText = titleText,
                 collapsedText = collapsedText,
@@ -1199,8 +1455,7 @@ class AgentForegroundService : Service() {
                 smallIcon = smallIcon,
                 isToolRunning = isToolRunning,
                 isCompleted = isCompleted,
-                runStartWallMs = runStartWallMs,
-                finishedWallMs = finishedWallMs,
+                clock = clock,
                 contentIntent = pendingIntent,
                 stopIntent = stopPendingIntent,
             )
@@ -1217,10 +1472,12 @@ class AgentForegroundService : Service() {
             // ticks once a second locally — no notify() per second, which would
             // be rate-limited as a notification flood and cost wakeups.
             // Completed freezes at the finish instant (chronometer off, `when`
-            // pinned there); running counts up from the run's start.
-            .setShowWhen(true)
-            .setWhen(if (isCompleted) finishedWallMs else runStartWallMs)
-            .setUsesChronometer(!isCompleted)
+            // pinned there); running counts up from the run's start; waiting
+            // counts down to the next run (notificationClockFor).
+            .setShowWhen(clock.showWhen)
+            .setWhen(clock.whenMs)
+            .setUsesChronometer(clock.usesChronometer)
+            .setChronometerCountDown(clock.countDown)
             .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -1265,8 +1522,7 @@ class AgentForegroundService : Service() {
         smallIcon: Int,
         isToolRunning: Boolean,
         isCompleted: Boolean,
-        runStartWallMs: Long,
-        finishedWallMs: Long,
+        clock: NotificationClock,
         contentIntent: PendingIntent,
         stopIntent: PendingIntent,
     ): Notification {
@@ -1306,9 +1562,10 @@ class AgentForegroundService : Service() {
             // [T-android-notification-chronometer] Same rule as the compat
             // branch — the promoted chip is precisely where a frozen clock was
             // most visible, since it stays on screen for the whole run.
-            .setShowWhen(true)
-            .setWhen(if (isCompleted) finishedWallMs else runStartWallMs)
-            .setUsesChronometer(!isCompleted)
+            .setShowWhen(clock.showWhen)
+            .setWhen(clock.whenMs)
+            .setUsesChronometer(clock.usesChronometer)
+            .setChronometerCountDown(clock.countDown)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)
             // Explicitly NOT colorized and NOT a group summary — both would

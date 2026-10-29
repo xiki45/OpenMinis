@@ -369,7 +369,8 @@ class EmptyTurnRecoveryTest {
     fun `the reminder is neither persisted nor shown - loop branches touch only agentHistory`() {
         val vm = ProductionSources.read("ui/chat/ChatViewModel.kt")
         val start = vm.indexOf("is EmptyTurnRecovery.Plan.NudgeExistingPart -> {")
-        val end = vm.indexOf("is EmptyTurnRecovery.Plan.GiveUp -> {", start)
+        // [T-b13-empty-fallback] The two branches now live in injectEmptyTurnReminder().
+        val end = vm.indexOf("is EmptyTurnRecovery.Plan.GiveUp -> false", start)
         assertTrue("recovery branches not found in ChatViewModel", start > 0 && end > start)
         val branches = vm.substring(start, end)
         for (forbidden in listOf("chatRepository.", "appendMessage(", "_messages.", "updateAssistantMessage(", "insertMessage(")) {

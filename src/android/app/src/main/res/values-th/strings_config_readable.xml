@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">คีย์ API</string>
+    <string name="cfgr_all_models">โมเดลทั้งหมด</string>
+    <string name="cfgr_allow_minis_config">อนุญาต minis-config</string>
+    <string name="cfgr_applies_to">ใช้กับ</string>
+    <string name="cfgr_audio_input">อินพุตเสียง</string>
+    <string name="cfgr_audio_output">เอาต์พุตเสียง</string>
+    <string name="cfgr_automatic">อัตโนมัติ</string>
+    <string name="cfgr_chinese">จีน</string>
+    <string name="cfgr_custom">กำหนดเอง</string>
+    <string name="cfgr_custom_user_agent">User-Agent ที่กำหนดเอง</string>
+    <string name="cfgr_dark">มืด</string>
+    <string name="cfgr_default">ค่าเริ่มต้น</string>
+    <string name="cfgr_disabled">ปิดใช้งาน</string>
+    <string name="cfgr_display_name">ชื่อที่แสดง</string>
+    <string name="cfgr_enabled">เปิดใช้งาน</string>
+    <string name="cfgr_english">อังกฤษ</string>
+    <string name="cfgr_hidden">ซ่อนอยู่</string>
+    <string name="cfgr_high">สูง</string>
+    <string name="cfgr_image_input">อินพุตรูปภาพ</string>
+    <string name="cfgr_image_output">เอาต์พุตรูปภาพ</string>
+    <string name="cfgr_label">ป้ายกำกับ</string>
+    <string name="cfgr_light">สว่าง</string>
+    <string name="cfgr_low">ต่ำ</string>
+    <string name="cfgr_max">สูงสุด</string>
+    <string name="cfgr_med">ปานกลาง</string>
+    <string name="cfgr_medium">ปานกลาง</string>
+    <string name="cfgr_models">โมเดล</string>
+    <string name="cfgr_name">ชื่อ</string>
+    <string name="cfgr_not_set">ยังไม่ได้ตั้งค่า</string>
+    <string name="cfgr_note">หมายเหตุ</string>
+    <string name="cfgr_off">ปิด</string>
+    <string name="cfgr_on">เปิด</string>
+    <string name="cfgr_pdf_input">อินพุต PDF</string>
+    <string name="cfgr_privacy_mode">โหมดความเป็นส่วนตัว</string>
+    <string name="cfgr_send">ส่ง</string>
+    <string name="cfgr_status">สถานะ</string>
+    <string name="cfgr_system">ระบบ</string>
+    <string name="cfgr_theme">ธีม</string>
+    <string name="cfgr_ultra">สูงพิเศษ</string>
+    <string name="cfgr_video_input">อินพุตวิดีโอ</string>
+    <string name="cfgr_video_output">เอาต์พุตวิดีโอ</string>
+    <string name="cfgr_xhigh">สูงมาก</string>
+    <string name="cfgr_fold_consecutive_tool_calls">ยุบการเรียกใช้เครื่องมือที่ต่อเนื่องกัน</string>
+</resources>

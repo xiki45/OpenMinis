@@ -305,7 +305,7 @@ class ScheduledTriggersTest {
         assertEquals(2, Regex("""if \(scheduledFire\) ScheduledCompletionTriggers\.onScheduledRunFinished""").findAll(runner).count())
         assertFalse(runner.contains("ScheduledCompletionTriggers.onUpstreamFinished"))
         val receiver = com.openminis.app.ProductionSources.read("scheduled/ScheduledTaskAlarmReceiver.kt")
-        assertTrue(receiver.contains("if (!manager.rescheduleNext(taskId)) return@withTimeout"))
+        assertTrue(receiver.contains("if (!manager.rescheduleNext(taskId, slot)) return@withTimeout"))
         assertTrue(receiver.contains("waitForCompletion = false, scheduledFire = true"))
     }
 }

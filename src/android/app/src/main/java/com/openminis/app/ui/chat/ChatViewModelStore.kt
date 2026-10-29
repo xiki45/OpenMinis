@@ -53,7 +53,7 @@ object ChatViewModelStore {
      *
      * Sub agent sessions and the user's own chats compete for very different
      * reasons, and sharing one LRU made them evict each other. Measured on a
-     * Pixel 4a with MAX_CONCURRENT_CHILD_JOBS (=3) saturated: three children
+     * Pixel 4a with the sub agent cap (then a global 3) saturated: three children
      * allocated inside 55ms, and the third evicted the FIRST one — a child that
      * had existed for 55 milliseconds — while also pushing the user's own
      * sessions out of the cache:
@@ -97,24 +97,45 @@ object ChatViewModelStore {
     private val poolKinds = mutableMapOf<String, PoolKind>()
 
     /**
-     * Cap for the normal pool. Unchanged at 4: the value was validated on
-     * device (pool reaches 5, trims to 4, every time) and this change must not
-     * alter behaviour for users who never run a sub agent.
+     * Cap for the normal pool.
+     *
+     * [T-new-limits] Was 4 — already below the 5 session slots it sat next to.
+     * Now 8: the 6 agent loops SessionConcurrencyManager admits
+     * (MAX_CONCURRENT) plus the chat on screen and the one the user just left.
+     * Running sessions are never evicted, so with 4 every idle chat — the one
+     * the user was reading included — was thrown out the moment a fifth loop
+     * started, and switching between two chats while six agents ran reloaded
+     * each from the database every time.
+     *
+     * Not higher: an idle cached view model keeps its whole transcript and
+     * agent history in the Java heap. A text chat is a few MB, but a chat with
+     * image history holds the encoded images too (75.8 MB for 100 images in
+     * the Pixel 4a load test, Java peak 221–327 MB of a 512 MB heap), and only
+     * the idle entries above the running ones are what this number buys.
+     * handleMemoryPressure still releases every idle entry on onTrimMemory.
      */
-    private const val MAX_CACHED_NORMAL = 4
+    internal const val MAX_CACHED_NORMAL = 8
 
     /**
      * Cap for the child pool.
      *
      * Sized from Android's own numbers rather than copied from iOS (which uses
-     * 10): AgentJobRegistry.MAX_CONCURRENT_CHILD_JOBS is 3, so 3 children can
-     * be live at once, and a finished child lingers while the user reads its
-     * transcript. 6 holds two full generations of concurrent jobs plus their
-     * read-back, which is the realistic worst case, and at the ~1MB per child
-     * session measured previously that is ~6MB — a bounded, acceptable cost.
-     * Larger would mostly cache transcripts nobody reopens.
+     * 10): when this was set the sub agent cap was a global 3, so 6 held two
+     * full generations of concurrent jobs plus their read-back, at the ~1MB per
+     * child session measured previously ~6MB. Larger would mostly cache
+     * transcripts nobody reopens.
+     *
+     * [T-new-limits] The cap is now 3 PER PARENT conversation
+     * (AgentJobRegistry.MAX_CONCURRENT_CHILD_JOBS_PER_PARENT), so up to 6
+     * parents × 3 = 18 children can be live at once. Left at 6 on purpose: it
+     * is a SOFT cap — a child whose job is still active is never evicted
+     * (ChatViewModel.hasWorkInFlight counts its own PENDING/RUNNING job, which
+     * also covers the start-up gap before its first send), and neither is a
+     * transcript the user is reading ([holdWhileViewed]). So live children all
+     * stay and the pool only runs over until they finish; the bound limits
+     * cached FINISHED transcripts, which are cheap to reload from the database.
      */
-    private const val MAX_CACHED_CHILD = 6
+    internal const val MAX_CACHED_CHILD = 6
 
     /**
      * Draft → canonical mapping. When a draft ("__new__...") session is
@@ -235,7 +256,30 @@ object ChatViewModelStore {
         val inFlight = stores.entries
             .filter { (_, store) -> runCatching { viewModelIn(store)?.hasWorkInFlight() == true }.getOrDefault(false) }
             .map { it.key }
-        return (tracked + inFlight + pendingSends.keys).toSet()
+        return (tracked + inFlight + pendingSends.keys + viewers.keys).toSet()
+    }
+
+    /**
+     * [T-new-limits] Sessions a screen other than ChatScreen is showing, keyed
+     * by store key, refcounted. ChatScreen claims [setActiveSession]; the sub
+     * agent transcript screen does not (it must not become the "current
+     * session" config reads target), so without this a finished child the
+     * user was reading could be evicted by any other child starting — with
+     * 6 parents × 3 children that is a routine event, not an edge case.
+     */
+    private val viewers = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** Keep [sessionId]'s store from eviction until the returned call runs. */
+    fun holdWhileViewed(sessionId: String): () -> Unit {
+        val key = resolveKey(sessionId)
+        viewers.merge(key, 1, Int::plus)
+        var released = false
+        return {
+            if (!released) {
+                released = true
+                viewers.computeIfPresent(key) { _, n -> if (n <= 1) null else n - 1 }
+            }
+        }
     }
 
     /**
@@ -345,9 +389,9 @@ object ChatViewModelStore {
      *
      * Only the pool that just grew is considered, and only its own members are
      * eligible for eviction, so a burst of sub agents can no longer push the
-     * user's chats out of the cache (or each other — with
-     * MAX_CONCURRENT_CHILD_JOBS = 3 against MAX_CACHED_CHILD = 6 the concurrent
-     * set always fits).
+     * user's chats out of the cache (or each other — a running child is never
+     * evicted, so even 6 parents × 3 children over MAX_CACHED_CHILD = 6 only
+     * makes the pool run over until they finish).
      *
      * Both carve-outs from the single-pool version still apply, in both pools,
      * for unchanged reasons: a session whose agent loop is running would have
@@ -443,6 +487,9 @@ object ChatViewModelStore {
     private fun dropStoreKeepingChildTag(key: String) {
         stores.remove(key)?.clear()
         if (poolKinds[key] != PoolKind.CHILD) poolKinds.remove(key)
+        // [OpenMinis#433] A parked draft whose view model is gone has nothing
+        // left to hand back.
+        forgetDraft(key)
     }
 
     /**
@@ -458,6 +505,7 @@ object ChatViewModelStore {
         // [T-android-vm-store-child-tag-survives-evict] Forget the tag even
         // when the store was already evicted: a CHILD tag outlives eviction.
         poolKinds.remove(key)
+        forgetDraft(key)
         stores.remove(key)?.let {
             it.clear()
             Log.d(TAG, "release store for $key (remaining=${stores.size})")
@@ -517,11 +565,182 @@ object ChatViewModelStore {
         // that happens to be a child would put it in the pool this change
         // exists to keep it out of.
         poolKinds.remove(fromSessionId)?.let { poolKinds[toSessionId] = it }
+        // [OpenMinis#433] Sent: no longer a draft that New Chat may reuse.
+        forgetDraft(fromSessionId)
         aliases[fromSessionId] = toSessionId
         // Invalidate anything resolving through the alias map — see
         // [aliasGeneration].
         aliasGeneration.intValue++
         Log.d(TAG, "rename store $fromSessionId -> $toSessionId (alias kept)")
+    }
+
+    // ─── Unsent new chats [OpenMinis#433] ───────────────────────────────
+
+    /**
+     * [OpenMinis#433] How long a new chat left with unsent text stays
+     * available to the next New Chat, counted from the moment it was left.
+     * Same value as iOS `ParkedDrafts.lifetime`.
+     */
+    internal const val PARKED_DRAFT_LIFETIME_MS = 15 * 60 * 1000L
+
+    /** The clock parking reads. Replaced in tests; nothing ever waits on it. */
+    @Volatile
+    internal var parkedDraftClock: () -> Long = { System.currentTimeMillis() }
+
+    private data class ParkedDraft(val draftId: String, val parkedAtMs: Long)
+
+    /**
+     * [OpenMinis#433] New chats the user left with something typed or attached
+     * but never sent, one per slot, keyed by [draftSlotKey].
+     *
+     * Text typed in a new chat was lost on Back + New Chat: the draft's view
+     * model stayed in [stores] with the text in it, but every New Chat minted a
+     * fresh `__new__<uuid>`, so nothing could reach it again until LRU threw it
+     * out. Parking records which draft id to hand back; the view model itself
+     * never moves. Memory only, and deliberately not a session row (a row per
+     * abandoned draft would fill the list with empty chats). Mirrors iOS
+     * `ViewModelCache.parkedNewChats` (d96f8c71d, 885696d42).
+     *
+     * No timer: expired slots are dropped by whichever park / take / unpark
+     * call comes next.
+     */
+    private val parkedDrafts = mutableMapOf<String, ParkedDraft>()
+
+    /**
+     * Draft ids minted by [newChatDraftId], i.e. by a New Chat button. Only
+     * these are ever parked. Drafts opened by a share, a quick action, a deep
+     * link, the launch-mode preference or the Move-to sheet carry content or
+     * intent of their own: they must not pick up an old draft (they never call
+     * [newChatDraftId]) and leaving them must neither park nor clear a slot.
+     */
+    private val newChatDraftIds = mutableSetOf<String>()
+
+    /**
+     * The slot a draft id parks in: its model group AND its folder, both read
+     * from the id the same way ChatViewModel reads them.
+     *
+     * iOS keys by model group only, so text typed in "New Chat in Group X"
+     * reappears in the next plain New Chat and is filed outside X once sent.
+     * Android reuses the draft id itself, and the folder is encoded in it, so
+     * a group-only key would carry X into the plain New Chat instead — either
+     * way the chat would land somewhere the user did not open it. Matching on
+     * both keeps each draft where it was started.
+     */
+    private fun draftSlotKey(groupId: String?, folderId: String?): String =
+        "grp=${groupId.orEmpty()}|fld=${folderId.orEmpty()}"
+
+    private fun draftSlotKey(draftId: String): String = draftSlotKey(
+        draftId.substringAfter("__grp__", "").substringBefore("__fld__"),
+        draftId.substringAfter("__fld__", "").substringBefore("__grp__"),
+    )
+
+    /**
+     * [OpenMinis#433] What counts as an unsent draft worth keeping: a draft
+     * that has no session row yet and is not running, holding non-blank text
+     * (a `[Pasted#N]` placeholder counts — its buffer lives on the same view
+     * model) or an attachment. Same rule as iOS `hasUnsentDraft` +
+     * `parkNewChatIfUnsent`; Android has no remote sessions to exclude.
+     */
+    internal fun isUnsentDraft(
+        isDraft: Boolean,
+        realSessionId: String,
+        text: String,
+        hasAttachments: Boolean,
+        busy: Boolean,
+    ): Boolean = isDraft && realSessionId.isEmpty() && !busy && (text.isNotBlank() || hasAttachments)
+
+    /**
+     * [OpenMinis#433] The draft id a New Chat button should open: the unsent
+     * draft parked for this model group and folder if there is one, otherwise
+     * a fresh `__new__<uuid>[__grp__<g>][__fld__<f>]`.
+     *
+     * A parked draft is handed out once (its slot is emptied), and only while
+     * its view model is still cached, never promoted, and still holding
+     * something; anything else falls through to a fresh id.
+     */
+    @Synchronized
+    fun newChatDraftId(groupId: String? = null, folderId: String? = null): String {
+        val key = draftSlotKey(groupId, folderId)
+        purgeExpiredDrafts(parkedDraftClock())
+        parkedDrafts.remove(key)?.let { parked ->
+            if (isResumableDraft(parked.draftId)) {
+                Log.d(TAG, "newChatDraftId: resuming parked draft ${parked.draftId} slot=$key")
+                return parked.draftId
+            }
+        }
+        var id = "__new__${java.util.UUID.randomUUID()}"
+        if (groupId != null) id += "__grp__$groupId"
+        if (folderId != null) id += "__fld__$folderId"
+        newChatDraftIds += id
+        return id
+    }
+
+    private fun isResumableDraft(draftId: String): Boolean {
+        if (aliases.containsKey(draftId)) return false
+        val store = stores[draftId] ?: return false
+        // A view model that has since lost its text (or started running) has
+        // nothing to resume. Without one (only in JVM tests: a parked draft
+        // was reported by its own view model) trust the verdict at parking.
+        return viewModelIn(store)?.hasUnsentDraft ?: true
+    }
+
+    /**
+     * [OpenMinis#433] ChatScreen is leaving [sessionId]. Park it when it is a
+     * New Chat draft with unsent content; otherwise empty its slot if the slot
+     * holds this very draft, so text the user cleared before leaving does not
+     * come back — and another chat's parked draft is left alone.
+     */
+    @Synchronized
+    fun parkDraftIfUnsent(sessionId: String, hasUnsentDraft: Boolean) {
+        if (sessionId !in newChatDraftIds) return
+        val now = parkedDraftClock()
+        purgeExpiredDrafts(now)
+        val key = draftSlotKey(sessionId)
+        val keep = hasUnsentDraft && stores.containsKey(sessionId) && !aliases.containsKey(sessionId)
+        if (keep) {
+            parkedDrafts[key] = ParkedDraft(sessionId, now)
+            Log.d(TAG, "parkDraft $sessionId slot=$key keptFor=${PARKED_DRAFT_LIFETIME_MS / 1000}s")
+        } else if (parkedDrafts[key]?.draftId == sessionId) {
+            parkedDrafts.remove(key)
+        }
+    }
+
+    /** [OpenMinis#433] [sessionId] is on screen again: no New Chat may take it. */
+    @Synchronized
+    fun unparkDraft(sessionId: String) {
+        purgeExpiredDrafts(parkedDraftClock())
+        parkedDrafts.entries.removeAll { it.value.draftId == sessionId }
+    }
+
+    /**
+     * Drop every slot parked longer than [PARKED_DRAFT_LIFETIME_MS] ago, and
+     * release its view model (with its attachments) unless something still
+     * needs it, the way iOS lets the parked VM go.
+     */
+    private fun purgeExpiredDrafts(now: Long) {
+        val expired = parkedDrafts.filterValues { now - it.parkedAtMs > PARKED_DRAFT_LIFETIME_MS }
+        if (expired.isEmpty()) return
+        expired.keys.forEach { parkedDrafts.remove(it) }
+        val busy = busyKeys()
+        val onScreen = activeSessionIdInternal?.let { resolveKey(it) }
+        for (draft in expired.values) {
+            val id = draft.draftId
+            if (id != onScreen && id !in busy && !aliases.containsKey(id)) dropStoreKeepingChildTag(id)
+        }
+        Log.d(TAG, "purgeExpiredDrafts: dropped ${expired.size} parked draft(s)")
+    }
+
+    /** Forget [draftId] as a parkable New Chat draft (evicted, deleted or sent). */
+    private fun forgetDraft(draftId: String) {
+        if (newChatDraftIds.remove(draftId)) {
+            parkedDrafts.entries.removeAll { it.value.draftId == draftId }
+        }
+    }
+
+    @Synchronized
+    internal fun clearParkedDraftsForTest() {
+        parkedDrafts.clear()
+        newChatDraftIds.clear()
     }
 
     /**

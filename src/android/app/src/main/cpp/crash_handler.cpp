@@ -321,6 +321,67 @@ static void chain_to_previous(int sig, siginfo_t* info, void* ctx) {
     raise(sig);
 }
 
+// ── [GH #453] Resource counts at the moment of the crash ─────────────────
+//
+// A process that dies because it ran out of threads or memory mappings
+// (pthread_create EAGAIN, "Scudo ERROR: internal map failure") looks like an
+// ordinary abort in this report. Two numbers tell them apart: how many threads
+// the process has and how many lines /proc/self/maps holds (the kernel's
+// default limit is 65530). Both are counted with open/read/getdents64 into
+// stack buffers - no malloc, no new mapping, no thread - so they work in a
+// process whose allocator is the thing that failed.
+
+// Lines in /proc/self/maps, stopping at `cap`. -1 when unreadable.
+static int count_maps_lines(int cap) {
+    int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char buf[4096];
+    int lines = 0;
+    while (lines < cap) {
+        ssize_t r = read(fd, buf, sizeof(buf));
+        if (r <= 0) break;
+        for (ssize_t i = 0; i < r; i++) if (buf[i] == '\n') lines++;
+    }
+    close(fd);
+    return lines;
+}
+
+// Entries in a /proc directory (threads in task/, fds in fd/), minus . and ..
+static int count_dir_entries(const char* path, int cap) {
+    int fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    // linux_dirent64: ino(8) off(8) reclen(2) type(1) name[]
+    char buf[4096];
+    int n = 0;
+    while (n < cap) {
+        long r = syscall(SYS_getdents64, fd, buf, sizeof(buf));
+        if (r <= 0) break;
+        for (long off = 0; off < r;) {
+            unsigned short reclen;
+            memcpy(&reclen, buf + off + 16, sizeof(reclen));
+            if (reclen == 0) { off = r; break; }
+            const char* name = buf + off + 19;
+            if (!(name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0)))) n++;
+            off += reclen;
+        }
+    }
+    close(fd);
+    return n;
+}
+
+static void write_resource_counts(int fd) {
+    const int threads = count_dir_entries("/proc/self/task", 1 << 20);
+    const int fds = count_dir_entries("/proc/self/fd", 1 << 20);
+    const int maps = count_maps_lines(70000);
+    char line[256];
+    int n = snprintf(line, sizeof(line),
+        "\nResources at crash: threads=%d maps=%d%s fds=%d\n"
+        "(maps near 65530 or threads in the thousands = the process ran out of\n"
+        "mappings / threads; threads per name: exitinfo-*.log \"Tombstone summary\")\n",
+        threads, maps, maps >= 70000 ? "+" : "", fds);
+    if (n > 0) write(fd, line, n < (int)sizeof(line) ? n : (int)sizeof(line) - 1);
+}
+
 static void crash_signal_handler(int sig, siginfo_t* info, void* ctx) {
     // Reentrancy: if we're already in the handler, hand straight over.
     // Avoids an infinite loop when the handler itself faults, while
@@ -471,6 +532,10 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* ctx) {
             written += w;
         }
     }
+    // [GH #453] Plain syscalls only, so it goes before dlsym() and the
+    // unwinder below, neither of which is async-signal-safe.
+    write_resource_counts(fd);
+
     // [OpenMinis#363] The abort message, for the signal class where it is
     // the whole answer. Written AFTER the summary for the same reason the
     // backtrace is: dlsym() is not async-signal-safe, so a fault or hang

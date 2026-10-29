@@ -91,7 +91,9 @@ class ContextReviewFollowupParityTest {
     @Test
     fun `source - the trim reports decided and the builder caches only decisions`() {
         assertTrue(vm.contains(") ?: return WarmUpTrim(warmUp, decided = false)"))
-        assertTrue(vm.contains("if (trim.decided) warmUpDropByMarker[marker.id] = preAnchorPruned.size - trim.kept.size"))
+        // [T-ctx-builder] The builder writes the per-marker cache through the Compaction callback.
+        assertTrue(vm.contains("if (trim.decided) compaction.recordWarmUpDrop(marker.id, preAnchorPruned.size - trim.kept.size)"))
+        assertTrue(vm.contains("recordWarmUpDrop = { id, drop -> warmUpDropByMarker[id] = drop },"))
     }
 
     // ── [2] rejection attribution ─────────────────────────────────────────

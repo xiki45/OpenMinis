@@ -64,18 +64,17 @@ fun MemoryFileViewerBody(
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (isEditing) {
-            BasicTextField(
+            // [T-android-editor-keyboard-overlap] The caret stays above the
+            // keyboard; see DocumentEditorField.
+            com.openminis.app.ui.components.DocumentEditorField(
                 value = editedContent,
                 onValueChange = onEditedContentChange,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.fillMaxSize(),
                 textStyle = LocalTextStyle.current.copy(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
                     color = ChatColors.primaryText,
                 ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             )
         } else {
             SelectionContainer(
@@ -137,18 +136,17 @@ fun MemoryWriteDetailBody(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isEditing) {
-            BasicTextField(
+            // [T-android-editor-keyboard-overlap] The caret stays above the
+            // keyboard; see DocumentEditorField.
+            com.openminis.app.ui.components.DocumentEditorField(
                 value = editedContent,
                 onValueChange = onEditedContentChange,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.fillMaxSize(),
                 textStyle = LocalTextStyle.current.copy(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
                     color = ChatColors.primaryText,
                 ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             )
         } else {
             Column(

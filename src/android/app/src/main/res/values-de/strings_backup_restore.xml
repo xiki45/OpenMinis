@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-backup-restore-semantics / B01] Restore page copy for the restore semantics
+     decided 2026-10-15: the backup wins items present on both sides (API keys
+     included, OAuth sign-ins only when expired); nothing only on this device is
+     deleted. Replaces backup_restore_footer / backup_creds_restored /
+     backup_creds_kept, whose text promised the opposite. -->
+<resources>
+    <string name="backup_restore_merge_footer">Beim Wiederherstellen wird die Sicherung mit diesem Gerät zusammengeführt. Gibt es ein Element auf beiden Seiten – einen Anbieter, die Einstellungen eines Modells oder eine Modellgruppe mit demselben Namen –, wird die Version aus der Sicherung verwendet, auch wenn die auf diesem Gerät neuer ist. Das gilt auch für API Keys; ein auf diesem Gerät angemeldetes Konto bleibt erhalten, sofern seine Anmeldung nicht abgelaufen ist. Was nur auf diesem Gerät existiert, wird nicht gelöscht.</string>
+    <string name="backup_restore_creds_restored">Für %1$d Anbieter wurden Zugangsdaten aus der Sicherung wiederhergestellt. Die API Keys aus der Sicherung ersetzen die auf diesem Gerät; ein auf diesem Gerät angemeldetes Konto bleibt erhalten, sofern seine Anmeldung nicht abgelaufen war.</string>
+    <string name="backup_restore_creds_kept">Es wurden keine Zugangsdaten geändert: Die API Keys auf diesem Gerät stimmen bereits mit der Sicherung überein, und angemeldete Konten wurden beibehalten, weil ihre Anmeldung nicht als abgelaufen markiert ist.</string>
+</resources>

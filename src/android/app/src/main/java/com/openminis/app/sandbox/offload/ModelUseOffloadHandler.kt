@@ -3,6 +3,7 @@ package com.openminis.app.sandbox.offload
 import android.content.Context
 import android.util.Base64
 import android.util.Log
+import com.openminis.app.logging.AppLogger
 import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.data.model.ModelEntry
 import com.openminis.app.data.model.ProviderType
@@ -113,6 +114,18 @@ class ModelUseOffloadHandler(
     }
 
     private fun cmdRun(args: OffloadArgs, request: NativeOffloadRequest): NativeOffloadResult {
+        // [T-offload-caller-session] The chat this run belongs to: the session
+        // whose /var/minis this shell sees, i.e. the PARENT for a sub agent
+        // (iOS resolves the caller from the task's fs_context, which a helper
+        // shares with its parent; b99e4da87). Used for the provider's session
+        // header and for where generated media and --output files are written.
+        // The raw MINIS_CHAT_SESSION_ID is the helper's own hidden session, so
+        // its images landed in minis-sessions/<helperId>/attachments: not at
+        // the /var/minis/attachments path the guest was told, and never
+        // visible from the parent chat.
+        val caller = OffloadCallerSession.resolve(request.sessionId)
+        val callerSid = caller.sid
+        AppLogger.info(TAG, "[ModelUse] run caller=${callerSid?.take(8) ?: "nil"} via=${caller.source}")
         val modelArg = args.get("model")
             ?: return NativeOffloadResult(2, "--model is required. Usage: minis-model-use run --model <id_or_name>\n")
 
@@ -262,15 +275,17 @@ class ModelUseOffloadHandler(
 
         // Build provider + call — runBlocking is acceptable here: this handler
         // is invoked off the main thread by the offload server.
-        val apiKey = providerRepository.loadApiKey(entry.providerInstanceId)
+        val instance = providerRepository.instance(entry.providerInstanceId)
+            ?: return NativeOffloadResult(2, "minis-model-use run: provider instance not found\n")
+        // [T-android-provider-entry-rules] Same credential rule as every other
+        // entry: refreshed OAuth token, keyless/OAuth-held credentials allowed.
+        val apiKey = kotlinx.coroutines.runBlocking { providerRepository.requestCredential(instance) }
             ?: return NativeOffloadResult(
                 2,
                 JSONObject().put("error", "missing_api_key")
                     .put("message", "No API key configured for provider ${entry.model.provider}.")
                     .toString() + "\n",
             )
-        val instance = providerRepository.instance(entry.providerInstanceId)
-            ?: return NativeOffloadResult(2, "minis-model-use run: provider instance not found\n")
         // [T-android-opencode-subtask-session] The calling chat's id, so an
         // OpenCode Go model gets its required `x-opencode-session` header and
         // does not answer 400 "Request is missing x-opencode-session". This
@@ -279,7 +294,7 @@ class ModelUseOffloadHandler(
         // on a persisted id inside the provider, so no other endpoint sees it.
         val provider = ProviderFactory.create(
             instance, apiKey, entry.model, context,
-            sessionId = request.sessionId, overrides = entry.overrides,
+            sessionId = callerSid, overrides = entry.overrides,
         )
 
         // [GH#67] input_audio serialization is implemented for the OpenAI
@@ -326,7 +341,7 @@ class ModelUseOffloadHandler(
                 messages = messages,
                 maxTokens = maxTokens,
                 outputPath = outputPath,
-                sessionId = request.sessionId,
+                sessionId = callerSid,
             )
         }
 
@@ -380,7 +395,7 @@ class ModelUseOffloadHandler(
             inputImages = imageParts,
             outputPath = outputPath,
             outputExt = outputExt,
-            sessionId = request.sessionId,
+            sessionId = callerSid,
             callWarnings = callWarnings,
         )
         if (imageRouted != null) return attachCallFeedback(imageRouted, callWarnings, appliedExtras)
@@ -410,7 +425,7 @@ class ModelUseOffloadHandler(
         // Write output — media-first if the model returned image/audio/video and
         // --output has a media extension, else fall back to text. Mirrors iOS
         // ModelUseOffloadBridge.performRun (non-streaming branch).
-        val sessionId = request.sessionId
+        val sessionId = callerSid
         // [T-android-model-use-no-media-fails] A run that had to produce media
         // — the caller asked for a .png/.mp3/... output, or the model can only
         // output images — and got none must FAIL, not exit 0. Otherwise the
@@ -586,7 +601,7 @@ class ModelUseOffloadHandler(
      *   • Explicit envelope: `extra_body` (object), `extra_headers` (string map),
      *     `endpoint_path` (string). Unambiguous; recommended in help.
      *   • Implicit: any TOP-LEVEL key not in [imageReservedKeys] is folded into
-     *     the body — so `{"prompt":..,"image":"data:..","watermark":false}` just
+     *     the body — so `{"prompt":..,"image":"data:..","size":"2K"}` just
      *     works for Seedream-style image-to-image without an envelope.
      * Explicit `extra_body` wins over implicit keys on conflict. Values are kept
      * as raw org.json types so JSONObject.put() re-serializes them faithfully.
@@ -1379,12 +1394,12 @@ class ModelUseOffloadHandler(
                 Example:
                   {"prompt":"<prompt>","size":"1792x1024","quality":"hd","n":1}
 
-                Passthrough (topics: image-to-image, extra_body, extra_headers, endpoint_path) — any field our schema doesn't model is forwarded VERBATIM into the /images/generations JSON body, so you can drive provider-specific params (e.g. Volcengine Seedream image-to-image via an `image` field, `watermark`, `tools`). Two ways, both optional & additive:
+                Passthrough (topics: image-to-image, extra_body, extra_headers, endpoint_path) — any field our schema doesn't model is forwarded VERBATIM into the /images/generations JSON body, so you can drive provider-specific params (e.g. Volcengine Seedream image-to-image via an `image` field, `seed`, `tools`). Two ways, both optional & additive:
                   • implicit: any unknown TOP-LEVEL key → request body
                   • explicit: `extra_body` (object, merged into body), `extra_headers` (string map, added to request headers), `endpoint_path` (string, overrides "/images/generations" for non-standard endpoints)
                 Your keys win over our defaults; `model` is always forced to the resolved id. If you set `response_format`, the b64_json auto-probe is skipped.
                 Image-to-image example (Seedream — image goes in the BODY, not messages):
-                  {"prompt":"make the eyes blue","image":"data:image/png;base64,<...>","size":"2K","watermark":false}
+                  {"prompt":"make the eyes blue","image":"data:image/png;base64,<...>","size":"2K"}
                 Explicit-envelope example:
                   {"messages":[{"role":"user","content":"<prompt>"}],"extra_body":{"image":"<url-or-data-uri>","seed":42},"extra_headers":{"X-Custom":"1"},"endpoint_path":"/api/v3/images/generations"}
             """.trimIndent()

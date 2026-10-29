@@ -155,12 +155,114 @@ object HangDetector {
 
     private var appContext: Context? = null
 
+    /**
+     * [T-hang-background-freeze] True while the process is not at least
+     * STARTED (no activity visible). Written on the main thread by the
+     * ProcessLifecycleOwner observer, read by the watchdog thread.
+     *
+     * Field log (Android 12 tablet, 2026-09-30): during an OAuth sign-in the
+     * browser was on top, Minis was a cached background process, and the
+     * cached-apps freezer stopped the whole process for 39 s - this watchdog
+     * thread included. On the thaw it saw a 39 089 ms heartbeat gap, counted
+     * it as a main-thread hang and tripped the launch breaker
+     * ("breakerActive=true"), although the main thread had merely been frozen
+     * with everything else. The idle-stack guard is racy here: right after a
+     * thaw the main thread is often busy with the backlog, not parked.
+     * Nothing the watchdog sees while backgrounded is a hang the user saw.
+     */
+    @Volatile private var backgrounded = false
+
+    /**
+     * Why a heartbeat gap of [sinceMs] is NOT a hang, or null when it is one.
+     * Pure, for tests. The lambdas are only asked when the cheaper checks pass.
+     *
+     * [T-hang-background-freeze review] [backgrounded] comes from the process
+     * lifecycle, which is dispatched ON the main thread: a hang that began in
+     * the background and is still going when the user reopens the app keeps
+     * the flag stuck at "background" (ON_START cannot be delivered), and that
+     * hang is on screen. So the flag alone never excuses a gap: [visibleNow]
+     * asks the system, without the main thread, whether an activity of ours
+     * is actually visible.
+     */
+    internal fun notAHangReason(
+        sinceMs: Long,
+        backgrounded: Boolean,
+        visibleNow: () -> Boolean,
+        mainIdle: () -> Boolean,
+    ): String? = when {
+        backgrounded && !visibleNow() -> "app in the background (not visible)"
+        sinceMs > MAX_PLAUSIBLE_GAP_MS -> "gap beyond ${MAX_PLAUSIBLE_GAP_MS}ms (process frozen/suspended)"
+        mainIdle() -> "main thread idle in the looper"
+        else -> null
+    }
+
+    /**
+     * [T-hang-background-freeze review] The watchdog's own loop sleeps 500 ms;
+     * a tick gap longer than this means the watchdog itself was not running -
+     * the process was frozen (cached-apps freezer) or suspended - not that the
+     * main thread was stuck, which never stops this thread. Well above
+     * scheduling jitter under load; the freezer only acts after ~10 s cached.
+     */
+    internal const val WATCHDOG_SUSPENDED_MS = 5_000L
+
+    /**
+     * [T-hang-background-freeze review] The heartbeat gap to judge. After the
+     * watchdog was suspended ([resumedAt] = when it noticed), a gap that is
+     * not yet an episode is measured from the resume: the frozen time is no
+     * one's hang. The field log's 39 s freeze thawed exactly when the user
+     * came back to Minis, i.e. with the app visible - measured from the
+     * heartbeat it would be counted again. An episode already running keeps
+     * its heartbeat baseline, so a freeze in the middle of a real hang can
+     * neither end the episode early nor split it into a second count.
+     */
+    internal fun judgedGapMs(now: Long, lastHeartbeat: Long, resumedAt: Long, hangActive: Boolean): Long =
+        if (hangActive) now - lastHeartbeat else now - maxOf(lastHeartbeat, resumedAt)
+
+    /**
+     * Whether an activity of this process is visible right now, asked of the
+     * system rather than the (possibly hung) main thread. A foreground
+     * service (the OAuth wait) is 125 and does NOT count.
+     */
+    private fun visibleNow(): Boolean = try {
+        val info = android.app.ActivityManager.RunningAppProcessInfo()
+        android.app.ActivityManager.getMyMemoryState(info)
+        info.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+            info.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+    } catch (t: Throwable) {
+        false
+    }
+
+    /**
+     * [T-hang-background-freeze] Track foreground / background. On the way
+     * back to the foreground the heartbeat baseline is reset BEFORE the flag
+     * clears, so the watchdog (which reads the flag first, then the
+     * heartbeat) can never pair "foreground" with a gap that began while the
+     * process was in the background or frozen.
+     */
+    private fun observeProcessLifecycle() {
+        mainHandler.post {
+            runCatching {
+                val lifecycle = androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle
+                lifecycle.addObserver(
+                    androidx.lifecycle.LifecycleEventObserver { source, _ ->
+                        val fg = source.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+                        if (fg && backgrounded) lastHeartbeatAt.set(SystemClock.uptimeMillis())
+                        if (backgrounded == !fg) return@LifecycleEventObserver // no change
+                        backgrounded = !fg
+                        println("[T-HANG-DIAG] HangDetector ${if (fg) "foreground - watching" else "background - gaps not counted"}")
+                    },
+                )
+            }.onFailure { println("[T-HANG-DIAG] HangDetector lifecycle observer failed: ${it.message}") }
+        }
+    }
+
     /** Start the watchdog. Idempotent; safe to call from MinisApp.onCreate(). */
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
         appContext = context.applicationContext
         lastHeartbeatAt.set(SystemClock.uptimeMillis())
         scheduleHeartbeat()
+        observeProcessLifecycle()
         // Use a non-daemon thread so the watchdog isn't reaped while the app
         // is still alive but scheduled out. Daemon threads also die earlier
         // when the JVM is winding down, which can suppress the very stalls
@@ -247,6 +349,10 @@ object HangDetector {
         var episodePeakSinceMs = 0L
         // [T-android-hang-false-positive] One log line per skipped gap, not one per tick.
         var skipLogged = false
+        // [T-hang-background-freeze review] When the watchdog last ran, and
+        // when it last came back from being suspended (see judgedGapMs).
+        var lastTickAt = SystemClock.uptimeMillis()
+        var resumedAt = 0L
         while (true) {
             try {
                 Thread.sleep(500)
@@ -254,8 +360,17 @@ object HangDetector {
                 return
             }
             ticks++
+            // [T-hang-background-freeze] Flag BEFORE the heartbeat: see
+            // observeProcessLifecycle for the ordering this relies on.
+            val bg = backgrounded
             val now = SystemClock.uptimeMillis()
-            val since = now - lastHeartbeatAt.get()
+            val tickGap = now - lastTickAt
+            lastTickAt = now
+            if (tickGap > WATCHDOG_SUSPENDED_MS) {
+                resumedAt = now
+                println("[T-HANG-DIAG] HangDetector watchdog was suspended ${tickGap}ms (process frozen) - that time is not a hang")
+            }
+            val since = judgedGapMs(now, lastHeartbeatAt.get(), resumedAt, hangActive)
             // [T-HANG-DIAG] every 30 ticks (~15s) emit a liveness ping so we
             // can confirm the watchdog is alive even when nothing hangs.
             // Volume is intentionally tiny (~4 lines / minute).
@@ -284,11 +399,7 @@ object HangDetector {
                 // counted — a false positive in the count is what used to
                 // trip the launch breaker and (until it was removed) degrade
                 // every streaming reply.
-                val notAHang = when {
-                    since > MAX_PLAUSIBLE_GAP_MS -> "gap beyond ${MAX_PLAUSIBLE_GAP_MS}ms (process frozen/suspended)"
-                    isIdleMainStack(mainThreadStack()) -> "main thread idle in the looper"
-                    else -> null
-                }
+                val notAHang = notAHangReason(since, bg, ::visibleNow) { isIdleMainStack(mainThreadStack()) }
                 if (notAHang != null) {
                     if (!skipLogged) {
                         skipLogged = true

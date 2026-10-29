@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">Netwerk</string>
+    <string name="network_status">Status</string>
+    <string name="network_status_starting">Starten…</string>
+    <string name="network_status_connecting">Verbinden…</string>
+    <string name="network_status_off">Uit</string>
+    <string name="network_device_name">Apparaatnaam</string>
+    <string name="network_device_name_automatic">Automatisch</string>
+    <string name="network_exit_node_none">Geen</string>
+    <string name="network_sign_out">Uitloggen</string>
+    <string name="network_scope_shell">Shell</string>
+    <string name="network_scope_browser">Browser</string>
+    <string name="network_scope_backup">Back-up</string>
+    <string name="network_proxy_type">Type</string>
+    <string name="network_proxy_server">Server</string>
+    <string name="network_proxy_authentication">Authenticatie</string>
+    <string name="network_proxy_password">Wachtwoord</string>
+    <string name="network_proxy_bypass">Omzeilen</string>
+    <string name="network_proxy_test">Verbinding testen</string>
+    <string name="network_cancel">Annuleren</string>
+    <string name="network_save">Opslaan</string>
+    <string name="network_provider_route">Netwerk</string>
+</resources>

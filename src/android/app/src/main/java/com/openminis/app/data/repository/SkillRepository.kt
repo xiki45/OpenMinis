@@ -142,10 +142,14 @@ class SkillRepository(private val context: Context) {
         }
     }
 
-    private val httpClient = OkHttpClient.Builder()
+    private val baseHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    // [FEAT-261021-16] Follows the default route in Settings > Network; the
+    // same client object when nothing is configured.
+    private val httpClient: OkHttpClient get() = com.openminis.app.network.NetworkHttp.client(com.openminis.app.network.NetworkHttp.DEFAULT_TAG, baseHttpClient)
 
     /**
      * Repository-owned scope for fire-and-forget background work that must

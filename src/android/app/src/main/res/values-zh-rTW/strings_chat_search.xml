@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-in-chat-search] Translations from the iOS catalog. -->
+<resources>
+    <string name="chat_search_in_chat">在對話中搜尋</string>
+    <string name="chat_search_placeholder">搜尋對話內容</string>
+    <string name="chat_search_wrapped_first">已從頭開始</string>
+    <string name="chat_search_wrapped_last">已到最後</string>
+    <string name="chat_search_previous">上一個</string>
+    <string name="chat_search_next">下一個</string>
+    <string name="chat_search_result_of">第 %1$d 筆，共 %2$d 筆</string>
+    <string name="chat_search_no_results">無結果</string>
+    <string name="chat_search_clear">清除</string>
+    <string name="chat_search_done">完成</string>
+</resources>

@@ -7,6 +7,14 @@ import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.ConfigSchema
 import com.openminis.app.config.ConfigValue
 import com.openminis.app.config.fields.ClosureField
+import com.openminis.app.config.readable.ConfigReadable
+import com.openminis.app.config.readable.ConfigRefKind
+import com.openminis.app.config.readable.ConfigRefResolver
+import com.openminis.app.config.readable.ConfigReadableRenderer
+import com.openminis.app.config.readable.ConfigValueFormatter
+import com.openminis.app.config.readable.ReadableArg
+import com.openminis.app.config.readable.ReadableLine
+import com.openminis.app.config.readable.RedactedConfigValue
 import com.openminis.app.config.fields.ReadOnlyField
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.provider.thinking.ThinkingRule
@@ -76,6 +84,7 @@ class ThinkingRulesCollection(
         displayName = "Label",
         description = "Human-readable name shown in the rule list and the resolution trace.",
         valueSchema = ConfigSchema.Str(),
+        readable = ConfigReadable(ConfigValueFormatter.Text()),
         reader = { ConfigValue.Str(ruleOf(childId)?.third?.label ?: "") },
         writer = { v ->
             val label = (v as? ConfigValue.Str)?.value ?: throw ConfigError.InvalidValue("expected string")
@@ -90,6 +99,7 @@ class ThinkingRulesCollection(
         description = "\"all\" for every model, or a glob pattern like \"deepseek-v4*\".",
         valueSchema = ConfigSchema.Str(),
         risk = ConfigRisk.SENSITIVE,
+        readable = ConfigReadable(ConfigValueFormatter.Custom(::scopePhrase), label = "Applies to"),
         reader = {
             val s = ruleOf(childId)?.third?.scope
             ConfigValue.Str(if (s is ThinkingRule.Scope.ModelPattern) s.pattern else "all")
@@ -112,6 +122,7 @@ class ThinkingRulesCollection(
         description = "JSON {\"type\":\"reasoning_effort\",\"offValue\":\"none\"} etc. — how the thinking control appears on the wire.",
         valueSchema = ConfigSchema.Json,
         risk = ConfigRisk.SENSITIVE,
+        readable = ConfigReadable(ConfigValueFormatter.Custom(::wireFormatPhrase), label = "Request format"),
         reader = {
             val json = ThinkingRuleCoding.encodeWireFormat(ruleOf(childId)?.third?.wireFormat)
             configValueFromJson(json)
@@ -184,6 +195,52 @@ class ThinkingRulesCollection(
         val (instanceId, ruleId) = split(id)
             ?: throw ConfigError.InvalidValue("bad rule id: $id")
         repo.deleteThinkingRule(instanceId, ruleId)
+    }
+
+    // ---- [T-config-readable] Readable descriptions (mirrors iOS ThinkingRulesCollection) ----
+
+    override val readableSubjectFormat: String get() = "Thinking rule “%1\$@” – %2\$@"
+
+    override fun entityLabel(id: String): String? = ruleOf(id)?.third?.label
+
+    override fun readableForAdd(payload: RedactedConfigValue): List<ReadableLine> {
+        val d = (payload.value as? ConfigValue.Obj)?.value ?: return emptyList()
+        val label = (d["label"] as? ConfigValue.Str)?.value ?: "?"
+        val provider = (d["provider"] as? ConfigValue.Str)?.value
+            ?.let { ConfigRefResolver.name(ConfigRefKind.ProviderInstance, it) } ?: ReadableArg.Text("?")
+        val lines = mutableListOf(
+            ReadableLine("Add thinking rule “%1\$@” to “%2\$@”", listOf(ReadableArg.Text(label), provider)),
+        )
+        d["wire_format"]?.let { wf ->
+            val fmt = runCatching { ThinkingRuleCoding.decodeWireFormat(jsonStringFromConfigValue(wf)) }.getOrNull()
+            if (fmt != null) {
+                lines.add(ReadableLine("Request format: %@", listOf(ReadableArg.Text(com.openminis.app.ui.settings.wireFormatSummary(fmt)))))
+            }
+        }
+        return lines
+    }
+
+    override fun readableForRemove(id: String): List<ReadableLine> {
+        val (instanceId, _, rule) = ruleOf(id) ?: return emptyList()
+        return listOf(
+            ReadableLine(
+                "Delete thinking rule “%1\$@” from “%2\$@”",
+                listOf(ReadableArg.Text(rule.label), ConfigRefResolver.name(ConfigRefKind.ProviderInstance, instanceId)),
+            ),
+        )
+    }
+
+    private fun scopePhrase(v: ConfigValue): ReadableArg {
+        val s = (v as? ConfigValue.Str)?.value ?: return ConfigReadableRenderer.genericPhrase(v)
+        return if (s.equals("all", ignoreCase = true) || s.isBlank()) ReadableArg.Key("All models") else ReadableArg.Text(s)
+    }
+
+    /** wire_format JSON → the one-line summary the rule list shows. */
+    private fun wireFormatPhrase(v: ConfigValue): ReadableArg {
+        if (v == ConfigValue.Null || (v is ConfigValue.Str && v.value.isBlank())) return ReadableArg.Key("(none)")
+        val fmt = runCatching { ThinkingRuleCoding.decodeWireFormat(jsonStringFromConfigValue(v)) }.getOrNull()
+            ?: return ConfigReadableRenderer.genericPhrase(v)
+        return ReadableArg.Text(com.openminis.app.ui.settings.wireFormatSummary(fmt))
     }
 
     // ---- JSON <-> ConfigValue bridge ----

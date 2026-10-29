@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">実行中</string>
+    <string name="sched_pill_waiting">待機中</string>
+    <string name="sched_pill_run_now">今すぐ実行</string>
+    <string name="sched_pill_hide">このカウントダウンを非表示</string>
+    <string name="sched_pill_cancel_all">すべての予定タスクをキャンセル</string>
+    <string name="sched_pill_cancel_all_title">すべての予定タスクをキャンセルしますか？</string>
+    <string name="sched_pill_cancel_all_confirm">すべてキャンセル</string>
+    <string name="sched_pill_not_now">今はしない</string>
+    <string name="sched_pill_cancel_all_message">この会話でまだ予定されているタスクはすべてキャンセルされます。</string>
+    <string name="sched_pill_a11y_title">次の定期タスク</string>
+    <string name="sched_pill_a11y_running">実行中</string>
+    <string name="sched_pill_a11y_waiting">別のタスクの完了待ち</string>
+    <string name="sched_pill_a11y_upcoming_left">次回の実行 · 残り %1$d 回</string>
+    <string name="sched_pill_a11y_upcoming">次回の実行</string>
+    <string name="sched_pill_a11y_run_of">%2$d回中%1$d回目</string>
+    <string name="sched_pill_a11y_run">%1$d回目</string>
+    <string name="sched_pill_a11y_next_in">次回の実行まで %1$s</string>
+    <string name="sched_pill_a11y_more">他 %1$d 件</string>
+    <string name="sched_pill_a11y_hint">タスクの詳細を開きます</string>
+</resources>

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">\"%1$s\"은(는) Minis가 이곳에 마운트한 폴더이므로 파일 브라우저에서 삭제할 수 없습니다. 아무것도 삭제되지 않았습니다. 외부 폴더를 제거하려면 설정 › 외부 폴더 마운트를 사용하세요.</string>
+</resources>

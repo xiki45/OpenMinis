@@ -5,6 +5,8 @@ import com.openminis.app.config.ConfigField
 import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.ConfigSchema
 import com.openminis.app.config.ConfigValue
+import com.openminis.app.config.readable.ConfigReadable
+import com.openminis.app.config.readable.ConfigValueFormatter
 import com.openminis.app.sandbox.ContainerDns
 import com.openminis.app.sandbox.ContainerDns.DnsMode
 
@@ -42,6 +44,11 @@ internal object ContainerDnsFields {
             valueSchema = ConfigSchema.StrEnum(DnsMode.values().map { it.wire }),
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            // [T-config-readable] Labels = the iOS keys for the same setting.
+            readable = ConfigReadable(
+                ConfigValueFormatter.EnumLabels(mapOf("auto" to "Automatic (system)", "custom" to "Custom")),
+                label = "Container DNS mode",
+            ),
             reader = { ConfigValue.Str(store.mode().wire) },
             writer = { v ->
                 store.save(DnsMode.fromWire((v as ConfigValue.Str).value), store.rawServers())
@@ -58,6 +65,13 @@ internal object ContainerDnsFields {
             valueSchema = ConfigSchema.Json,
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            // [T-config-readable] Stored as one string (newline / comma /
+            // space separated) but read as a server list: added / removed /
+            // first-server clauses, like iOS's array-typed field.
+            readable = ConfigReadable(
+                ConfigValueFormatter.StringList(ordered = true, splitText = ::splitServers),
+                label = "Container custom DNS servers",
+            ),
             reader = { ConfigValue.Str(store.rawServers()) },
             writer = { v ->
                 val raw = serversText(v)
@@ -72,6 +86,10 @@ internal object ContainerDnsFields {
             },
         ),
     )
+
+    /** The entries of a stored / written server string, in order. */
+    internal fun splitServers(raw: String): List<String> =
+        raw.split('\n', ',', ' ', '\t').map { it.trim() }.filter { it.isNotEmpty() }
 
     /** A string, or an array of strings joined one per line. */
     private fun serversText(v: ConfigValue): String = when (v) {

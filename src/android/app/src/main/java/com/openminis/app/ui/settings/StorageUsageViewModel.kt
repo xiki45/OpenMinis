@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.session.SessionDeleter
+import com.openminis.app.data.session.OrphanedSessionFiles
 import com.openminis.app.data.session.SessionStorage
 import com.openminis.app.data.session.SessionTree
 import com.openminis.app.logging.AppLogger
@@ -139,6 +140,9 @@ internal class StorageUsageViewModel(
         val logsCachesSize: Long = 0L,
         val rows: List<SessionStorageInfo> = emptyList(),
         val isClearingLogs: Boolean = false,
+        /** [T-storage-orphan-cleanup] Bytes in session folders no conversation owns. */
+        val orphanBytes: Long = 0L,
+        val isCleaningOrphans: Boolean = false,
         val selecting: Boolean = false,
         val selectedIds: Set<String> = emptySet(),
         val batchBusy: Boolean = false,
@@ -156,6 +160,12 @@ internal class StorageUsageViewModel(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    private val orphans = OrphanedSessionFiles(storage)
+
+    /** [T-storage-orphan-cleanup] Outcome of a clean-up, shown once as a dialog. */
+    private val _orphanResult = MutableStateFlow<OrphanedSessionFiles.Result?>(null)
+    val orphanResult: StateFlow<OrphanedSessionFiles.Result?> = _orphanResult.asStateFlow()
+
     private val _result = MutableStateFlow<BatchResult?>(null)
     val result: StateFlow<BatchResult?> = _result.asStateFlow()
 
@@ -170,7 +180,13 @@ internal class StorageUsageViewModel(
         viewModelScope.launch {
             val started = System.currentTimeMillis()
             val scanned = withContext(Dispatchers.IO) {
+                // [T-storage-orphan-cleanup] Folders first, ids after: a session
+                // created in between is then in the id set.
+                val listedFolders = orphans.listFolders()
                 val allSessions = repo.dao.listSessions()
+                val orphanScan = orphans.scan(
+                    listedFolders, allSessions.mapTo(HashSet()) { it.id }, sessionsInUse(), System.currentTimeMillis(),
+                )
                 val parentOf = allSessions.associate { it.id to it.parentSessionId }
                 val rows = aggregateSessionStorage(allSessions, storage).map { (session, minis, media) ->
                     SessionStorageInfo(
@@ -186,6 +202,7 @@ internal class StorageUsageViewModel(
                     shellSize = SessionStorage.directorySize(File(appContext.filesDir, "alpine-rootfs")),
                     dbSize = databaseSize(appContext),
                     logsCachesSize = LogsAndCachesCleaner.size(appContext),
+                    orphanBytes = orphanScan.totalBytes,
                     rows = SessionStorageRows.sorted(rows),
                 )
             }
@@ -230,6 +247,54 @@ internal class StorageUsageViewModel(
                 ),
             )
         }
+    }
+
+    /** Sessions the app is using right now, row or no row: never cleaned. */
+    private fun sessionsInUse(): Set<String> {
+        val t = com.openminis.app.service.SessionActivityTracker
+        return t.activeSessions.value + t.presentSessions.value + t.scheduledSessions.value + t.processingSessions.value
+    }
+
+    /** A fresh scan of what would be cleaned now. Deletes nothing. */
+    private suspend fun scanOrphans(): OrphanedSessionFiles.Scan = withContext(Dispatchers.IO) {
+        val listed = orphans.listFolders()
+        val ids = repo.dao.listSessions().mapTo(HashSet()) { it.id }
+        orphans.scan(listed, ids, sessionsInUse(), System.currentTimeMillis())
+    }
+
+    /**
+     * [T-storage-orphan-cleanup] The button looks first, so the confirmation
+     * names what will really be deleted (part of the row may be waiting out
+     * the hour). [onResult] gets the scan; nothing is deleted here.
+     */
+    fun previewOrphanCleanup(onResult: (OrphanedSessionFiles.Scan) -> Unit) {
+        viewModelScope.launch {
+            val scan = scanOrphans()
+            _state.update { it.copy(orphanBytes = scan.totalBytes) }
+            onResult(scan)
+        }
+    }
+
+    /** Scan again (never trust the preview), delete only that scan's removable folders. */
+    fun cleanOrphans() {
+        if (_state.value.isCleaningOrphans) return
+        _state.update { it.copy(isCleaningOrphans = true) }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { orphans.delete(scanOrphans()) }
+            AppLogger.info(
+                TAG,
+                "[OrphanCleanup] removed=${result.removedCount} freed=${result.freedBytes} " +
+                    "kept=${result.keptBytes} failed=${result.failedPaths.size}",
+            )
+            _state.update {
+                it.copy(isCleaningOrphans = false, orphanBytes = (it.orphanBytes - result.freedBytes).coerceAtLeast(0L))
+            }
+            _orphanResult.value = result
+        }
+    }
+
+    fun consumeOrphanResult() {
+        _orphanResult.value = null
     }
 
     fun clearLogsAndCaches() {

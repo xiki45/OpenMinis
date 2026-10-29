@@ -195,6 +195,21 @@ object PRootKernel {
         // Mirrored in default_mount/etc/profile.d/minis.sh for login shells.
         customEnvironment.putIfAbsent("UV_LINK_MODE", "symlink")
 
+        // [T-git-createobject-rename] openminis/openminis#375 / #409: Git's
+        // default core.createObject=link makes gc / repack / commit call
+        // link(), which link2symlink turns into .l2s.* sentinels inside
+        // .git/objects (undeletable once Git chmods the pack dir 0555).
+        // `rename` keeps Git off link() entirely. The old `copy` written by
+        // minis.sh is not a valid value and made every git command fatal.
+        // Injected as environment config so non-login shells get it too, and
+        // only when nothing has claimed GIT_CONFIG_COUNT already, so a
+        // user-supplied GIT_CONFIG_* set is never clobbered.
+        if (!customEnvironment.containsKey("GIT_CONFIG_COUNT")) {
+            customEnvironment.putIfAbsent("GIT_CONFIG_COUNT", "1")
+            customEnvironment.putIfAbsent("GIT_CONFIG_KEY_0", "core.createObject")
+            customEnvironment.putIfAbsent("GIT_CONFIG_VALUE_0", "rename")
+        }
+
         // Inject device timezone so Alpine userspace sees local time.
         // Mirrors iOS ISHShellExecutor.m:335-353 — uses POSIX TZ format with a
         // fixed name ("LCL") to avoid abbreviations like "GMT+8" which contain
@@ -721,7 +736,10 @@ object PRootKernel {
         // Native offload: route registered handler names to the host-side
         // NativeOffloadServer over the abstract unix socket.
         val handlers = NativeOffloadServer.registeredHandlers
-        if (handlers.isNotEmpty()) {
+        // [T-native-offload-bind] Only when our server is listening: otherwise
+        // the handler stubs run and report the CLI unavailable, instead of
+        // proot connecting to a name another process holds (and hanging).
+        if (handlers.isNotEmpty() && NativeOffloadServer.awaitListening()) {
             cmd.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
         }
 
@@ -744,6 +762,13 @@ object PRootKernel {
         // interface or binds a local address fails LATER instead of at
         // startup — a worse failure, not a better one.
         cmd.add("--fake-netlink")
+
+        // [FEAT-261021-11] Transparent forwarding of TCP connections that
+        // ignore proxy variables (ssh, nc, ...) per Settings > Network. proot
+        // reads the routes file on each connect(); while the app keeps it
+        // deleted (the default) nothing is touched. Passed only to a proot
+        // that knows the option - an older binary would reject it.
+        cmd.addAll(com.openminis.app.network.ShellTransparentNet.prootArgs(rootfsManager.prootBinary))
 
         // Shell command
         cmd.add("/bin/sh")
@@ -827,14 +852,28 @@ object PRootKernel {
         val binDir = File(rootfsDir, "usr/local/bin").also { it.mkdirs() }
         var created = 0
         var existed = 0
+        var upgraded = 0
         for (name in NativeOffloadServer.registeredHandlers) {
             val stub = File(binDir, name)
-            if (stub.exists()) { existed++; continue }
-            stub.writeText("#!/bin/sh\nexit 0\n")
+            val want = HandlerStub.content(name)
+            if (stub.exists()) {
+                // [T-native-offload-bind] Upgrade only our own earlier stub; a
+                // file the user replaced is left alone.
+                val have = runCatching { stub.readText() }.getOrNull()
+                if (have == HandlerStub.LEGACY_CONTENT) {
+                    stub.writeText(want)
+                    stub.setExecutable(true, false)
+                    upgraded++
+                } else {
+                    existed++
+                }
+                continue
+            }
+            stub.writeText(want)
             stub.setExecutable(true, false)
             created++
         }
-        Log.d(TAG, "installHandlerStubs dir=${binDir.absolutePath} created=$created existed=$existed")
+        Log.d(TAG, "installHandlerStubs dir=${binDir.absolutePath} created=$created upgraded=$upgraded existed=$existed")
 
         installShellWrappers(binDir)
     }

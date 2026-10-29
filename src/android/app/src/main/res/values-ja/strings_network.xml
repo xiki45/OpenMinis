@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Network. Translations shared with iOS come from its Localizable.xcstrings; locales without one fall back to English. -->
+<resources>
+    <string name="network_title">ネットワーク</string>
+    <string name="network_default_route">デフォルトルート</string>
+    <string name="network_default_route_footer">「デフォルトに従う」に設定したすべての機能がこのルートを使います。Tailscale がオンのとき、tailnet 内のアドレスはルートに関係なく常に Tailscale 経由で接続します。</string>
+    <string name="network_tailscale_footer">VPN プロファイルなしで Minis の中で動作します。tailnet に届くのは Minis 自身の接続だけで、Minis の実行中に限られます。「サブネットルートを使用」をオンにすると、ほかのデバイスが共有するアドレス（自宅のネットワークなど）も Tailscale 経由になります。</string>
+    <string name="network_status">ステータス</string>
+    <string name="network_status_starting">開始中…</string>
+    <string name="network_status_connected">接続済み</string>
+    <string name="network_status_not_logged_in">未ログイン</string>
+    <string name="network_status_connecting">接続中…</string>
+    <string name="network_status_off">オフ</string>
+    <string name="network_login_browser">ブラウザでログイン</string>
+    <string name="network_copy_login_link">ログインリンクをコピー</string>
+    <string name="network_login_auth_key">Auth Key でログイン</string>
+    <string name="network_device_name">デバイス名</string>
+    <string name="network_device_name_automatic">自動</string>
+    <string name="network_use_subnet_routes">サブネットルートを使用</string>
+    <string name="network_exit_node">出口ノード</string>
+    <string name="network_exit_node_none">なし</string>
+    <string name="network_peer_offline">%1$s（オフライン）</string>
+    <string name="network_devices">デバイス</string>
+    <string name="network_sign_out">サインアウト</string>
+    <string name="network_sign_out_clear_ellipsis">サインアウトして消去…</string>
+    <string name="network_sign_out_clear_title">サインアウトして、このデバイスを Tailscale から削除しますか？</string>
+    <string name="network_sign_out_clear">サインアウトして消去</string>
+    <string name="network_sign_out_clear_message">デバイスキーは削除されます。Tailscale を再びオンにすると、このデバイスは新しいマシンとして追加されます。</string>
+    <string name="network_proxies">プロキシ</string>
+    <string name="network_add_proxy">プロキシを追加</string>
+    <string name="network_edit_proxy">プロキシを編集</string>
+    <string name="network_used_by">使用する機能</string>
+    <string name="network_scope_shell">シェル</string>
+    <string name="network_scope_browser">ブラウザ</string>
+    <string name="network_scope_backup">バックアップ</string>
+    <string name="network_route_follow_default">デフォルトに従う</string>
+    <string name="network_route_direct">直接接続</string>
+    <string name="network_proxy_name">名前（任意）</string>
+    <string name="network_proxy_type">タイプ</string>
+    <string name="network_proxy_server">サーバ</string>
+    <string name="network_proxy_authentication">認証</string>
+    <string name="network_proxy_password">パスワード</string>
+    <string name="network_proxy_bypass">バイパス</string>
+    <string name="network_proxy_bypass_footer">これらのホストには直接接続します。複数の項目はカンマか改行で区切ります。「*.example.com」はサブドメインにも一致します。ローカルアドレスは常にプロキシを経由しません。</string>
+    <string name="network_proxy_test">接続をテスト</string>
+    <string name="network_proxy_test_ok">%1$d ミリ秒で接続しました</string>
+    <string name="network_proxy_delete">プロキシを削除</string>
+    <string name="network_cancel">キャンセル</string>
+    <string name="network_save">保存</string>
+    <string name="network_auth_key_footer">Tailscale 管理コンソールの「設定 &gt; キー」で Auth Key を作成してください。このデバイスの追加に一度だけ使い、保存はしません。</string>
+    <string name="network_log_in">ログイン</string>
+    <string name="network_provider_route">ネットワーク</string>
+    <string name="network_provider_route_footer">このプロバイダへのリクエストの接続方法です。Tailscale とプロキシは「設定 &gt; ネットワーク」で設定します。</string>
+    <!-- [FEAT-261021-04] Settings > Network section -->
+    <string name="network_routing_title">ネットワークルーティング</string>
+    <string name="network_container_dns">ShellコンテナのDNS</string>
+</resources>

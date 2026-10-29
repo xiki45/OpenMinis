@@ -6,6 +6,7 @@ import com.openminis.app.config.ConfigField
 import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.ConfigSchema
 import com.openminis.app.config.ConfigValue
+import com.openminis.app.config.readable.ConfigReadable
 
 /**
  * Hand-rolled field — use when the storage backend is not a simple
@@ -24,9 +25,19 @@ class ClosureField(
     override val access: ConfigAccess = ConfigAccess.READWRITE,
     override val risk: ConfigRisk = ConfigRisk.NORMAL,
     override val revertable: Boolean = true,
+    /** [T-config-readable] Required (no default) — see [ConfigField.readable]. */
+    override val readable: ConfigReadable,
     private val reader: () -> ConfigValue,
     private val writer: (ConfigValue) -> Unit,
+    /** [FEAT-261021-03] See [ConfigField.normalize]. */
+    private val normalizer: ((ConfigValue) -> ConfigValue)? = null,
+    /** [FEAT-261021-03] See [ConfigField.validate]. */
+    private val validator: ((ConfigValue) -> Unit)? = null,
 ) : ConfigField {
+    override fun normalize(value: ConfigValue): ConfigValue = normalizer?.invoke(value) ?: value
+    override fun validate(value: ConfigValue) {
+        validator?.invoke(value)
+    }
     override fun read(): ConfigValue = reader()
     override fun write(value: ConfigValue) {
         valueSchema.validate(value)
@@ -50,6 +61,7 @@ class ReadOnlyField(
 ) : ConfigField {
     override val access: ConfigAccess get() = ConfigAccess.READONLY
     override val revertable: Boolean get() = false
+    override val readable: ConfigReadable get() = ConfigReadable.notWritable
     override fun read(): ConfigValue = reader()
     override fun write(value: ConfigValue) {
         throw ConfigError.PermissionDenied("Read-only")
@@ -71,6 +83,7 @@ class HiddenField(
     override val access: ConfigAccess get() = ConfigAccess.HIDDEN
     override val risk: ConfigRisk get() = ConfigRisk.DESTRUCTIVE
     override val revertable: Boolean get() = false
+    override val readable: ConfigReadable get() = ConfigReadable.notWritable
     override fun read(): ConfigValue {
         throw ConfigError.PermissionDenied(reason)
     }

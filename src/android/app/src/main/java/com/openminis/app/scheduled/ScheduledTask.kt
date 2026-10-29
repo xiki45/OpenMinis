@@ -205,6 +205,27 @@ data class ScheduledTask(
      * --count or finish its schedule early).
      */
     val triggeredCount: Int? = null,
+    /**
+     * [T-scheduled-active-session-android] The chat this task was created IN
+     * (the chat running `minis-scheduled create`), iOS `creatorSessionId`.
+     * A follow-up aimed back at this chat keeps it "processing" between fires
+     * ([ScheduledSessionHold]). null for a task made outside any chat (the
+     * editor, an RPC) and for every task written before this field existed:
+     * those keep no chat active, as on iOS.
+     */
+    val creatorSessionId: String? = null,
+    /**
+     * [T-sched-run-now] CALENDAR only: the planned slot of the pending run
+     * that "Run now" on the chat's timer pill already fired early. Next-run
+     * computation starts after it, and an alarm for that slot that was
+     * already on its way finds it taken and does not run. null otherwise.
+     * Not carried over by an edit (the editor re-plans the schedule).
+     *
+     * [FIX-261025-19] Also the slot the in-app timer ([ScheduledInAppTimer])
+     * or the alarm itself last ran, so whichever of the two reaches a slot
+     * second finds it taken.
+     */
+    val runNowSlotMs: Long? = null,
 ) {
 
     val isCalendar: Boolean get() = triggerKind == ScheduledTriggerKind.CALENDAR
@@ -265,7 +286,8 @@ data class ScheduledTask(
 
         // Earliest instant we may fire: max(now, start-of-startDate). This lets
         // a task created today with a future startDate wait until that day.
-        val floor = maxOf(now, startDateMs ?: Long.MIN_VALUE)
+        // [T-sched-run-now] A slot "Run now" fired early is not pending again.
+        val floor = maxOf(now, startDateMs ?: Long.MIN_VALUE, runNowSlotMs?.let { it + 1 } ?: Long.MIN_VALUE)
 
         val cal = Calendar.getInstance().apply {
             timeInMillis = floor
@@ -349,6 +371,8 @@ data class ScheduledTask(
         if (onCompletionOf != null) put("onCompletionOf", onCompletionOf)
         if (anchorMs != null) put("anchorMs", anchorMs)
         if (triggeredCount != null) put("triggeredCount", triggeredCount)
+        if (creatorSessionId != null) put("creatorSessionId", creatorSessionId)
+        if (runNowSlotMs != null) put("runNowSlotMs", runNowSlotMs)
     }
 
     companion object {
@@ -400,6 +424,8 @@ data class ScheduledTask(
             onCompletionOf = if (o.has("onCompletionOf")) o.optString("onCompletionOf", null) else null,
             anchorMs = if (o.has("anchorMs")) o.optLong("anchorMs") else null,
             triggeredCount = if (o.has("triggeredCount")) o.optInt("triggeredCount") else null,
+            creatorSessionId = if (o.has("creatorSessionId")) o.optString("creatorSessionId", null) else null,
+            runNowSlotMs = if (o.has("runNowSlotMs")) o.optLong("runNowSlotMs") else null,
         )
 
         /** `{{result}}` in an on-completion prompt, replaced by the upstream's result. */

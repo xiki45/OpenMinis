@@ -3,6 +3,9 @@ package com.openminis.app.config
 import com.openminis.app.config.audit.ConfigAuditActor
 import com.openminis.app.config.audit.ConfigAuditEntry
 import com.openminis.app.config.audit.ConfigAuditLog
+import com.openminis.app.config.readable.ConfigReadableRenderer
+import com.openminis.app.config.readable.ReadableSummary
+import com.openminis.app.config.readable.RedactedConfigValue
 import com.openminis.app.config.audit.ConfigAuditStatus
 import com.openminis.app.config.confirm.ConfigConfirmationGate
 import com.openminis.app.config.confirm.ConfirmOutcome
@@ -323,6 +326,12 @@ object ConfigBridge {
         //    or hidden path before bothering the user.
         val resolved = ArrayList<Resolved>(items.length())
         val resolvedItems = ArrayList<PendingConfigChangeItem>(items.length())
+        // [T-config-readable] One user-facing description per resolved item,
+        // index-aligned with `resolved`. Rendered HERE, before the dialog and
+        // before any write, so a record about to be removed is still named.
+        // Goes to the dialog row and the audit row ONLY — never into the CLI
+        // response (applied[], errors, user_message stay as they were).
+        val readables = ArrayList<ReadableSummary>(items.length())
         for (i in 0 until items.length()) {
             val raw = items.optJSONObject(i) ?: continue
             val rawPath = raw.optString("path", "")
@@ -384,6 +393,15 @@ object ConfigBridge {
                         auditNewValue = redactedNewValue,
                     )
                 )
+                val readable = if (isAppend) {
+                    ConfigReadableRenderer.forCollectionAdd(coll, RedactedConfigValue.payload(parsedValue))
+                } else {
+                    ConfigReadableRenderer.forCollectionRemove(
+                        coll,
+                        (parsedValue as? ConfigValue.Str)?.value ?: parsedValue.displayString,
+                    )
+                }
+                readables.add(readable)
                 resolvedItems.add(
                     PendingConfigChangeItem(
                         displayName = coll.displayName,
@@ -392,6 +410,7 @@ object ConfigBridge {
                         newDisplay = if (isAppend) redactedNewValue.displayString else "",
                         verb = if (isAppend) "add" else "remove",
                         risk = coll.risk,
+                        readable = readable,
                     )
                 )
                 continue
@@ -491,8 +510,13 @@ object ConfigBridge {
                     displayNew = ""
                 }
                 else -> {
-                    try {
-                        field.valueSchema.validate(parsedValue)
+                    // [FEAT-261021-03] normalize -> schema -> field checks,
+                    // all before the confirmation dialog.
+                    val normalized = try {
+                        field.normalize(parsedValue).also {
+                            field.valueSchema.validate(it)
+                            field.validate(it)
+                        }
                     } catch (e: ConfigError) {
                         return JSONObject().apply {
                             put("ok", false)
@@ -500,7 +524,7 @@ object ConfigBridge {
                             put("reason", e.message ?: e.toString())
                         }
                     }
-                    newValue = parsedValue
+                    newValue = normalized
                     displayVerb = "set"
                     displayPath = field.path
                     displayOld = oldValue.displayString
@@ -529,6 +553,16 @@ object ConfigBridge {
                     auditNewValue = if (isSecretField) redactedNewValue else null,
                 )
             )
+            // [T-config-readable] Both sides go through RedactedConfigValue —
+            // the same masking as the audit copy — so no secret can reach the
+            // rendered text.
+            val fieldLeaf = field.path.substringAfterLast('.')
+            val readable = ConfigReadableRenderer.forFieldWrite(
+                field,
+                old = RedactedConfigValue.field(fieldLeaf, oldValue),
+                new = RedactedConfigValue.field(fieldLeaf, newValue),
+            )
+            readables.add(readable)
             resolvedItems.add(
                 PendingConfigChangeItem(
                     displayName = field.displayName,
@@ -537,6 +571,7 @@ object ConfigBridge {
                     newDisplay = if (isSecretField) redactedNewValue.displayString else displayNew,
                     verb = displayVerb,
                     risk = field.risk,
+                    readable = readable,
                 )
             )
         }
@@ -557,7 +592,7 @@ object ConfigBridge {
         return when (outcome) {
             is ConfirmOutcome.TimedOut -> {
                 val now = System.currentTimeMillis()
-                for (r in resolved) {
+                for ((i, r) in resolved.withIndex()) {
                     audit.append(
                         ConfigAuditEntry(
                             id = UUID.randomUUID().toString(),
@@ -567,6 +602,7 @@ object ConfigBridge {
                             newValueJSON = r.newValue.jsonString(),
                             confirmedAt = null, status = ConfigAuditStatus.TIMEOUT,
                             revertOf = null, caption = caption,
+                            readable = readables.getOrNull(i),
                         )
                     )
                 }
@@ -579,7 +615,7 @@ object ConfigBridge {
             }
             is ConfirmOutcome.Rejected -> {
                 val now = System.currentTimeMillis()
-                for (r in resolved) {
+                for ((i, r) in resolved.withIndex()) {
                     audit.append(
                         ConfigAuditEntry(
                             id = UUID.randomUUID().toString(),
@@ -589,6 +625,7 @@ object ConfigBridge {
                             newValueJSON = r.newValue.jsonString(),
                             confirmedAt = now, status = ConfigAuditStatus.REJECTED,
                             revertOf = null, caption = caption,
+                            readable = readables.getOrNull(i),
                         )
                     )
                 }
@@ -599,7 +636,7 @@ object ConfigBridge {
                     put("user_message", "Change cancelled.")
                 }
             }
-            is ConfirmOutcome.Approved -> {
+            is ConfirmOutcome.Approved -> ConfigWriteWarnings.collect {
                 val now = System.currentTimeMillis()
                 val applied = JSONArray()
                 val auditIds = JSONArray()
@@ -612,6 +649,7 @@ object ConfigBridge {
                 for ((idx, row) in outcome.items.withIndex()) {
                     if (idx >= resolved.size) continue
                     val r = resolved[idx]
+                    val readable = readables.getOrNull(idx)
                     if (!row.isApproved) {
                         val auditId = UUID.randomUUID().toString()
                         audit.append(
@@ -622,6 +660,7 @@ object ConfigBridge {
                                 newValueJSON = r.newValue.jsonString(),
                                 confirmedAt = now, status = ConfigAuditStatus.REJECTED,
                                 revertOf = null, caption = caption,
+                                readable = readable,
                             )
                         )
                         continue
@@ -690,6 +729,7 @@ object ConfigBridge {
                                 newValueJSON = effectiveNewJSON,
                                 confirmedAt = now, status = ConfigAuditStatus.APPLIED,
                                 revertOf = null, caption = caption,
+                                readable = readable,
                             )
                         )
                         auditIds.put(auditId)
@@ -748,6 +788,10 @@ object ConfigBridge {
                         put("user_message", "Settings updated. Review or revert at [Logs → Config Changes](minis://settings/logs?tab=config-audit).")
                     }
                 }
+            }.let { (response, warnings) ->
+                // [T-envvar-disable] Non-fatal notes raised during the writes.
+                if (warnings.isNotEmpty()) response.put("warnings", JSONArray(warnings))
+                response
             }
         }
     }
@@ -854,6 +898,15 @@ object ConfigBridge {
         }
     }
 
+    /**
+     * The CLI / agent view of an audit row — an explicit allow-list.
+     *
+     * [T-config-readable] `e.readable` (the human-readable description) is
+     * deliberately NOT emitted: it is for the user only (confirmation dialog
+     * + Logs → Config Changes) and must never reach the model. Keep this a
+     * field-by-field list; never serialize the whole entry. Guarded by
+     * ConfigReadableLeakTest.
+     */
     private fun auditEntryDict(e: ConfigAuditEntry): JSONObject = JSONObject().apply {
         put("id", e.id)
         put("at", isoFormatter.format(Date(e.at)))

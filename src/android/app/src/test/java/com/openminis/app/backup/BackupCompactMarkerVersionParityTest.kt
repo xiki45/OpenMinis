@@ -1,9 +1,8 @@
 package com.openminis.app.backup
 
-import com.openminis.app.ProductionSources
+import com.openminis.app.IosSources
 import com.openminis.app.data.db.CompactMarkerEntity
 import com.openminis.app.data.db.MessageEntity
-import java.io.File
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.Json
@@ -46,18 +45,14 @@ class BackupCompactMarkerVersionParityTest {
 
     private data class SwiftProp(val name: String, val optional: Boolean)
 
-    private val repoRoot: File by lazy {
-        var dir: File? = ProductionSources.mainRoot()
-        while (dir != null && !File(dir, "src/ios").isDirectory) dir = dir.parentFile
-        requireNotNull(dir) { "repo root with src/ios not found" }
-    }
-    private val chatStore by lazy { File(repoRoot, "src/ios/Agent/Chat/ChatStore.swift").readText() }
-
     /**
      * Stored properties of a Swift struct, INCLUDING `var x: T = default`.
-     * Computed properties (`{` on the line) are excluded.
+     * Computed properties (`{` on the line) are excluded. The struct is found
+     * wherever iOS declares it (f492946c7 moved these models out of
+     * ChatStore.swift into ChatStoreModels.swift).
      */
     private fun storedProps(header: String): List<SwiftProp> {
+        val chatStore = IosSources.declaring(header)
         val start = chatStore.indexOf(header)
         require(start >= 0) { "declaration not found: $header" }
         var depth = 0
@@ -83,9 +78,10 @@ class BackupCompactMarkerVersionParityTest {
     private fun requiredKeys(header: String): Set<String> =
         storedProps(header).filterNot { it.optional }.map { it.name }.toSet()
 
+    /** A custom decoder can sit in the struct body or in an extension in any file. */
     private fun hasCustomDecoder(typeName: String): Boolean =
-        Regex("""extension $typeName\b""").containsMatchIn(chatStore) ||
-            chatStore.substringAfter("struct $typeName:").substringBefore("\n}\n").contains("init(from decoder")
+        IosSources.anyMatches(Regex("""extension $typeName\b""")) ||
+            IosSources.declaring("struct $typeName:").substringAfter("struct $typeName:").substringBefore("\n}\n").contains("init(from decoder")
 
     private val v2Marker = CompactMarkerEntity(
         id = "C-2", sessionId = "S-1", summary = "sum", firstKeptSortOrder = Int.MAX_VALUE,

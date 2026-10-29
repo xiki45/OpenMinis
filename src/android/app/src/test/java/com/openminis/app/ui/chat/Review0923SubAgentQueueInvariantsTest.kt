@@ -79,7 +79,7 @@ class Review0923SubAgentQueueInvariantsTest {
      *
      * Result for a resumed sub agent that completes normally: the job stays
      * RUNNING for the life of the process — it keeps one of the
-     * MAX_CONCURRENT_CHILD_JOBS slots, the parent never receives the final
+     * MAX_CONCURRENT_CHILD_JOBS_PER_PARENT slots, the parent never receives the final
      * <agent_callback>, the parent reads as `hasWorkInFlight()` forever (so the
      * VM cache can never evict it), and the delegate block keeps its RUNNING
      * spinner because OrphanedRunningToolGate sees a live job — the exact

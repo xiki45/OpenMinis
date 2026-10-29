@@ -92,12 +92,42 @@ class ScheduledTaskStore(private val context: Context) {
         awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
+    // [T-android-sched-badge-toggle] Whether the home toolbar's clock icon
+    // shows the enabled-task count. Default on, so nothing changes until the
+    // user opts out from the Scheduled Tasks screen's menu.
+    fun showHomeBadge(): Boolean = prefs.getBoolean(KEY_SHOW_HOME_BADGE, true)
+
+    fun setShowHomeBadge(show: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_HOME_BADGE, show).apply()
+    }
+
+    /** Live [showHomeBadge], so the session list reacts without a restart. */
+    fun observeShowHomeBadge(): Flow<Boolean> = callbackFlow {
+        trySend(showHomeBadge())
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_SHOW_HOME_BADGE || key == null) {
+                trySend(showHomeBadge())
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     companion object {
         private const val TAG = "ScheduledTaskStore"
+
+        /**
+         * [T-android-sched-badge-toggle] The number the home clock icon shows,
+         * or null for no badge: hidden when the user turned it off or when no
+         * task is enabled.
+         */
+        fun homeBadgeCount(enabledTaskCount: Int, showBadge: Boolean): Int? =
+            enabledTaskCount.takeIf { showBadge && it > 0 }
 
         /** Process-wide: stores are constructed per call site, the file is one. */
         private val LOCK = Any()
         private const val PREFS_NAME = "minis_scheduled_tasks_prefs"
         private const val KEY_TASKS = "tasks_json"
+        private const val KEY_SHOW_HOME_BADGE = "show_home_badge"
     }
 }

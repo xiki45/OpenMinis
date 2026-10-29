@@ -79,7 +79,7 @@ object BrowserUseTool {
 
         properties.put("user_agent", JSONObject().apply {
             put("type", "string")
-            put("description", "User agent profile to switch to")
+            put("description", "set_user_agent: profile for the target tab only (not saved; other tabs and the Browser Settings default are unchanged). Aliases: desktop, mobile.")
             put("enum", JSONArray(listOf("desktop_chrome", "mobile_chrome")))
         })
 

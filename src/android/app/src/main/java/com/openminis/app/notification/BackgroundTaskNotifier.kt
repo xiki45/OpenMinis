@@ -66,7 +66,7 @@ class BackgroundTaskNotifier(
      * the main thread. No-ops silently if the user has disabled
      * notifications or the app is in foreground.
      */
-    fun notifyTaskCompleted(sessionId: String, isError: Boolean = false) {
+    fun notifyTaskCompleted(sessionId: String, outcome: BackgroundTurnOutcome = BackgroundTurnOutcome.COMPLETED) {
         if (!backgroundSettings.taskNotificationsEnabled.value) return
         if (isAppForeground()) return
 
@@ -104,20 +104,32 @@ class BackgroundTaskNotifier(
                 }
                 val rawTitle = session?.title?.takeIf { it.isNotBlank() }
                     ?: context.getString(R.string.notif_task_completed_default_title)
-                val title = if (isError) "❌ $rawTitle" else rawTitle
-                val body = if (isError) {
-                    context.getString(R.string.notif_task_failed_body)
-                } else {
-                    context.getString(R.string.notif_task_completed_body)
+                // [T-bgnotif-outcome] A run that did not finish is not "completed".
+                val (title, body) = when (outcome) {
+                    BackgroundTurnOutcome.FAILED ->
+                        "❌ $rawTitle" to context.getString(R.string.notif_task_failed_body)
+                    BackgroundTurnOutcome.INTERRUPTED ->
+                        "⏸ $rawTitle" to context.getString(R.string.notif_task_paused_body)
+                    BackgroundTurnOutcome.COMPLETED ->
+                        rawTitle to context.getString(R.string.notif_task_completed_body)
                 }
-                postNotification(sessionId, title, body)
+                // [T-port-sched-notif-single] A run opened by a scheduled fire
+                // gets one entry per (chat, task) that each run replaces in
+                // place (iOS b0c0c87ea). This is now the ONLY notification a
+                // scheduled run posts: ScheduledAgentRunner used to add a
+                // second, hard-coded English one that ignored this toggle and
+                // the foreground check and was never cleared.
+                val taskId = ScheduledRunNotification.taskIdOpeningTurn { offset ->
+                    chatRepository.dao.messageHeadNewestFirst(sessionId, offset)
+                }
+                postNotification(sessionId, title, body, ScheduledRunNotification.tag(taskId))
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "notifyTaskCompleted failed: ${t.message}")
             }
         }
     }
 
-    private fun postNotification(sessionId: String, title: String, body: String) {
+    private fun postNotification(sessionId: String, title: String, body: String, tag: String? = null) {
         // Pre-Tiramisu: we don't need the runtime permission, just post.
         // Tiramisu+: NotificationManagerCompat.areNotificationsEnabled
         // is the right gate — POST_NOTIFICATIONS is requested at toggle-on
@@ -156,7 +168,7 @@ class BackgroundTaskNotifier(
             .build()
 
         try {
-            nm.notify(sessionId.hashCode(), notification)
+            nm.notify(tag, sessionId.hashCode(), notification)
         } catch (se: SecurityException) {
             // POST_NOTIFICATIONS not granted — silently no-op rather
             // than crashing the agent-completion path.

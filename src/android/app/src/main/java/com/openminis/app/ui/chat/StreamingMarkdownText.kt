@@ -87,6 +87,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -348,6 +349,12 @@ private fun MdText(
     isAtomicSelectionUnit: Boolean = false,
     textAlign: TextAlign? = null,
 ) {
+    // [T-in-chat-search] This Text's matches, painted on the string it draws
+    // (spans only: the text, and so selection / fade offsets, are unchanged).
+    val searchShown = com.openminis.app.ui.chat.search.rememberChatSearchHighlighted(
+        text,
+        LocalChatSearchPath.current?.let { com.openminis.app.ui.chat.search.ChatSearchUnits.markdown(it) },
+    )
     // [T-android-stream-live-redraw-loop] The latest TextLayoutResult lives in
     // a plain holder, NOT snapshot state. It used to be a MutableState that
     // onTextLayout overwrote with a fresh object on every layout pass, and
@@ -516,54 +523,120 @@ private fun MdText(
     // gesture worth installing even on a block with no links or code spans,
     // which is the common case — so the condition includes it.
     val blankTapHandler = LocalMarkdownBlankTapHandler.current
-    val blankTapMessageId = LocalShardId.current?.messageId
+    // [T-414-usage-tap-band] Only the text right before the usage capsule can
+    // reveal it, and only within five lines above it (UsageTapBand). In a chat
+    // list (a band registry is provided) a text that is not in such a block has
+    // no blank-tap target at all: the tap is not taken, nothing happens.
+    // Without a registry the pre-#414 rule applies (any blank part).
+    val bandRegistry = LocalUsageTapBandRegistry.current
+    val bandRow = LocalUsageTapBandRow.current
+    val blankTapMessageId =
+        if (bandRegistry != null) bandRow?.messageId else LocalShardId.current?.messageId
     val wantsBlankTap = blankTapHandler != null && blankTapMessageId != null
+    // The block's last row tells the registry where its text nodes are: the
+    // lowest one gives the line height the band is measured in.
+    if (bandRegistry != null && bandRow != null && bandRow.isLastRow) {
+        androidx.compose.runtime.DisposableEffect(bandRegistry, bandRow.messageId) {
+            val node = UsageTapBandRegistry.TextNode(
+                coords = { layoutCoordinatesHolder[0] },
+                layout = { layoutResultHolder[0] },
+            )
+            bandRegistry.addText(bandRow.messageId, node)
+            onDispose { bandRegistry.removeText(bandRow.messageId, node) }
+        }
+    }
+    // [T-android-usage-capsule-blank-tap-margin] A selection can come from two
+    // places: MinisTextKit (selectionController) or the chat's Compose
+    // SelectionContainer, whose only visible trace here is its text toolbar
+    // (MinisMarkdownTextToolbar) being shown. Device check: a long-press made a
+    // SelectionContainer selection the controller never saw, and a tap during it
+    // toggled the capsule.
+    val textToolbar by androidx.compose.runtime.rememberUpdatedState(
+        androidx.compose.ui.platform.LocalTextToolbar.current,
+    )
     val tapModifier = if (hasUrlAnnotation || hasInlineCodeAnnotation || wantsBlankTap) {
-        Modifier.pointerInput(text, wantsBlankTap) {
-            detectTapGestures { pos ->
+        Modifier.pointerInput(text, wantsBlankTap, bandRow) {
+            fun selecting(): Boolean =
+                selectionController?.selection?.value != null ||
+                    textToolbar.status == androidx.compose.ui.platform.TextToolbarStatus.Shown
+            // [T-android-usage-capsule-blank-tap-margin] When the press began, and
+            // whether a selection existed then: a long press (the start of a
+            // selection) is never a blank tap, and a tap that dismisses a
+            // selection is not one either - the container may clear it before
+            // the tap is delivered.
+            var pressStartMs = 0L
+            var selectingAtPress = false
+            detectTapGestures(
+                onPress = {
+                    pressStartMs = android.os.SystemClock.uptimeMillis()
+                    selectingAtPress = selecting()
+                },
+            ) { pos ->
                 val result = layoutResultHolder[0] ?: return@detectTapGestures
-                val offset = result.getOffsetForPosition(pos)
-                // Blank-area test, mirroring iOS: getOffsetForPosition CLAMPS
-                // to the nearest character, so a tap past the end of a line
-                // still returns a valid offset. Comparing the point against
-                // that character's own bounding box is what distinguishes
-                // "on a glyph" from "past it", and it is checked FIRST so a
-                // blank tap never falls through into the url / inline-code
-                // branches below (their annotations are still reported for a
-                // clamped offset, which would fire a link the user missed).
-                if (wantsBlankTap) {
-                    val onGlyph = runCatching {
-                        val box = result.getBoundingBox(offset.coerceIn(0, (text.length - 1).coerceAtLeast(0)))
-                        box.contains(pos)
-                    }.getOrDefault(false)
-                    if (!onGlyph) {
-                        blankTapHandler?.invoke(blankTapMessageId!!)
-                        return@detectTapGestures
-                    }
+                // [T-android-usage-capsule-blank-tap-margin] "Blank" used to be
+                // "outside the nearest character's box", which counted the
+                // leading between lines, the gaps between words and a near miss
+                // beside a link as blank. BlankTapGeometry now asks for clear
+                // space: 24dp beside a line's text, nothing within 20dp of a
+                // link or inline code, never during a selection or long press.
+                val spans = tapTargetSpans(text, result)
+                // [T-414-usage-tap-band] Resolved at tap time, so a block that
+                // stopped being the reply's final text (a tool call followed
+                // it) or whose rows moved has the band it has NOW.
+                val band = if (bandRegistry == null) {
+                    BlankTapGeometry.Band.Anywhere
+                } else {
+                    bandRegistry.bandFor(bandRow, layoutCoordinatesHolder[0], result)
                 }
-                // URL wins over inline code if both annotations cover this offset.
-                val urlAnn = if (urlClickHandler != null) {
-                    text.getStringAnnotations("url", offset, offset).firstOrNull()
-                } else null
-                if (urlAnn != null) {
-                    urlClickHandler?.invoke(urlAnn.item)
+                val kind = BlankTapGeometry.decide(
+                    tap = pos,
+                    lines = lineInkBoxes(result),
+                    interactive = spans.map { it.second },
+                    density = this@pointerInput.density,
+                    selectionActive = selectingAtPress || selecting(),
+                    longPress = android.os.SystemClock.uptimeMillis() - pressStartMs >=
+                        viewConfiguration.longPressTimeoutMillis,
+                    band = band,
+                )
+                // One line per tap (taps are rare): which rule decided, so a
+                // "the capsule did not toggle" report can be read from the log.
+                com.openminis.app.logging.AppLogger.info(
+                    "BlankTap",
+                    "[BlankTap] kind=$kind pos=${pos.x.toInt()},${pos.y.toInt()} lines=${result.lineCount} " +
+                        "spans=${spans.size} selAtPress=$selectingAtPress sel=${selecting()} " +
+                        "held=${android.os.SystemClock.uptimeMillis() - pressStartMs}ms " +
+                        "handler=$wantsBlankTap msg=${blankTapMessageId?.take(8)} band=$band",
+                )
+                if (kind == BlankTapGeometry.Kind.BLANK) {
+                    if (wantsBlankTap) blankTapHandler?.invoke(blankTapMessageId!!)
                     return@detectTapGestures
                 }
-                val codeAnn = text.getStringAnnotations("inline_code", offset, offset).firstOrNull()
-                if (codeAnn != null) {
-                    val snippet = text.text.substring(codeAnn.start, codeAnn.end)
-                    if (snippet.isNotEmpty()) {
-                        clipboardManager.setText(AnnotatedString(snippet))
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        val preview = if (snippet.length > 40) snippet.take(37) + "…" else snippet
-                        Toast.makeText(context, "Copied: $preview", Toast.LENGTH_SHORT).show()
-                    }
+                if (kind != BlankTapGeometry.Kind.TEXT) return@detectTapGestures
+                // A link or inline code acts only when the tap is ON its own
+                // glyph boxes - never for an offset getOffsetForPosition merely
+                // clamped to it, so a blank or near tap cannot fall through
+                // into a link the user missed. URL wins over inline code if both
+                // cover the point (spans list urls first).
+                val hit = spans.firstOrNull { it.second.contains(pos) }?.first ?: return@detectTapGestures
+                if (hit.tag == "url") {
+                    urlClickHandler?.invoke(hit.item)
+                    return@detectTapGestures
+                }
+                val snippet = text.text.substring(hit.start, hit.end)
+                if (snippet.isNotEmpty()) {
+                    clipboardManager.setText(AnnotatedString(snippet))
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    val preview = if (snippet.length > 40) snippet.take(37) + "…" else snippet
+                    // [T-android-copy-toast-l10n] Same localized toast as
+                    // copying a selection (was a hard-coded English literal).
+                    Toast.makeText(context, context.getString(R.string.selection_copied_toast, preview), Toast.LENGTH_SHORT)
+                        .show()
                 }
             }
         }
     } else Modifier
     Text(
-        text = text,
+        text = searchShown,
         fontSize = fontSize,
         lineHeight = lineHeight,
         fontWeight = fontWeight,
@@ -833,7 +906,7 @@ private fun StreamingMarkdownTextBody(
                     ) { RenderBlock(block) }
                 }
             } else {
-                blocks.forEach { RenderBlock(it) }
+                blocks.forEachIndexed { idx, block -> WithSearchPath("b$idx") { RenderBlock(block) } }
             }
         }
     }
@@ -1147,7 +1220,7 @@ private fun MarkdownBlockBody(
         // rows) stay synchronous and flicker-free.
         if (cached != null) {
             Column(modifier = modifier) {
-                cached.forEach { RenderBlock(it) }
+                cached.forEachIndexed { idx, block -> WithSearchPath("b$idx") { RenderBlock(block) } }
             }
             return
         }
@@ -1202,7 +1275,7 @@ private fun MarkdownBlockBody(
                     color = currentMdColors().text,
                 )
             } else {
-                blocks.forEach { RenderBlock(it) }
+                blocks.forEachIndexed { idx, block -> WithSearchPath("b$idx") { RenderBlock(block) } }
             }
         }
         return
@@ -1214,12 +1287,15 @@ private fun MarkdownBlockBody(
     // the threshold render a bounded plain-text tail instead and do the full
     // parse ONCE when the fragment freezes (isStreaming flips false above).
     if (rawText.length > LIVE_FRAGMENT_DEGRADE_CHARS) {
-        Column(modifier = modifier) {
-            Text(
-                text = stringResource(R.string.chat_stream_degraded_notice),
-                style = MaterialTheme.typography.labelSmall,
-                color = currentMdColors().blockquote,
+        // [T-silence-auto-notices] No "simplified rendering" notice line: an
+        // internal strategy, logged once per degraded fragment instead.
+        LaunchedEffect(Unit) {
+            com.openminis.app.logging.AppLogger.info(
+                "StreamDegrade",
+                "live fragment over $LIVE_FRAGMENT_DEGRADE_CHARS chars (${rawText.length}) rendered as a plain tail",
             )
+        }
+        Column(modifier = modifier) {
             Text(
                 text = "…" + rawText.takeLast(LIVE_FRAGMENT_TAIL_CHARS),
                 fontSize = BaseFontSize,
@@ -1342,6 +1418,7 @@ private fun MarkdownBlockBody(
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalAppendOnlyFade provides isLast,
                 LocalLiveIncremental provides isLast,
+                LocalChatSearchPath provides "b$idx",
             ) { RenderBlock(block) }
         }
     }
@@ -1444,6 +1521,102 @@ internal fun fencedCodeContent(fenceLine: String, contentLines: List<String>): S
 
 private fun parseMarkdownBlocksBlocking(content: String): List<MdBlock> =
     kotlinx.coroutines.runBlocking { parseMarkdownBlocks(content) }
+
+// ─── [T-in-chat-search] Searchable texts of a fragment ──────────────────────
+
+/**
+ * [T-in-chat-search] The path RenderBlock gives the Text it is drawing - the
+ * same address [chatSearchMarkdownPieces] gives that Text's searchable piece.
+ * Null outside a markdown fragment row and inside a table (a cell is not a
+ * piece; the table as a whole is).
+ */
+internal val LocalChatSearchPath = androidx.compose.runtime.compositionLocalOf<String?> { null }
+
+@Composable
+private fun WithSearchPath(path: String?, content: @Composable () -> Unit) =
+    androidx.compose.runtime.CompositionLocalProvider(LocalChatSearchPath provides path, content = content)
+
+/** One separately drawn text of a markdown fragment: its [path] and what it shows. */
+internal data class ChatSearchPiece(val path: String, val text: String, val isWholeBlock: Boolean = false)
+
+/** Colours do not change an inline parse's TEXT; search needs a fixed key only. */
+private val chatSearchColors = MdColors(
+    text = Color.Unspecified, codeText = Color.Unspecified, codeBg = Color.Unspecified,
+    inlineCodeText = Color.Unspecified, inlineCodeBg = Color.Unspecified, link = Color.Unspecified,
+    blockquote = Color.Unspecified, divider = Color.Unspecified, tableBorder = Color.Unspecified,
+    tableHeaderBg = Color.Unspecified,
+)
+
+/** The chat's inline parse of [text], uncached, for JVM tests. */
+@androidx.annotation.VisibleForTesting
+internal fun parseInlineForTest(text: String): AnnotatedString = parseInline(text, chatSearchColors)
+
+/**
+ * The texts [rawText] shows when RenderBlock draws it, one per Text, in
+ * drawing order, each addressed by the path RenderBlock gives that Text
+ * ([LocalChatSearchPath]): `b<i>` for block i, `/q` into a blockquote,
+ * `/<j>` into list item j, `/<k>` into an item's k-th child block.
+ *
+ * Inline texts are the inline parser's own AnnotatedString (markdown marks
+ * gone, link URLs dropped, backticks dropped) masked by
+ * [com.openminis.app.ui.chat.search.ChatSearchMarkdown.searchable], exactly
+ * what the highlighter will count in. Code blocks contribute their code; a
+ * table its cells (tab between cells, newline between rows) as one
+ * [ChatSearchPiece.isWholeBlock] piece, highlighted as a whole block; images,
+ * media, rules and display formulas contribute nothing. List bullets and
+ * numbers are separate decoration Texts and are not searched.
+ *
+ * Off-main and cache-friendly: reads the render caches but never fills them,
+ * so a search over a long chat cannot evict what the screen is drawing.
+ */
+internal fun chatSearchMarkdownPieces(rawText: String): List<ChatSearchPiece> {
+    val blocks = MarkdownParseCaches.cachedBlocks(rawText) ?: parseMarkdownBlocksBlocking(rawText)
+    val out = ArrayList<ChatSearchPiece>()
+    // Parsed afresh: the render cache is keyed by the theme's colours, which
+    // search does not have; ChatSearchController caches the result per row.
+    fun inline(raw: String): String =
+        com.openminis.app.ui.chat.search.ChatSearchMarkdown.searchable(parseInline(raw, chatSearchColors))
+    fun table(t: MdBlock.Table): String = buildList {
+        if (t.headers.isNotEmpty()) add(t.headers)
+        addAll(t.rows)
+    }.joinToString("\n") { row -> row.joinToString("\t") { inline(it) } }
+    fun add(path: String, text: String, whole: Boolean = false) {
+        if (text.isNotEmpty()) out.add(ChatSearchPiece(path, text, whole))
+    }
+    fun item(path: String, text: String, children: List<MdBlock>) {
+        // RenderListItemBody: an item with children draws only the children.
+        if (children.isEmpty()) {
+            add(path, inline(text))
+            return
+        }
+        children.forEachIndexed { k, child ->
+            when (child) {
+                is MdBlock.MathDisplay -> Unit
+                is MdBlock.Table -> add("$path/$k", table(child), whole = true)
+                else -> add("$path/$k", inline(child.raw))
+            }
+        }
+    }
+    fun walk(list: List<MdBlock>, prefix: String) {
+        list.forEachIndexed { i, block ->
+            val p = "${prefix}b$i"
+            when (block) {
+                is MdBlock.Paragraph -> add(p, inline(block.raw))
+                is MdBlock.Heading -> add(p, inline(block.text))
+                is MdBlock.CodeBlock -> add(p, block.code, whole = true)
+                is MdBlock.BlockQuote -> walk(block.innerBlocks, "$p/q/")
+                is MdBlock.UnorderedList -> block.items.forEachIndexed { j, it -> item("$p/$j", it.text, it.children) }
+                is MdBlock.OrderedList -> block.items.forEachIndexed { j, it -> item("$p/$j", it.text, it.children) }
+                is MdBlock.TaskList -> block.items.forEachIndexed { j, it -> item("$p/$j", it.text, it.children) }
+                is MdBlock.Table -> add(p, table(block), whole = true)
+                is MdBlock.HorizontalRule, is MdBlock.Image, is MdBlock.Video,
+                is MdBlock.Audio, is MdBlock.MathDisplay -> Unit
+            }
+        }
+    }
+    walk(blocks, "")
+    return out
+}
 
 // ─── Block model ────────────────────────────────────────────────────────────
 
@@ -1673,8 +1846,56 @@ private data class ListItem(val text: String, val children: List<MdBlock> = empt
  * the iOS report behind 7238a39d4. Items without wide math are unchanged.
  */
 private fun ListItem.withWideMathSplit(): ListItem {
-    val split = splitParagraphOnWideMath(text)
-    return if (split.any { it is MdBlock.MathDisplay }) copy(children = split) else this
+    val split = splitListItemBody(text)
+    return if (split.any { it is MdBlock.MathDisplay || it is MdBlock.Table }) copy(children = split) else this
+}
+
+/**
+ * [T-android-list-nested-table] Split a list item's body into blocks: a GFM
+ * table nested under the item (its rows indented under the item, as models
+ * write "4. Configure as:\n\n   | Key | Value |\n   |---|---|") becomes a
+ * [MdBlock.Table], and the prose around it goes through
+ * [splitParagraphOnWideMath] as before.
+ *
+ * The list loops fold every indented line into the item's text, so without
+ * this the table rendered as raw pipes. Whether a user saw that depended on
+ * fragmenting, not on the content: the blank line before the table made it
+ * its own fragment (rendered as a top-level table) only while the message was
+ * the latest turn; once [coalesceMarkdownFragments] re-joined history, the
+ * list swallowed it. iOS (cmark-gfm) renders the table inside the item.
+ */
+private fun splitListItemBody(text: String): List<MdBlock> {
+    if (!text.contains('|')) return splitParagraphOnWideMath(text)
+    val lines = text.lines()
+    val out = mutableListOf<MdBlock>()
+    val prose = mutableListOf<String>()
+    fun flushProse() {
+        val joined = prose.joinToString("\n")
+        if (joined.isNotBlank()) out.addAll(splitParagraphOnWideMath(joined))
+        prose.clear()
+    }
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        if (line.contains('|') && i + 1 < lines.size &&
+            lines[i + 1].trim().matches(tableSeparatorRegex)
+        ) {
+            flushProse()
+            val tableLines = mutableListOf<String>()
+            while (i < lines.size && (lines[i].contains('|') ||
+                    lines[i].trim().matches(tableSeparatorRegex))) {
+                tableLines.add(lines[i])
+                i++
+            }
+            val parsed = parseTable(tableLines)
+            out.add(MdBlock.Table(tableLines.joinToString("\n"), parsed.headers, parsed.rows, parsed.alignments))
+            continue
+        }
+        prose.add(line)
+        i++
+    }
+    flushProse()
+    return out
 }
 private data class TaskItem(val checked: Boolean, val text: String, val children: List<MdBlock> = emptyList())
 
@@ -1823,6 +2044,23 @@ private fun prefixFingerprint(content: String, end: Int): Int {
  */
 internal fun debugParseBlockRaws(content: String): List<String> =
     kotlinx.coroutines.runBlocking { parseMarkdownBlocks(content).map { it.raw } }
+
+/**
+ * [T-android-list-nested-table] Test hook: each block's type, with a list's
+ * item children in brackets, e.g. `OrderedList[Paragraph,Table]`.
+ */
+internal fun debugParseBlockShapes(content: String): List<String> =
+    kotlinx.coroutines.runBlocking {
+        parseMarkdownBlocks(content).map { b ->
+            val children = when (b) {
+                is MdBlock.UnorderedList -> b.items.flatMap { it.children }
+                is MdBlock.OrderedList -> b.items.flatMap { it.children }
+                else -> emptyList()
+            }
+            val name = b::class.simpleName.orEmpty()
+            if (children.isEmpty()) name else "$name[${children.joinToString(",") { it::class.simpleName.orEmpty() }}]"
+        }
+    }
 
 /** Test hook: same, but replayed incrementally as the text grows. */
 internal fun debugParseIncrementalRaws(chunks: List<String>): List<String> =
@@ -2332,7 +2570,12 @@ private fun RenderBlock(block: MdBlock) {
                 fontSize = BaseFontSize,
                 lineHeight = BaseLineHeight,
                 color = colors.text,
-                modifier = Modifier.padding(bottom = 4.dp),
+                // [T-android-usage-capsule-blank-tap-margin] Full width, so the
+                // space beside a short paragraph belongs to its text block and
+                // BlankTapGeometry's clearance decides a tap there (it used to
+                // hit nothing - or the usage row's stretched touch target). The
+                // text still lays out from the start edge; only the box widens.
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                 inlineContent = rememberKatexInlineContent(
                     BaseFontSize,
                     if (liveIncremental) MarkdownParseCaches.mathLatexIncremental(block.raw)
@@ -2356,12 +2599,18 @@ private fun RenderBlock(block: MdBlock) {
                 fontWeight = weight,
                 lineHeight = size * 1.3f,
                 color = colors.text,
-                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                // Full width, as for a paragraph (blank-tap clearance).
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
                 inlineContent = rememberKatexInlineContent(size, MarkdownParseCaches.mathLatex(block.text)),
             )
         }
 
         is MdBlock.CodeBlock -> {
+            // [T-in-chat-search] Phase 1: a code block holding the current
+            // match is outlined as a whole.
+            val codeSearchCurrent = com.openminis.app.ui.chat.search.chatSearchFieldIsCurrent(
+                LocalChatSearchPath.current?.let { com.openminis.app.ui.chat.search.ChatSearchUnits.markdown(it) },
+            )
             val clipboardManager = LocalClipboardManager.current
             var copied by remember { mutableStateOf(false) }
             if (copied) {
@@ -2374,6 +2623,11 @@ private fun RenderBlock(block: MdBlock) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
+                    .then(
+                        if (codeSearchCurrent) {
+                            Modifier.border(2.dp, com.openminis.app.ui.chat.search.ChatSearchCurrentBackground, RoundedCornerShape(8.dp))
+                        } else Modifier,
+                    )
                     .clip(RoundedCornerShape(8.dp))
                     .background(colors.codeBg),
             ) {
@@ -2392,7 +2646,11 @@ private fun RenderBlock(block: MdBlock) {
                     )
                     Icon(
                         imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
-                        contentDescription = if (copied) "Copied" else "Copy code",
+                        contentDescription = if (copied) {
+                            stringResource(R.string.image_copied_toast)
+                        } else {
+                            stringResource(R.string.copy_code_block)
+                        },
                         tint = if (copied) Color(0xFF34C759) else Color.White.copy(alpha = 0.4f),
                         modifier = Modifier
                             .size(16.dp)
@@ -2456,16 +2714,20 @@ private fun RenderBlock(block: MdBlock) {
                     }
                     .padding(start = 15.dp),
             ) {
-                block.innerBlocks.forEach { inner -> RenderBlock(inner) }
+                val quotePath = LocalChatSearchPath.current
+                block.innerBlocks.forEachIndexed { k, inner ->
+                    WithSearchPath(quotePath?.let { "$it/q/b$k" }) { RenderBlock(inner) }
+                }
             }
         }
 
         is MdBlock.UnorderedList -> {
             Column(modifier = Modifier.padding(bottom = 8.dp)) {
-                block.items.forEach { item ->
+                val listPath = LocalChatSearchPath.current
+                block.items.forEachIndexed { j, item ->
                     Row(modifier = Modifier.padding(start = 8.dp, bottom = 2.dp)) {
                         Text("•  ", fontSize = BaseFontSize * 1.3f, color = colors.text)
-                        RenderListItemBody(item, colors, Modifier.weight(1f))
+                        WithSearchPath(listPath?.let { "$it/$j" }) { RenderListItemBody(item, colors, Modifier.weight(1f)) }
                     }
                 }
             }
@@ -2480,7 +2742,9 @@ private fun RenderBlock(block: MdBlock) {
                             fontSize = BaseFontSize,
                             color = colors.text,
                         )
-                        RenderListItemBody(item, colors, Modifier.weight(1f))
+                        WithSearchPath(LocalChatSearchPath.current?.let { "$it/$index" }) {
+                            RenderListItemBody(item, colors, Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -2488,7 +2752,8 @@ private fun RenderBlock(block: MdBlock) {
 
         is MdBlock.TaskList -> {
             Column(modifier = Modifier.padding(bottom = 8.dp)) {
-                block.items.forEach { item ->
+                val taskPath = LocalChatSearchPath.current
+                block.items.forEachIndexed { j, item ->
                     Row(
                         modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
                         // An item split around a display formula is several
@@ -2505,13 +2770,15 @@ private fun RenderBlock(block: MdBlock) {
                             ),
                         )
                         Spacer(Modifier.width(6.dp))
-                        RenderListItemBody(
-                            text = item.text,
-                            children = item.children,
-                            colors = colors,
-                            modifier = Modifier.weight(1f),
-                            textColor = if (item.checked) colors.text.copy(alpha = 0.5f) else colors.text,
-                        )
+                        WithSearchPath(taskPath?.let { "$it/$j" }) {
+                            RenderListItemBody(
+                                text = item.text,
+                                children = item.children,
+                                colors = colors,
+                                modifier = Modifier.weight(1f),
+                                textColor = if (item.checked) colors.text.copy(alpha = 0.5f) else colors.text,
+                            )
+                        }
                     }
                 }
             }
@@ -2628,7 +2895,7 @@ private fun RenderBlock(block: MdBlock) {
         }
 
         is MdBlock.Table -> {
-            RenderTable(block)
+            RenderSearchableTable(block)
         }
 
         is MdBlock.MathDisplay -> {
@@ -2788,9 +3055,9 @@ private fun RenderInlineMath(latex: String, fontSize: TextUnit) {
 }
 
 /**
- * One list item's content: its inline text, or — when it holds wide math
- * ([withWideMathSplit]) — its prose paragraphs with each wide formula as a
- * display block in between.
+ * One list item's content: its inline text, or — when it holds wide math or
+ * a nested table ([withWideMathSplit]) — its prose paragraphs with each wide
+ * formula or table as a block in between.
  */
 @Composable
 private fun RenderListItemBody(item: ListItem, colors: MdColors, modifier: Modifier) =
@@ -2815,10 +3082,13 @@ private fun RenderListItemBody(
         )
         return
     }
+    val itemPath = LocalChatSearchPath.current
     Column(modifier = modifier) {
-        for (child in children) {
+        for ((k, child) in children.withIndex()) {
+            WithSearchPath(itemPath?.let { "$it/$k" }) {
             when (child) {
                 is MdBlock.MathDisplay -> RenderMathDisplay(child.latex)
+                is MdBlock.Table -> RenderSearchableTable(child)
                 else -> MdText(
                     text = MarkdownParseCaches.inline(child.raw, colors),
                     fontSize = BaseFontSize,
@@ -2826,6 +3096,7 @@ private fun RenderListItemBody(
                     color = textColor,
                     inlineContent = rememberKatexInlineContent(BaseFontSize, MarkdownParseCaches.mathLatex(child.raw)),
                 )
+            }
             }
         }
     }
@@ -3317,9 +3588,38 @@ internal object TableHScrollStates {
         }
 }
 
+/**
+ * [T-multi-select-share] Receives a table's natural width in dp — every column at
+ * its single-line width, the width TableColumnPlanner's NATURAL plan needs — when the
+ * table measures. Provided only by the share export (adaptive table width); a probe
+ * at a huge width cannot answer this, because the NATURAL plan spreads spare width.
+ * iOS TableAttachment.naturalTableWidth().
+ */
+internal val LocalTableNaturalWidthSink =
+    androidx.compose.runtime.staticCompositionLocalOf<((Float) -> Unit)?> { null }
+
+@Composable
+private fun RenderSearchableTable(block: MdBlock.Table) {
+    // [T-in-chat-search] A table is one whole-block piece: its cells are not
+    // units (null path below), the table is outlined when it holds the
+    // current match (phase 1: no per-cell highlight).
+    val searchPath = LocalChatSearchPath.current
+    val searchCurrent = com.openminis.app.ui.chat.search.chatSearchFieldIsCurrent(
+        searchPath?.let { com.openminis.app.ui.chat.search.ChatSearchUnits.markdown(it) },
+    )
+    WithSearchPath(null) {
+        Box(
+            modifier = if (searchCurrent) {
+                Modifier.border(2.dp, com.openminis.app.ui.chat.search.ChatSearchCurrentBackground, RoundedCornerShape(6.dp))
+            } else Modifier,
+        ) { RenderTable(block) }
+    }
+}
+
 @Composable
 private fun RenderTable(block: MdBlock.Table) {
     val colors = currentMdColors()
+    val naturalWidthSink = LocalTableNaturalWidthSink.current
     val colCount = maxOf(block.headers.size, block.rows.maxOfOrNull { it.size } ?: 0)
     if (colCount == 0) return
 
@@ -3600,6 +3900,11 @@ private fun RenderTable(block: MdBlock.Table) {
             // apply as-is.
             val dpPerPx = 1f / density
             val viewportDp = viewportWidthPx * dpPerPx
+            naturalWidthSink?.invoke(
+                (0 until colCount).sumOf { i ->
+                    maxOf(TableColumnPlanner.FLOOR_WIDTH, kotlin.math.ceil(naturalPx[i] * dpPerPx + 12f)).toDouble()
+                }.toFloat(),
+            )
             var plan = TableColumnPlanner.plan(
                 // +12: the same single-line margin iOS adds to its measured
                 // natural width, so the mode thresholds (fits / wraps /
@@ -3738,6 +4043,7 @@ internal object StreamRenderProfiler {
     /** One off-main live-tick: block split + prewarm/incremental inline+math. */
     @Synchronized
     fun recordParse(fragLen: Int, ms: Double) {
+        com.openminis.app.diagnostics.JankDiag.onStreamParse(fragLen, ms)
         parseMsSum += ms
         if (ms > parseMsMax) parseMsMax = ms
         lastFragLen = fragLen
@@ -4135,6 +4441,8 @@ internal fun safeInlineSplitOffset(text: String): Int {
 
 private fun parseInline(text: String, colors: MdColors): AnnotatedString {
     return buildAnnotatedString {
+        // [T-md-inline-html] Built on the first whitelisted open tag only.
+        var htmlPairs: com.openminis.app.ui.markdown.InlineHtmlTags.LazyPairs? = null
         var i = 0
         while (i < text.length) {
             when {
@@ -4250,8 +4558,10 @@ private fun parseInline(text: String, colors: MdColors): AnnotatedString {
                         if (cp != -1) {
                             val url = text.substring(cb + 2, cp).trim()
                             val linkStart = length
+                            val label = text.substring(i + 1, cb)
                             withStyle(SpanStyle(color = colors.link, textDecoration = TextDecoration.Underline)) {
-                                append(text.substring(i + 1, cb))
+                                // [T-md-inline-html] `[<b>x</b>](url)`: tags in a label apply.
+                                if ('<' in label || '&' in label) appendRecursive(label, colors) else append(label)
                             }
                             addStringAnnotation("url", url, linkStart, length)
                             i = cp + 1
@@ -4269,6 +4579,17 @@ private fun parseInline(text: String, colors: MdColors): AnnotatedString {
                         i = end + 1
                     } else { append(text[i]); i++ }
                 }
+                // [T-md-inline-html] `&lt;br&gt;` is the literal text `<br>`: the
+                // decoded character is appended and never scanned as a tag.
+                text[i] == '&' && com.openminis.app.ui.markdown.InlineHtmlTags.entityAt(text, i) != null -> i += appendEntity(text, i)
+                // [T-md-inline-html] <br> and the few whitelisted inline tags.
+                text[i] == '<' && com.openminis.app.ui.markdown.InlineHtmlTags.mayStartTag(text, i) -> {
+                    val next = appendInlineHtml(
+                        text, i, colors,
+                        htmlPairs ?: com.openminis.app.ui.markdown.InlineHtmlTags.LazyPairs(text).also { htmlPairs = it },
+                    )
+                    if (next == -1) { append('<'); i++ } else i = next
+                }
                 // Line break: two trailing spaces or \n
                 text[i] == '\n' -> {
                     append('\n'); i++
@@ -4279,8 +4600,73 @@ private fun parseInline(text: String, colors: MdColors): AnnotatedString {
     }
 }
 
+/**
+ * [T-md-inline-html] Renders the `<br>` or whitelisted inline tag pair at [i]
+ * (see [com.openminis.app.ui.markdown.InlineHtmlTags]) and returns the offset
+ * after it, or -1 when [i] starts no supported tag - including an open tag
+ * whose close has not arrived on this line yet, which the caller then shows
+ * literally. Tag content is parsed again, so markdown inside nests.
+ */
+private fun AnnotatedString.Builder.appendInlineHtml(
+    text: String,
+    i: Int,
+    colors: MdColors,
+    pairs: com.openminis.app.ui.markdown.InlineHtmlTags.LazyPairs,
+): Int {
+    val tags = com.openminis.app.ui.markdown.InlineHtmlTags
+    val br = tags.brLength(text, i)
+    if (br > 0) {
+        append('\n')
+        return tags.afterBr(text, i, br)
+    }
+    val open = tags.openAt(text, i) ?: return -1
+    val start = i + open.length
+    val close = pairs.closeOf(i)
+    if (close == -1) return -1
+    val content = text.substring(start, close)
+    if (open.kind == com.openminis.app.ui.markdown.InlineHtmlTags.Kind.CODE) {
+        // Same look as a `…` span; its content is literal, like code.
+        val codeStyle = SpanStyle(fontFamily = FontFamily.Monospace, color = colors.inlineCodeText)
+        withStyle(codeStyle) { append("\u2006") }
+        val annStart = length
+        withStyle(codeStyle) { append(content) }
+        val annEnd = length
+        withStyle(codeStyle) { append("\u2006") }
+        addStringAnnotation("inline_code", "", annStart, annEnd)
+    } else {
+        val inner = parseInline(content, colors)
+        withStyle(inlineHtmlSpan(open.kind)) { append(inner) }
+    }
+    return tags.closeEnd(text, close, open)
+}
+
+/** Appends the entity at [i] decoded and returns its source length, or 0 when there is none. */
+private fun AnnotatedString.Builder.appendEntity(text: String, i: Int): Int {
+    val entity = com.openminis.app.ui.markdown.InlineHtmlTags.entityAt(text, i) ?: return 0
+    append(entity.first)
+    return entity.second
+}
+
+/** [T-md-inline-html] The span for a whitelisted style tag (`<code>` is drawn as code). */
+private fun inlineHtmlSpan(kind: com.openminis.app.ui.markdown.InlineHtmlTags.Kind): SpanStyle = when (kind) {
+    com.openminis.app.ui.markdown.InlineHtmlTags.Kind.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
+    com.openminis.app.ui.markdown.InlineHtmlTags.Kind.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
+    com.openminis.app.ui.markdown.InlineHtmlTags.Kind.UNDERLINE -> SpanStyle(textDecoration = TextDecoration.Underline)
+    com.openminis.app.ui.markdown.InlineHtmlTags.Kind.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
+    com.openminis.app.ui.markdown.InlineHtmlTags.Kind.SUB -> SpanStyle(
+        baselineShift = androidx.compose.ui.text.style.BaselineShift.Subscript,
+        fontSize = androidx.compose.ui.unit.TextUnit(0.75f, androidx.compose.ui.unit.TextUnitType.Em),
+    )
+    com.openminis.app.ui.markdown.InlineHtmlTags.Kind.SUP -> SpanStyle(
+        baselineShift = androidx.compose.ui.text.style.BaselineShift.Superscript,
+        fontSize = androidx.compose.ui.unit.TextUnit(0.75f, androidx.compose.ui.unit.TextUnitType.Em),
+    )
+    com.openminis.app.ui.markdown.InlineHtmlTags.Kind.CODE -> SpanStyle(fontFamily = FontFamily.Monospace)
+}
+
 /** Recursively parse inline markdown within a styled span. */
 private fun AnnotatedString.Builder.appendRecursive(text: String, colors: MdColors) {
+    var htmlPairs: com.openminis.app.ui.markdown.InlineHtmlTags.LazyPairs? = null
     var i = 0
     while (i < text.length) {
         when {
@@ -4342,11 +4728,23 @@ private fun AnnotatedString.Builder.appendRecursive(text: String, colors: MdColo
                     if (cp != -1) {
                         val url = text.substring(cb + 2, cp).trim()
                         val linkStart = length
-                        withStyle(SpanStyle(color = colors.link, textDecoration = TextDecoration.Underline)) { append(text.substring(i + 1, cb)) }
+                        val label = text.substring(i + 1, cb)
+                        withStyle(SpanStyle(color = colors.link, textDecoration = TextDecoration.Underline)) {
+                            if ('<' in label || '&' in label) appendRecursive(label, colors) else append(label)
+                        }
                         addStringAnnotation("url", url, linkStart, length)
                         i = cp + 1
                     } else { append(text[i]); i++ }
                 } else { append(text[i]); i++ }
+            }
+            text[i] == '&' && com.openminis.app.ui.markdown.InlineHtmlTags.entityAt(text, i) != null -> i += appendEntity(text, i)
+            // [T-md-inline-html] `**<b>x</b>**`, `**a<br>b**`.
+            text[i] == '<' && com.openminis.app.ui.markdown.InlineHtmlTags.mayStartTag(text, i) -> {
+                val next = appendInlineHtml(
+                    text, i, colors,
+                    htmlPairs ?: com.openminis.app.ui.markdown.InlineHtmlTags.LazyPairs(text).also { htmlPairs = it },
+                )
+                if (next == -1) { append('<'); i++ } else i = next
             }
             else -> { append(text[i]); i++ }
         }
@@ -4568,3 +4966,68 @@ private fun isTablePipeArtifact(content: String): Boolean {
     return bareCount % 2 == 1
 }
 
+/**
+ * [T-android-usage-capsule-blank-tap-margin] Each line's INK extent over its line
+ * box, for [BlankTapGeometry]: from the first to the last visible glyph. Neither
+ * getLineRight nor a path over the line's whole range will do - at a soft wrap
+ * the line ends in a space that can be measured out to the layout's right edge,
+ * which made the empty space beside a line-ending word (or link) count as text.
+ */
+internal fun lineInkBoxes(result: TextLayoutResult): List<androidx.compose.ui.geometry.Rect> =
+    (0 until result.lineCount).map { i ->
+        val ink = visibleRange(result, i, result.getLineStart(i), result.getLineEnd(i))
+        val top = result.getLineTop(i)
+        val bottom = result.getLineBottom(i)
+        if (ink == null) {
+            androidx.compose.ui.geometry.Rect(0f, top, 0f, bottom)
+        } else {
+            val a = result.getBoundingBox(ink.first)
+            val b = result.getBoundingBox(ink.last)
+            androidx.compose.ui.geometry.Rect(minOf(a.left, b.left), top, maxOf(a.right, b.right), bottom)
+        }
+    }
+
+/**
+ * The visible (non-whitespace) characters of [start, end) on [line], or null:
+ * trailing whitespace is cut at the line's visible end, leading whitespace
+ * skipped.
+ */
+private fun visibleRange(result: TextLayoutResult, line: Int, start: Int, end: Int): IntRange? {
+    val chars = result.layoutInput.text.text
+    var s = start.coerceAtLeast(result.getLineStart(line))
+    val e = minOf(end, result.getLineEnd(line, visibleEnd = true), chars.length)
+    while (s < e && chars[s].isWhitespace()) s++
+    return if (e > s) s until e else null
+}
+
+/**
+ * [T-android-usage-capsule-blank-tap-margin] The url and inline-code spans of
+ * [text] as one box per line they cover (a wrapped link is two boxes, not one
+ * full-width rectangle), each over the span's VISIBLE glyphs on that line (see
+ * [lineInkBoxes] for why a wrap's trailing space must not count), urls first so
+ * a url wins where both overlap. Offsets are clamped to the laid-out text, which
+ * can trail [text] by a recomposition while streaming.
+ */
+internal fun tapTargetSpans(
+    text: AnnotatedString,
+    result: TextLayoutResult,
+): List<Pair<AnnotatedString.Range<String>, androidx.compose.ui.geometry.Rect>> {
+    val laidOut = result.layoutInput.text.length
+    if (laidOut == 0) return emptyList()
+    val out = ArrayList<Pair<AnnotatedString.Range<String>, androidx.compose.ui.geometry.Rect>>()
+    for (tag in listOf("url", "inline_code")) {
+        for (ann in text.getStringAnnotations(tag, 0, text.length)) {
+            val start = ann.start.coerceIn(0, laidOut)
+            val end = ann.end.coerceIn(0, laidOut)
+            if (end <= start) continue
+            val firstLine = result.getLineForOffset(start)
+            val lastLine = result.getLineForOffset((end - 1).coerceAtLeast(start))
+            for (line in firstLine..lastLine) {
+                val ink = visibleRange(result, line, start, end) ?: continue
+                val b = runCatching { result.getPathForRange(ink.first, ink.last + 1).getBounds() }.getOrNull() ?: continue
+                if (b.width > 0f && b.height > 0f) out += ann to b
+            }
+        }
+    }
+    return out
+}

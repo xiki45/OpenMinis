@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-android-hidden-models-group] Provider detail: hidden-models group and the delete warning for API-listed models. Translated. -->
+<resources>
+    <string name="provider_detail_hidden_models_group">已隐藏模型 (%1$d)</string>
+    <string name="provider_detail_delete_api_model_confirm">确定要删除 \"%1$s\" 吗？若服务商再次返回该模型，重新拉取模型列表可能会恢复。</string>
+</resources>

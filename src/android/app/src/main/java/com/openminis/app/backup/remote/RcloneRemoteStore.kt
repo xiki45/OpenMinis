@@ -1,6 +1,7 @@
 package com.openminis.app.backup.remote
 
 import android.content.Context
+import android.content.SharedPreferences
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.util.EncryptedPrefsFactory
 import kotlinx.serialization.Serializable
@@ -31,7 +32,13 @@ import java.io.File
  * That keeps exactly one copy of each secret, in the place the platform
  * provides for it, and means deleting a remote actually removes the credential.
  */
-class RcloneRemoteStore(private val context: Context) {
+class RcloneRemoteStore internal constructor(
+    private val context: Context,
+    prefsOverride: SharedPreferences?,
+    secretsOverride: SharedPreferences?,
+) {
+
+    constructor(context: Context) : this(context, null, null)
 
     /** A configured remote, minus its secret. */
     @Serializable
@@ -111,8 +118,14 @@ class RcloneRemoteStore(private val context: Context) {
 
     class StoreException(message: String) : Exception(message)
 
-    private val prefs by lazy { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
-    private val secrets by lazy { EncryptedPrefsFactory.safeCreate(context, SECRETS_PREFS_NAME) }
+    // Overridable so unit tests can run the edit rules against plain prefs:
+    // the Keystore behind the encrypted store does not exist under Robolectric.
+    private val prefs by lazy {
+        prefsOverride ?: context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    }
+    private val secrets by lazy {
+        secretsOverride ?: EncryptedPrefsFactory.safeCreate(context, SECRETS_PREFS_NAME)
+    }
 
     var remotes: List<Remote>
         get() = runCatching {
@@ -211,6 +224,103 @@ class RcloneRemoteStore(private val context: Context) {
         AppLogger.info(TAG, "[Rclone] remote '$name' ${if (on) "enabled" else "disabled"}")
     }
 
+    // MARK: - Editing
+
+    /** What an edit does to the stored secret. */
+    sealed interface SecretEdit {
+        /** Leave the stored secret as it is — the password field was left blank. */
+        data object Keep : SecretEdit
+        /** Remove it: the server is switched to anonymous access. */
+        data object Clear : SecretEdit
+        data class Replace(val value: String) : SecretEdit
+    }
+
+    /**
+     * [T-android-backup-dest-edit] Change an existing destination in place.
+     * Mirrors `RcloneRemoteStore.update` on iOS: rename, re-point the folder,
+     * and edit the connection (params, secret, TLS opt-in). Every argument is
+     * optional; null means "unchanged".
+     *
+     * ## Verify before anything is written
+     *
+     * [verify] receives the edited remote and the secret it would use, and is
+     * expected to throw when that configuration cannot connect. It runs BEFORE
+     * a single byte is persisted, so a failed test leaves the old params and
+     * the old secret exactly as they were. iOS applies first and rolls the
+     * params back on failure, which cannot restore the secret (it is not read
+     * back) — a wrong new password replaced a working one. Testing the
+     * candidate first removes the need for a rollback at all.
+     *
+     * ## Rename
+     *
+     * The secret is filed under the remote's name, so a rename moves it — new
+     * key written before the old one is dropped, so a failure in between leaves
+     * a duplicate credential rather than a remote with none. `enabled`,
+     * `createdAt` and everything else ride along unchanged on the copied record.
+     *
+     * The caller syncs rclone afterwards ([syncToRclone]); the changed inputs
+     * give the remote a new fingerprint, so its section is recreated.
+     *
+     * @return the remote as stored after the edit.
+     * @throws StoreException for an unknown remote, an invalid or taken name.
+     */
+    fun update(
+        name: String,
+        newName: String? = null,
+        newPath: String? = null,
+        newParams: Map<String, String>? = null,
+        secret: SecretEdit = SecretEdit.Keep,
+        allowInsecureTLS: Boolean? = null,
+        verify: ((candidate: Remote, secret: String?) -> Unit)? = null,
+    ): Remote {
+        val all = remotes
+        val i = all.indexOfFirst { it.name == name }
+        if (i < 0) throw StoreException("That destination no longer exists.")
+        val before = all[i]
+
+        val targetName = newName?.trim()?.takeIf { it != name }
+        if (targetName != null) {
+            validateRename(targetName, local = isLocalFolder(before.backend))
+            if (all.any { it.name == targetName }) {
+                throw StoreException("A destination named \"$targetName\" already exists.")
+            }
+        }
+
+        var updated = before
+        if (targetName != null) updated = updated.copy(name = targetName)
+        if (newPath != null) updated = updated.copy(path = normalizedPath(before.backend, newPath))
+        if (newParams != null) updated = updated.copy(params = mergedParams(before.params, newParams))
+        if (allowInsecureTLS != null) updated = updated.copy(allowInsecureTLS = allowInsecureTLS)
+
+        val currentSecret = loadSecret(name)
+        val nextSecret = resolveSecret(currentSecret, secret)
+        verify?.invoke(updated, nextSecret)
+
+        // Verified (or nothing to verify): commit. Secret first, then the
+        // record, so the record never names a credential that isn't there yet.
+        val edit = secrets.edit()
+        if (targetName != null) edit.remove(name)
+        if (nextSecret.isNullOrEmpty()) edit.remove(updated.name) else edit.putString(updated.name, nextSecret)
+        edit.apply()
+        remotes = all.toMutableList().also { it[i] = updated }
+        if (targetName != null) synchronized(syncLock) { syncedFingerprints.remove(name) }
+        AppLogger.info(TAG, "[Rclone] remote updated: $name -> ${updated.name}:/${updated.path}")
+        return updated
+    }
+
+    private fun validateRename(newName: String, local: Boolean) {
+        if (newName.isEmpty()) throw StoreException("Choose a name for this destination.")
+        // A local folder's name never reaches rclone, and the add path derives
+        // it from the folder (spaces included), so only servers are held to
+        // rclone's remote-name alphabet.
+        if (!local && !newName.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
+            throw StoreException("Choose a name using letters, numbers, - or _.")
+        }
+    }
+
+    /** Whether a secret is stored for [name]. Never returns the secret itself. */
+    fun hasSecret(name: String): Boolean = !loadSecret(name).isNullOrEmpty()
+
     // MARK: - Secrets
 
     private fun storeSecret(name: String, secret: String) {
@@ -234,8 +344,20 @@ class RcloneRemoteStore(private val context: Context) {
      * Runs per launch, off the main thread. rclone is told to use a config path
      * under cacheDir so it never writes credentials to a file we would then
      * have to protect — the encrypted store stays the only copy.
+     *
+     * [T-restore-list-sync-race] Every server screen calls this right before
+     * it lists, deletes or downloads, and two of them can overlap (a quick
+     * second folder tap, a backup run while browsing). rclone's config/create
+     * is not atomic per remote: it deletes the section, then sets `type`, then
+     * each parameter in turn (fs/config/config.go CreateRemote). A listing that
+     * lands in that window sees the remote without its password, and SMB
+     * answers "The attempted logon is invalid" for correct credentials - the
+     * same race iOS fixed in f465c10b1. So the whole sync runs under one
+     * process-wide lock, and a remote whose inputs are unchanged since its
+     * last successful create is not recreated at all: once synced, repeated
+     * calls never touch a section another thread may be using.
      */
-    fun syncToRclone() {
+    fun syncToRclone() = synchronized(syncLock) {
         val configPath = File(context.cacheDir, "rclone-ephemeral.conf").absolutePath
         runCatching { RcloneBridge.rpc("config/setpath", mapOf("path" to configPath)) }
 
@@ -256,6 +378,9 @@ class RcloneRemoteStore(private val context: Context) {
                 allowInsecureTLS = r.allowInsecureTLS,
                 obscure = ::obscureViaRclone,
             ).toMutableMap<String, Any?>()
+            val fp = configFingerprint(r.backend, r.params, loadSecret(r.name), r.allowInsecureTLS)
+            if (syncedFingerprints[r.name] == fp) continue
+            syncedFingerprints.remove(r.name)
             runCatching {
                 RcloneBridge.rpc(
                     "config/create",
@@ -267,11 +392,67 @@ class RcloneRemoteStore(private val context: Context) {
                         "opt" to mapOf("nonInteractive" to true),
                     ),
                 )
+            }.onSuccess {
+                syncedFingerprints[r.name] = fp
             }.onFailure {
                 AppLogger.error(TAG, "[Rclone] config/create failed for '${r.name}': ${it.message}")
             }
         }
         AppLogger.info(TAG, "[Rclone] synced ${remotes.size} remote(s) into rclone config")
+    }
+
+    /**
+     * [T-android-backup-dest-edit] Prove [candidate] connects, without touching
+     * the remote's live rclone section or anything stored. Throws the rclone
+     * error when it does not.
+     *
+     * The candidate is registered under a throwaway section name, listed, and
+     * the section deleted again. The name contains a `.`, which [add] and
+     * [update] never accept, so it cannot collide with a real destination.
+     * Recreating the REAL section instead would have to be undone on failure,
+     * and a backup running at the same moment would upload with the untested
+     * settings.
+     *
+     * The global TLS relaxation is widened only for the duration of the probe
+     * when the candidate asks for it, then put back to what the stored remotes
+     * need — a failed "trust this certificate" attempt must not leave
+     * verification off for every other server.
+     */
+    fun probeConnection(candidate: Remote, secret: String?) {
+        val probe = candidate.copy(name = "${candidate.name}$PROBE_SUFFIX")
+        try {
+            RcloneBridge.setInsecureTLS(candidate.allowInsecureTLS || remotes.any { it.allowInsecureTLS })
+            RcloneBridge.rpc(
+                "config/create",
+                mapOf(
+                    "name" to probe.name,
+                    "type" to probe.backend,
+                    "parameters" to buildConfigParams(
+                        backend = probe.backend,
+                        params = probe.params,
+                        secret = secret,
+                        obscure = ::obscureViaRclone,
+                        allowInsecureTLS = probe.allowInsecureTLS,
+                    ),
+                    "opt" to mapOf("nonInteractive" to true),
+                ),
+            )
+            RcloneBrowser.listDirectories(probe, probe.listRoot)
+        } finally {
+            dropRcloneSection(probe.name)
+            RcloneBridge.setInsecureTLS(remotes.any { it.allowInsecureTLS })
+        }
+    }
+
+    /**
+     * Delete one section from rclone's in-memory config. Used for the probe and
+     * for the old name after a rename, which would otherwise linger with the
+     * credential until the process exits. Best effort: a section that is
+     * already gone is the desired end state.
+     */
+    fun dropRcloneSection(name: String) {
+        runCatching { RcloneBridge.rpc("config/delete", mapOf("name" to name)) }
+        synchronized(syncLock) { syncedFingerprints.remove(name) }
     }
 
     /** `core/obscure`, or null when the RPC is unavailable/fails. */
@@ -282,6 +463,38 @@ class RcloneRemoteStore(private val context: Context) {
 
     companion object {
         private const val TAG = "Rclone"
+
+        /** [T-restore-list-sync-race] One rclone config writer at a time, process-wide. */
+        private val syncLock = Any()
+
+        /**
+         * [T-restore-list-sync-race] Remote name -> [configFingerprint] of the
+         * inputs of its last successful config/create in this process. rclone's
+         * config lives in this process too, so a new process starts empty and
+         * creates everything once.
+         */
+        private val syncedFingerprints = HashMap<String, String>()
+
+        /**
+         * Identity of everything a remote's rclone section is built from, taken
+         * from the CLEAR inputs: the obscured password differs on every call
+         * (random IV), so it cannot tell whether anything changed.
+         */
+        internal fun configFingerprint(
+            backend: String,
+            params: Map<String, String>,
+            secret: String?,
+            allowInsecureTLS: Boolean,
+        ): String {
+            val canonical = buildString {
+                append(backend).append('\u0000')
+                for ((k, v) in params.toSortedMap()) append(k).append('=').append(v).append('\u0000')
+                append(if (secret == null) "-" else "+" + secret).append('\u0000')
+                append(allowInsecureTLS)
+            }
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
+            return digest.joinToString("") { "%02x".format(it) }
+        }
 
         /**
          * [T-android-backup-local-folder] Reserved [Remote.backend] marking a
@@ -296,6 +509,46 @@ class RcloneRemoteStore(private val context: Context) {
 
         /** Whether [backend] names a local folder rather than an rclone remote. */
         fun isLocalFolder(backend: String): Boolean = backend == BACKEND_LOCAL
+
+        /**
+         * [T-android-backup-dest-edit] Merge an edit form's values into the
+         * stored params. Merge rather than replace: the form sends only the
+         * fields it shows, and a remote may carry keys with no editor. A field
+         * cleared in the form removes its key, so an optional value can be
+         * taken away. Values are trimmed — a pasted host with a trailing space
+         * is the classic "correct address, cannot connect".
+         */
+        fun mergedParams(old: Map<String, String>, edits: Map<String, String>): Map<String, String> {
+            val out = old.toMutableMap()
+            for ((k, v) in edits) {
+                val t = v.trim()
+                if (t.isEmpty()) out.remove(k) else out[k] = t
+            }
+            return out
+        }
+
+        /** The secret an edit leaves in place: kept, cleared or replaced. */
+        fun resolveSecret(current: String?, edit: SecretEdit): String? = when (edit) {
+            SecretEdit.Keep -> current
+            SecretEdit.Clear -> null
+            is SecretEdit.Replace -> edit.value.ifEmpty { current }
+        }
+
+        /**
+         * Store a re-pointed folder the way the browser produces it. SFTP keeps
+         * a leading `/` (absolute vs home-relative are different places, see
+         * [Remote.join]); every other backend stores it fs-relative.
+         */
+        fun normalizedPath(backend: String, path: String): String {
+            if (isLocalFolder(backend)) return path
+            val trimmed = path.trim()
+            if (RcloneBackendCatalog.usesAbsolutePaths(backend)) {
+                return if (trimmed.length > 1 && trimmed.endsWith("/")) trimmed.dropLast(1) else trimmed
+            }
+            return trimmed.trim('/')
+        }
+        /** See [probeConnection]: `.` is outside the destination-name alphabet. */
+        internal const val PROBE_SUFFIX = ".edit-probe"
         private const val PREFS_NAME = "backup_rclone_remotes"
         private const val SECRETS_PREFS_NAME = "backup_rclone_secrets"
         private const val KEY_REMOTES = "remotes"

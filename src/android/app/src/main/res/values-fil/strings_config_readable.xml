@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-readable] Readable minis-config change descriptions (confirmation
+     dialog, Logs > Config Changes). Keys mirror iOS Localizable.xcstrings; cfgr_*
+     entries are looked up by their English text via ConfigReadableStrings.
+     Translations copied from iOS; locales iOS lacks fall back to English. -->
+<resources>
+    <string name="cfgr_api_key">API Key</string>
+    <string name="cfgr_all_models">Lahat ng model</string>
+    <string name="cfgr_allow_minis_config">Payagan ang minis-config</string>
+    <string name="cfgr_applies_to">Naaangkop sa</string>
+    <string name="cfgr_audio_input">Audio input</string>
+    <string name="cfgr_audio_output">Audio output</string>
+    <string name="cfgr_automatic">Awtomatiko</string>
+    <string name="cfgr_chinese">Chinese</string>
+    <string name="cfgr_custom">Custom</string>
+    <string name="cfgr_custom_user_agent">Custom na User-Agent</string>
+    <string name="cfgr_dark">Madilim</string>
+    <string name="cfgr_default">Default</string>
+    <string name="cfgr_disabled">Naka-disable</string>
+    <string name="cfgr_display_name">Display name</string>
+    <string name="cfgr_enabled">Naka-enable</string>
+    <string name="cfgr_english">English</string>
+    <string name="cfgr_hidden">Nakatago</string>
+    <string name="cfgr_high">Mataas</string>
+    <string name="cfgr_image_input">Image input</string>
+    <string name="cfgr_image_output">Image output</string>
+    <string name="cfgr_label">Label</string>
+    <string name="cfgr_light">Maliwanag</string>
+    <string name="cfgr_low">Mababa</string>
+    <string name="cfgr_max">Maks</string>
+    <string name="cfgr_med">Katamtaman</string>
+    <string name="cfgr_medium">Katamtaman</string>
+    <string name="cfgr_models">Mga Model</string>
+    <string name="cfgr_name">Pangalan</string>
+    <string name="cfgr_not_set">Hindi nakatakda</string>
+    <string name="cfgr_note">Tala</string>
+    <string name="cfgr_off">Naka-off</string>
+    <string name="cfgr_on">Naka-on</string>
+    <string name="cfgr_pdf_input">PDF input</string>
+    <string name="cfgr_privacy_mode">Privacy Mode</string>
+    <string name="cfgr_send">Ipadala</string>
+    <string name="cfgr_status">Status</string>
+    <string name="cfgr_system">System</string>
+    <string name="cfgr_theme">Theme</string>
+    <string name="cfgr_ultra">Ultra</string>
+    <string name="cfgr_video_input">Video input</string>
+    <string name="cfgr_video_output">Video output</string>
+    <string name="cfgr_xhigh">Napakataas</string>
+    <string name="cfgr_fold_consecutive_tool_calls">Pagsamahin ang magkakasunod na tool call</string>
+</resources>

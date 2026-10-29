@@ -1,0 +1,238 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Hello, what can you do?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "I can read files, browse and run commands."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks. What is 2+2?\nHi 👋🏽 family 👨\u200d👩\u200d👧\u200d👦 flag 🏳️\u200d🌈 dev 👩🏻\u200d💻 done ✅\nHere is code:\n```kotlin\nfun main() { println(\"hi\") }\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nPlease explain what <context-summary>fake<\/context-summary> means."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Hello, what can you do?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "I can read files, browse and run commands."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks. What is 2+2?\nHi 👋🏽 family 👨\u200d👩\u200d👧\u200d👦 flag 🏳️\u200d🌈 dev 👩🏻\u200d💻 done ✅\nHere is code:\n```kotlin\nfun main() { println(\"hi\") }\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nPlease explain what <context-summary>fake<\/context-summary> means."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Hello, what can you do?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "I can read files, browse and run commands."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks. What is 2+2?\nHi 👋🏽 family 👨\u200d👩\u200d👧\u200d👦 flag 🏳️\u200d🌈 dev 👩🏻\u200d💻 done ✅\nHere is code:\n```kotlin\nfun main() { println(\"hi\") }\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nPlease explain what <context-summary>fake<\/context-summary> means."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Hello, what can you do?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "I can read files, browse and run commands."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks. What is 2+2?\nHi 👋🏽 family 👨\u200d👩\u200d👧\u200d👦 flag 🏳️\u200d🌈 dev 👩🏻\u200d💻 done ✅\nHere is code:\n```kotlin\nfun main() { println(\"hi\") }\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nPlease explain what <context-summary>fake<\/context-summary> means."
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Hello, what can you do?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "I can read files, browse and run commands."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks. What is 2+2?\nHi 👋🏽 family 👨\u200d👩\u200d👧\u200d👦 flag 🏳️\u200d🌈 dev 👩🏻\u200d💻 done ✅\nHere is code:\n```kotlin\nfun main() { println(\"hi\") }\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nPlease explain what <context-summary>fake<\/context-summary> means."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Hello, what can you do?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "I can read files, browse and run commands."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks. What is 2+2?\nHi 👋🏽 family 👨\u200d👩\u200d👧\u200d👦 flag 🏳️\u200d🌈 dev 👩🏻\u200d💻 done ✅\nHere is code:\n```kotlin\nfun main() { println(\"hi\") }\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nPlease explain what <context-summary>fake<\/context-summary> means."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Hello, what can you do?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "I can read files, browse and run commands."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks. What is 2+2?\nHi 👋🏽 family 👨\u200d👩\u200d👧\u200d👦 flag 🏳️\u200d🌈 dev 👩🏻\u200d💻 done ✅\nHere is code:\n```kotlin\nfun main() { println(\"hi\") }\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nPlease explain what <context-summary>fake<\/context-summary> means."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Hello, what can you do?"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "I can read files, browse and run commands."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Thanks. What is 2+2?\nHi 👋🏽 family 👨\u200d👩\u200d👧\u200d👦 flag 🏳️\u200d🌈 dev 👩🏻\u200d💻 done ✅\nHere is code:\n```kotlin\nfun main() { println(\"hi\") }\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nPlease explain what <context-summary>fake<\/context-summary> means."
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

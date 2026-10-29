@@ -111,6 +111,9 @@ internal fun StorageManagementScreen(
     val state by vm.state.collectAsState()
     val result by vm.result.collectAsState()
     var showClearLogsDialog by remember { mutableStateOf(false) }
+    // [T-storage-orphan-cleanup] Bytes the preview found removable; non-null = confirm.
+    var orphanConfirmBytes by remember { mutableStateOf<Long?>(null) }
+    val orphanResult by vm.orphanResult.collectAsState()
     var showBatchClearDialog by remember { mutableStateOf(false) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
 
@@ -219,10 +222,49 @@ internal fun StorageManagementScreen(
                         color = Color(0xFFFF9500),
                         label = stringResource(R.string.storage_overview_logs_caches),
                         value = Formatter.formatFileSize(context, state.logsCachesSize),
-                        showDivider = false,
+                        showDivider = state.orphanBytes > 0,
                     )
+                    if (state.orphanBytes > 0) {
+                        StorageOverviewRow(
+                            color = Color(0xFFFF3B30),
+                            label = stringResource(R.string.storage_overview_orphaned),
+                            value = Formatter.formatFileSize(context, state.orphanBytes),
+                            showDivider = false,
+                        )
+                    }
                 }
 
+            }
+            if (state.orphanBytes > 0 || state.isCleaningOrphans) item(key = "orphans") {
+                // [T-storage-orphan-cleanup] Only while there is something to clean.
+                SettingsSection(footer = stringResource(R.string.storage_orphan_footer)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !state.isCleaningOrphans) {
+                                vm.previewOrphanCleanup { scan -> orphanConfirmBytes = scan.removableBytes }
+                            }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (state.isCleaningOrphans) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                stringResource(R.string.storage_orphan_cleaning),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        } else {
+                            Text(
+                                stringResource(R.string.storage_orphan_clean_button),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
             }
             item(key = "logs") {
                 // [T-storage-clear-logs-caches]
@@ -312,6 +354,60 @@ internal fun StorageManagementScreen(
             }
             item(key = "bottom") { Spacer(Modifier.height(24.dp)) }
         }
+    }
+
+    // [T-storage-orphan-cleanup] With nothing removable now (all of it changed
+    // within the hour) there is nothing to confirm: say why instead.
+    orphanConfirmBytes?.let { bytes ->
+        if (bytes > 0) {
+            MinisAlertDialog(
+                onDismissRequest = { orphanConfirmBytes = null },
+                title = stringResource(R.string.storage_orphan_confirm_title),
+                text = stringResource(R.string.storage_orphan_confirm_message, Formatter.formatFileSize(context, bytes)),
+                confirmText = stringResource(R.string.storage_orphan_confirm_button),
+                isDestructive = true,
+                onConfirm = {
+                    orphanConfirmBytes = null
+                    vm.cleanOrphans()
+                },
+            )
+        } else {
+            val kept = state.orphanBytes
+            AlertDialog(
+                onDismissRequest = { orphanConfirmBytes = null },
+                title = { Text(stringResource(R.string.storage_orphan_result_nothing)) },
+                text = {
+                    Text(
+                        if (kept > 0) stringResource(R.string.storage_orphan_result_kept, Formatter.formatFileSize(context, kept))
+                        else stringResource(R.string.storage_orphan_result_none),
+                    )
+                },
+                confirmButton = {
+                    MinisTextButton(onClick = { orphanConfirmBytes = null }) { Text(stringResource(R.string.ok)) }
+                },
+            )
+        }
+    }
+    orphanResult?.let { r ->
+        val parts = buildList {
+            if (r.freedBytes > 0) add(stringResource(R.string.storage_orphan_result_freed, Formatter.formatFileSize(context, r.freedBytes)))
+            if (r.keptBytes > 0) add(stringResource(R.string.storage_orphan_result_kept, Formatter.formatFileSize(context, r.keptBytes)))
+            if (isEmpty()) add(stringResource(R.string.storage_orphan_result_none))
+        }
+        AlertDialog(
+            onDismissRequest = { vm.consumeOrphanResult() },
+            title = {
+                Text(
+                    stringResource(
+                        if (r.removedCount > 0) R.string.storage_orphan_result_cleaned else R.string.storage_orphan_result_nothing,
+                    ),
+                )
+            },
+            text = { Text(parts.joinToString(" ")) },
+            confirmButton = {
+                MinisTextButton(onClick = { vm.consumeOrphanResult() }) { Text(stringResource(R.string.ok)) }
+            },
+        )
     }
 
     if (showClearLogsDialog) {

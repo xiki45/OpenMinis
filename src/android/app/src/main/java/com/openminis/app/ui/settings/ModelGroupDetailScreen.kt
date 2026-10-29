@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -122,6 +123,8 @@ fun ModelGroupDetailScreen(
     // Local copy of member IDs for live reorder
     var memberIds by remember(group.memberEntryIds) { mutableStateOf(group.memberEntryIds.toList()) }
     var entryToRemove by remember { mutableStateOf<String?>(null) }
+    // [T-quota-group-member-pill] Provider whose quota sheet is open.
+    var quotaSheetInstanceId by remember { mutableStateOf<String?>(null) }
 
     val lazyListState = rememberLazyListState()
     val reorderState = rememberReorderableLazyListState(lazyListState) { from, to ->
@@ -340,7 +343,25 @@ fun ModelGroupDetailScreen(
                         ReorderableItem(reorderState, key = entryId) { _ ->
                             ListItem(
                                 modifier = Modifier.alpha(if (providerDisabled || notListed) 0.4f else 1f),
-                                headlineContent = { Text(entry.model.displayName) },
+                                headlineContent = {
+                                    // [T-model-row-premature-wrap] Name and quota pill on
+                                    // one line when they fit, else the name keeps the width
+                                    // and the pill drops below, as in the model picker.
+                                    com.openminis.app.ui.components.FitOrWrapLine(
+                                        lead = { Text(entry.model.displayName) },
+                                        tags = {
+                                            // [T-quota-group-member-pill] The model's (or its
+                                            // account's) quota; this page has no other way to
+                                            // the provider's quota. Tap opens the quota sheet.
+                                            if (instance != null && !providerDisabled) {
+                                                com.openminis.app.ui.quota.ModelQuotaMemberPill(
+                                                    instanceId = entry.providerInstanceId,
+                                                    modelId = entry.model.id,
+                                                ) { quotaSheetInstanceId = entry.providerInstanceId }
+                                            }
+                                        },
+                                    )
+                                },
                                 supportingContent = {
                                     if (providerDisabled || notListed) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -538,7 +559,7 @@ fun ModelGroupDetailScreen(
                             if (on) {
                                 // Restore last user-selected value verbatim,
                                 // defaulting to 128K for first-time activation.
-                                val restored = group.lastContextLimitTokens ?: 128_000
+                                val restored = group.lastContextLimitTokens ?: 100_000
                                 contextLimitTokens = restored
                                 providerRepository.updateGroup(
                                     group.copy(
@@ -606,6 +627,10 @@ fun ModelGroupDetailScreen(
         }
     }
 
+    quotaSheetInstanceId?.let { id ->
+        com.openminis.app.ui.quota.QuotaDetailSheet(instanceId = id, onDismiss = { quotaSheetInstanceId = null }, halfHeight = false)
+    }
+
     // Confirm remove model from group
     if (entryToRemove != null) {
         val removingId = entryToRemove!!
@@ -662,10 +687,10 @@ fun ModelGroupDetailScreen(
 
 /**
  * Discrete-step max-context slider that mirrors iOS `ContextLimitSlider`
- * (ModelGroupDetailView.swift, fa77f493). Step labels:
- * 32K / 64K / 128K / 200K / 400K / 1M / Unlimited.
+ * (ModelGroupDetailView.swift). Step labels: every 100K from 100K to 1M,
+ * then Unlimited.
  *
- * Fixed 7-stop ladder, always shown verbatim regardless of which models (if
+ * Fixed ladder, always shown verbatim regardless of which models (if
  * any) are in the group. The previous behaviour clipped the ladder to the
  * largest member-declared context window, but model metadata is unreliable
  * (e.g. image-output / router models report no window and fall through to
@@ -681,14 +706,7 @@ fun ModelGroupDetailScreen(
  */
 private const val CONTEXT_LIMIT_UNLIMITED_SENTINEL: Int = Int.MAX_VALUE
 
-private val CONTEXT_LIMIT_PRESETS = listOf(
-    32_000,
-    64_000,
-    128_000,
-    200_000,
-    400_000,
-    1_000_000,
-)
+private val CONTEXT_LIMIT_PRESETS = (100_000..1_000_000 step 100_000).toList()
 
 private fun formatPresetLabel(tokens: Int): String =
     if (tokens >= 1_000_000) "${tokens / 1_000_000}M" else "${tokens / 1_000}K"
@@ -706,7 +724,7 @@ private fun ContextLimitSlider(
             Step(unlimitedLabel, CONTEXT_LIMIT_UNLIMITED_SENTINEL)
     }
     // Track the selected stop by index. Snap to nearest stop <= value
-    // so legacy saved values (e.g. 350K) land on the next stop down (200K).
+    // so legacy saved values (e.g. 128K) land on the next stop down (100K).
     var selectedIndex by remember(steps, value) {
         mutableStateOf(
             when {

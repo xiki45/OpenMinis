@@ -7,6 +7,13 @@ import com.openminis.app.config.ConfigRisk
 import com.openminis.app.config.ConfigSchema
 import com.openminis.app.config.ConfigValue
 import com.openminis.app.config.fields.ClosureField
+import com.openminis.app.config.readable.ConfigReadable
+import com.openminis.app.config.readable.ConfigRefResolver
+import com.openminis.app.config.readable.ConfigValueFormatter
+import com.openminis.app.config.readable.ReadableArg
+import com.openminis.app.config.readable.ReadableCore
+import com.openminis.app.config.readable.ReadableLine
+import com.openminis.app.config.readable.RedactedConfigValue
 import com.openminis.app.config.fields.HiddenField
 import com.openminis.app.config.fields.ReadOnlyField
 import com.openminis.app.data.model.ProviderCredential
@@ -36,6 +43,8 @@ import com.openminis.app.data.repository.ProviderRepository
 class ProvidersCollection(
     private val repo: ProviderRepository,
     private val envVars: EnvVarRepository,
+    /** For the per-device response idle timeout; null (tests) leaves that field out. */
+    private val context: android.content.Context? = null,
 ) : ConfigCollection {
     override val basePath: String get() = "providers"
     override val displayName: String get() = "LLM provider instances"
@@ -61,6 +70,8 @@ class ProvidersCollection(
             azureMode(forId),
             customUserAgent(forId),
             apiKeyField(forId),
+            networkRoute(forId),
+        ) + listOfNotNull(context?.let { responseIdleTimeout(forId, it) }) + listOf(
             // OAuth token stays fully hidden — the flow is browser-driven
             // and can't be expressed as a single value.
             HiddenField(
@@ -147,6 +158,52 @@ class ProvidersCollection(
         )
     }
 
+    // -- [T-config-readable] Readable descriptions (mirrors iOS ProvidersCollection) --
+
+    override val readableSubjectFormat: String get() = "Provider “%1\$@” – %2\$@"
+
+    override fun entityLabel(id: String): String? = ConfigRefResolver.names.instanceLabel(id)
+
+    /**
+     * The payload is already masked: `apiKey` is either "••• (hidden)" or a
+     * `$$VAR` reference. Only the fact that a key was given (or the variable
+     * name) is described — never a value.
+     */
+    override fun readableForAdd(payload: RedactedConfigValue): List<ReadableLine> {
+        val d = (payload.value as? ConfigValue.Obj)?.value ?: return emptyList()
+        val label = (d["label"] as? ConfigValue.Str)?.value ?: "?"
+        val typeRaw = (d["providerType"] as? ConfigValue.Str)?.value
+        val type = typeRaw?.let { raw -> runCatching { ProviderType.valueOf(raw).displayName }.getOrDefault(raw) } ?: "?"
+        val lines = mutableListOf(
+            ReadableLine("Add provider “%1\$@” (%2\$@)", listOf(ReadableArg.Text(label), ReadableArg.Text(type))),
+        )
+        val key = (d["apiKey"] as? ConfigValue.Str)?.value
+        lines.add(
+            when {
+                key.isNullOrEmpty() -> ReadableLine("No API key yet")
+                key.startsWith("\$\$") && key.length > 2 ->
+                    ReadableLine("API key from the environment variable $%@", listOf(ReadableArg.Text(key.drop(2))))
+                else -> ReadableLine("API key provided (value hidden)")
+            },
+        )
+        (d["customBaseURL"] as? ConfigValue.Str)?.value?.takeIf { it.isNotEmpty() }?.let {
+            lines.add(ReadableLine("Base URL: %@", listOf(ReadableArg.Text(ReadableCore.safeURL(it)))))
+        }
+        return lines
+    }
+
+    /**
+     * Not reachable today ([removable] = false); kept so the text is right if
+     * removal is ever allowed.
+     */
+    override fun readableForRemove(id: String): List<ReadableLine> {
+        val label = ConfigRefResolver.names.instanceLabel(id) ?: return emptyList()
+        val models = ConfigRefResolver.names.modelCountOf(id)
+        return listOf(
+            ReadableLine("Delete provider “%1\$@” and its %2\$@ models", listOf(ReadableArg.Text(label), ReadableArg.Text("$models"))),
+        )
+    }
+
     // -- Credential resolution ----------------------------------------
     //
     // `$$ENV_NAME` references are resolved at WRITE TIME against the
@@ -155,21 +212,8 @@ class ProvidersCollection(
     // sites and lose the "credential was already validated when set"
     // invariant. A missing env var here surfaces immediately as an
     // invalid_value error, rather than as a 401 deep inside a stream.
-    private val envRefRegex = Regex("^\\$\\$([A-Za-z_][A-Za-z0-9_]*)$")
-
-    private fun resolveCredential(raw: String, fieldName: String): String {
-        val m = envRefRegex.matchEntire(raw) ?: return raw
-        val key = m.groupValues[1]
-        val resolved = envVars.getValue(key)
-            ?: throw ConfigError.InvalidValue(
-                "$fieldName references env var \$\$$key, but no such env var exists. " +
-                    "Create it first via [Set $key](minis://settings/environments?create_key=$key&create_value=)."
-            )
-        if (resolved.isEmpty()) {
-            throw ConfigError.InvalidValue("$fieldName references env var \$\$$key but its value is empty.")
-        }
-        return resolved
-    }
+    private fun resolveCredential(raw: String, fieldName: String): String =
+        resolveEnvReference(envVars, raw, fieldName)
 
     // -- Field factories --
 
@@ -210,6 +254,7 @@ class ProvidersCollection(
             valueSchema = ConfigSchema.Str(maxLength = 200),
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Text()),
             reader = {
                 val inst = repo.instance(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Str(inst.label)
@@ -228,6 +273,7 @@ class ProvidersCollection(
             valueSchema = ConfigSchema.Bool,
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Bool(on = "Enabled", off = "Disabled"), label = "Status"),
             reader = {
                 val inst = repo.instance(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Bool(inst.isEnabled)
@@ -246,6 +292,7 @@ class ProvidersCollection(
             valueSchema = ConfigSchema.Str(maxLength = 1000),
             risk = ConfigRisk.SENSITIVE,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Url()),
             reader = {
                 val inst = repo.instance(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Str(inst.customBaseURL ?: "")
@@ -264,6 +311,7 @@ class ProvidersCollection(
             valueSchema = ConfigSchema.Bool,
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Bool()),
             reader = {
                 val inst = repo.instance(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Bool(inst.appendV1Suffix)
@@ -282,6 +330,7 @@ class ProvidersCollection(
             valueSchema = ConfigSchema.Bool,
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Bool()),
             reader = {
                 val inst = repo.instance(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Bool(inst.useResponsesAPI)
@@ -301,6 +350,7 @@ class ProvidersCollection(
             valueSchema = ConfigSchema.Bool,
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Bool()),
             reader = {
                 val inst = repo.instance(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Bool(inst.azureMode)
@@ -329,6 +379,7 @@ class ProvidersCollection(
             valueSchema = ConfigSchema.Str(maxLength = 256),
             risk = ConfigRisk.NORMAL,
             revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Text(preview = 60, empty = "Default")),
             reader = {
                 val inst = repo.instance(id) ?: return@ClosureField ConfigValue.Null
                 ConfigValue.Str(inst.customUserAgent ?: "")
@@ -350,6 +401,39 @@ class ProvidersCollection(
         )
 
     /**
+     * [T-minis-config-coverage] Settings > provider > Response idle timeout
+     * ([ResponseIdleTimeoutSetting]): same store, range and gate as the UI
+     * row, which only OpenAI-compatible API-key instances show. Stored per
+     * device, not synced. Applies to requests built after the write.
+     */
+    private fun responseIdleTimeout(id: String, context: android.content.Context): ConfigField {
+        val setting = com.openminis.app.provider.ResponseIdleTimeoutSetting
+        return ClosureField(
+            path = "providers.$id.responseIdleTimeout",
+            displayName = "Response idle timeout",
+            description = "Seconds to wait for a streamed reply to START (and the floor for the wait between its pieces) before the request counts as dead and is retried. Not a limit on how long a reply may take. Default ${setting.DEFAULT_SECONDS}; raise it for local models that prefill a long context for minutes (Settings offers ${setting.PRESETS.joinToString(", ")}). OpenAI-compatible API-key providers only; stored on this device.",
+            valueSchema = ConfigSchema.Int(min = setting.MIN_SECONDS, max = setting.MAX_SECONDS),
+            risk = ConfigRisk.NORMAL,
+            revertable = true,
+            readable = ConfigReadable(ConfigValueFormatter.Number(com.openminis.app.config.readable.NumberUnit.SECONDS)),
+            reader = {
+                repo.instance(id) ?: return@ClosureField ConfigValue.Null
+                ConfigValue.Int(setting.seconds(context, id))
+            },
+            writer = { v ->
+                val i = (v as? ConfigValue.Int)?.value ?: throw ConfigError.TypeMismatch("int")
+                val inst = repo.instance(id) ?: throw ConfigError.InvalidValue("Provider not found")
+                if (inst.providerType != com.openminis.app.data.model.ProviderType.openAI ||
+                    inst.credentialType == ProviderCredential.oauth
+                ) {
+                    throw ConfigError.InvalidValue("The response idle timeout only applies to OpenAI-compatible API-key providers; this provider keeps its own time budgets.")
+                }
+                setting.set(context, id, i)
+            },
+        )
+    }
+
+    /**
      * Write-only API key. Read always throws permission_denied (the
      * bridge surfaces this as `error: permission_denied`, not
      * `read_failed`, thanks to the explicit catch added in T-minis-
@@ -357,6 +441,37 @@ class ProvidersCollection(
      * `$$ENV_NAME` reference resolved at write time against the env
      * var store; failed lookups throw invalid_value.
      */
+    /**
+     * [FEAT-261021-03] The provider page's network route (iOS FEAT-261019-01).
+     * Device-local (NetworkSettings.providerRoutes), not part of the synced
+     * provider record.
+     */
+    private fun networkRoute(id: String): ConfigField =
+        ClosureField(
+            path = "providers.$id.networkRoute",
+            displayName = "Network",
+            description = "How this provider's requests connect: default (follow network.defaultRoute), direct, " +
+                "tailscale, or proxy:<id or name> (see `minis-config get proxies`). Kept on this device only.",
+            valueSchema = ConfigSchema.Str(maxLength = 128),
+            risk = ConfigRisk.SENSITIVE,
+            readable = ConfigReadable(ConfigValueFormatter.Custom(com.openminis.app.config.fields.NetworkConfigRoute::phrase)),
+            reader = { ConfigValue.Str(com.openminis.app.network.NetworkHub.providerRoute(id).raw) },
+            writer = { v ->
+                if (repo.instance(id) == null) throw ConfigError.UnknownPath("providers.$id")
+                com.openminis.app.network.NetworkHub.setProviderRoute(
+                    com.openminis.app.network.NetworkRoute.parse((v as ConfigValue.Str).value), id,
+                )
+            },
+            normalizer = {
+                com.openminis.app.config.fields.NetworkConfigRoute.normalize(it, com.openminis.app.network.NetworkHub.settings.value.proxies)
+            },
+            validator = {
+                com.openminis.app.config.fields.NetworkConfigRoute.validate(
+                    it, allowFollow = true, com.openminis.app.network.NetworkHub.settings.value.proxies,
+                )
+            },
+        )
+
     private fun apiKeyField(id: String): ConfigField =
         ClosureField(
             path = "providers.$id.apiKey",
@@ -365,6 +480,9 @@ class ProvidersCollection(
             valueSchema = ConfigSchema.Str(maxLength = 10_000),
             risk = ConfigRisk.DESTRUCTIVE,
             revertable = false,
+            // [T-config-readable] Never renders the value; a `$$VAR`
+            // reference names the variable only.
+            readable = ConfigReadable(ConfigValueFormatter.Secret),
             reader = {
                 throw ConfigError.PermissionDenied(
                     "API keys are never read back via minis-config. To change one, write a new value."
@@ -383,4 +501,35 @@ class ProvidersCollection(
                 }
             },
         )
+}
+
+private val envRefRegex = Regex("^\\$\\$([A-Za-z_][A-Za-z0-9_]*)$")
+
+/**
+ * `$$ENV_NAME` -> the variable's value, resolved at write time (see the note in
+ * ProvidersCollection). Anything else is returned as is. A missing variable or
+ * an empty value is an error; a DISABLED one resolves to "" with a warning.
+ */
+internal fun resolveEnvReference(envVars: EnvVarRepository, raw: String, fieldName: String): String {
+    val m = envRefRegex.matchEntire(raw) ?: return raw
+    val key = m.groupValues[1]
+    val resolved = envVars.getValue(key)
+        ?: throw ConfigError.InvalidValue(
+            "$fieldName references env var \$\$$key, but no such env var exists. " +
+                "Create it first via [Set $key](minis://settings/environments?create_key=$key&create_value=)."
+        )
+    // [T-envvar-disable] A disabled variable resolves to an empty string -
+    // the same thing it is inside a shell - and the write goes ahead with a
+    // warning in the response (and the log) instead of failing.
+    if (envVars.isDisabled(key)) {
+        val message = "$fieldName references env var \$\$$key, which is disabled; it resolved to an empty string. " +
+            "Enable it in [Environment Variables](minis://settings/environments?create_key=$key) and set $fieldName again."
+        com.openminis.app.logging.AppLogger.warning("ProvidersCollection", "[EnvVar] $message")
+        com.openminis.app.config.ConfigWriteWarnings.add(message)
+        return ""
+    }
+    if (resolved.isEmpty()) {
+        throw ConfigError.InvalidValue("$fieldName references env var \$\$$key but its value is empty.")
+    }
+    return resolved
 }

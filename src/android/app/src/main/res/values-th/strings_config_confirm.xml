@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-config-confirm-i18n] minis-config approval dialog (ConfigConfirmDialog).
+     Wording and translations copied from iOS Localizable.xcstrings
+     (ConfigConfirmSheet keys); a locale iOS lacks falls back to English. -->
+<resources>
+    <string name="config_confirm_title_one">ยืนยันการเปลี่ยนแปลง</string>
+    <string name="config_confirm_title_many">ยืนยันการเปลี่ยนแปลง %1$d รายการ</string>
+    <string name="config_confirm_cancel">ยกเลิก</string>
+    <string name="config_confirm_apply">ใช้</string>
+    <string name="config_confirm_reject_all">ปฏิเสธทั้งหมด</string>
+    <string name="config_confirm_risk_destructive">อาจส่งผลต่อการเรียกเครื่องมือครั้งถัดไป</string>
+    <string name="config_confirm_risk_sensitive">ย้อนกลับได้ แต่ควรตรวจดูสักหน่อย</string>
+</resources>

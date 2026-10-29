@@ -34,6 +34,13 @@ object ThinkingLevelCatalog {
         // `gpt-6-` so a future gpt-6 member with a LOWER ceiling cannot be
         // silently lifted to MAX by a family-wide match.
         Rule({ it.startsWith("gpt-6-sol") || it.startsWith("gpt-6-luna") }, ThinkingLevel.MAX),
+        // [T-gpt61-sol] gpt-6.1-sol: declared tiers low/medium/high/xhigh/max,
+        // so MAX. Needs its own rule — "gpt-6.1-sol" does NOT start with
+        // "gpt-6-sol" (the version dot sits where the hyphen is), so without
+        // this it fell through to the XHIGH default and hid the `max` tier.
+        // The dash spelling covers relays that normalise dots to dashes (same
+        // pair iOS ThinkingLevelCatalog.swift matches).
+        Rule({ it.startsWith("gpt-6.1-sol") || it.startsWith("gpt-6-1-sol") }, ThinkingLevel.MAX),
         Rule({ it.startsWith("gpt-5.6-sol") || it.startsWith("gpt-5.6-terra") }, ThinkingLevel.MAX),
         Rule({ it.startsWith("gpt-5.6-luna") }, ThinkingLevel.MAX),
         Rule({ it.startsWith("gpt-5.5") }, ThinkingLevel.XHIGH),

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">«%1$s» è una cartella che Minis monta qui, quindi non può essere eliminata dal browser dei file. Non è stato eliminato nulla. Per rimuovere una cartella esterna, vai in Impostazioni › Monta cartelle esterne.</string>
+</resources>

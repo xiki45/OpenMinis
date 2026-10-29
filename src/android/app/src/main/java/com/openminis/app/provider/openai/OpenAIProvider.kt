@@ -11,6 +11,10 @@ import com.openminis.app.data.model.LLMResponse
 import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.LLMUsage
 import com.openminis.app.data.model.ThinkingLevel
+import com.openminis.app.data.model.WireToolIdMap
+import com.openminis.app.data.model.isKimiNativeToolId
+import com.openminis.app.data.model.logWireToolIds
+import com.openminis.app.data.model.wireToolIdWithSuffix
 import com.openminis.app.data.model.hasImageInput
 import com.openminis.app.provider.thinking.ThinkingResolveContext
 import com.openminis.app.provider.thinking.ThinkingRuleResolver
@@ -91,8 +95,15 @@ class OpenAIProvider private constructor(
      * which is wrong for Azure's deployments-path routing.
      */
     private val azureBase: String? = null,
-) : LLMProvider {
+) : LLMProvider, com.openminis.app.network.NetworkTagged {
     override val name = "OpenAI"
+
+    /**
+     * [T-quota-codex-subscription] The instance this provider serves, set by
+     * ProviderFactory for Codex (ChatGPT OAuth) instances only. Every reply's
+     * `x-codex-*` headers feed its quota.
+     */
+    var quotaInstanceId: String? = null
 
     /**
      * [T-android-thinking-rules-phase2] Owning provider-instance id, set by
@@ -102,6 +113,14 @@ class OpenAIProvider private constructor(
      * cache. Null → no custom rules (identical to Phase-1 built-in-only behaviour).
      */
     var thinkingRuleInstanceId: String? = null
+
+    /**
+     * [T-sse-idle-timeout] This instance's response idle timeout, in seconds
+     * ([com.openminis.app.provider.ResponseIdleTimeoutSetting]), set by
+     * ProviderFactory. Read on the Chat Completions path only; the Responses
+     * API / Codex path keeps its fixed budgets, as on iOS.
+     */
+    var responseIdleTimeoutSec: Int = com.openminis.app.provider.ResponseIdleTimeoutSetting.DEFAULT_SECONDS
 
     /**
      * [T-android-model-custom-params] Per-model user overrides for this
@@ -156,6 +175,8 @@ class OpenAIProvider private constructor(
      * xAI's own behaviour, so leaving the key out keeps the body byte-identical
      * to before this feature existed.
      */
+    // [T-speed-tier] xAI only has Priority: FAST and ULTRAFAST both send
+    // "priority" here, never "ultrafast".
     internal fun resolvedServiceTier(): String? =
         if (supportsPriorityProcessing && com.openminis.app.data.FastModePrefs.isEnabled()) {
             "priority"
@@ -193,6 +214,13 @@ class OpenAIProvider private constructor(
     ) : this(apiKey = null, oauthTokenProvider = oauthTokenProvider, model = model, codexAccountId = codexAccountId)
 
     companion object {
+        /** [T-android-max-tokens-default] iOS OpenAIAgentProvider.defaultMaxTokens. */
+        const val CHAT_COMPLETIONS_DEFAULT_MAX_TOKENS = 16_384
+        const val RESPONSES_DEFAULT_MAX_TOKENS = 32_768
+
+        internal fun defaultMaxOutputTokensFor(chatCompletions: Boolean): Int =
+            if (chatCompletions) CHAT_COMPLETIONS_DEFAULT_MAX_TOKENS else RESPONSES_DEFAULT_MAX_TOKENS
+
         /**
          * [T-codex-gpt-image25-android] The 2.5 image variants, which name
          * themselves inside the image_generation tool object.
@@ -252,8 +280,52 @@ class OpenAIProvider private constructor(
          * NOT verified against a live account here — this session has no Codex
          * OAuth token to probe with. If gpt-6-astra or a gpt-5.6-* model starts
          * failing after this bump, this constant is the first thing to suspect.
+         *
+         * [T-codex-discovery-client-version] 0.155.0 → 0.159.0. Users report
+         * that a Codex OAuth refresh never lists gpt-6.1-sol, while the
+         * official Codex app and CLIProxyAPI do. The discovery route's answer
+         * is authoritative and replaces the list wholesale, so the built-in
+         * gpt-6.1-sol entry cannot help once discovery succeeds. CLIProxyAPI
+         * moved its default Codex client from 0.155.0 to 0.159.0 in the same
+         * commit that added gpt-6.1-sol (c8a2bfe8f, "feat(models): add
+         * gpt-6.1-sol model"), the same pattern as the 0.155.0 bump for
+         * gpt-6-sol/luna above. The working assumption is that the backend
+         * filters its catalog by client_version and 0.155.0 is below 6.1 Sol's
+         * floor. That is an ASSUMPTION: no real account was probed.
+         *
+         * One constant for every Codex-backend call — inference (Version and
+         * User-Agent headers), discovery (client_version query and User-Agent,
+         * CodexModelsApi) and the quota probe (User-Agent, QuotaStore) — so
+         * the listed models and the models a send will accept cannot diverge.
+         * The UA shape `codex_cli_rs/<v> (Android; arm64)` is unchanged.
          */
-        internal const val CODEX_CLIENT_VERSION = "0.155.0"
+        internal const val CODEX_CLIENT_VERSION = "0.159.0"
+
+        /** [T-codex-routing-hint] Header name, as the official client spells it. */
+        internal const val CODEX_ROUTING_HINT_HEADER = "x-codex-routing-hint"
+
+        /**
+         * [T-android-codex-prompt-cache-headers] The conversation-identity
+         * headers of a ChatGPT-backend (Codex OAuth) Responses request: both
+         * carry the body's `prompt_cache_key`. None when there is no key.
+         */
+        internal fun codexConversationHeaders(promptCacheKey: String?): Map<String, String> {
+            val key = promptCacheKey?.trim().orEmpty()
+            if (key.isEmpty()) return emptyMap()
+            return linkedMapOf("Session_id" to key, "Conversation_id" to key)
+        }
+
+        /**
+         * [T-codex-routing-hint] `model=<slug>`, plus `;tier=<tier>` when the
+         * body carries a service_tier — the official client's exact format.
+         * Null when there is no model to name.
+         */
+        internal fun codexRoutingHint(model: String?, serviceTier: String?): String? {
+            val m = model?.trim().orEmpty()
+            if (m.isEmpty()) return null
+            val tier = serviceTier?.trim().orEmpty()
+            return if (tier.isEmpty()) "model=$m" else "model=$m;tier=$tier"
+        }
 
         /**
          * [T-android-stale-conn-retry-hang] Streaming time-to-first-byte
@@ -511,6 +583,27 @@ class OpenAIProvider private constructor(
     private val usesChatCompletionsAPI: Boolean get() = forceChatCompletions || (!isOAuth && !useResponsesAPI)
 
     /**
+     * [T-ctx-count-reasoning] Same gate as `echoReasoning` in [buildRequestBody]
+     * (Chat Completions only; Mistral / Cerebras reject the field).
+     */
+    override fun echoesReasoningContent(thinkingLevel: ThinkingLevel): Boolean {
+        if (!usesChatCompletionsAPI) return false
+        val level = clampThinkingLevel(thinkingLevel)
+        val modelAlwaysReasons = model.supportsReasoning == true
+        val modelMayReason = model.supportsReasoning ?: true
+        return (level.isEnabled || modelAlwaysReasons) && modelMayReason && !(isMistral || isCerebras)
+    }
+
+    /**
+     * [T-android-max-tokens-default] Output budget when the model declares no
+     * maxOutputTokens. Port of iOS OpenAIAgentProvider.defaultMaxTokens:
+     * 16K on Chat Completions, 32K on the Responses API (OAuth / Codex, or
+     * the per-instance switch). Android used the global 16K for both.
+     */
+    override val defaultMaxOutputTokens: Int
+        get() = defaultMaxOutputTokensFor(usesChatCompletionsAPI)
+
+    /**
      * [T-android-tool-splits-reply-fix] Chat Completions streams ONE
      * monolithic `content` string per assistant response — qwen endpoints
      * flush trailing content chunks AFTER tool_calls deltas (chunking
@@ -573,7 +666,7 @@ class OpenAIProvider private constructor(
     // or the server itself stopped emitting bytes. Each milestone goes
     // through AppLogger.info at the OkHttpEvents tag with the call's
     // identity hash so concurrent streams can be disambiguated.
-    private val client = OkHttpClient.Builder()
+    private val baseClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(600, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -585,8 +678,27 @@ class OpenAIProvider private constructor(
         .eventListenerFactory { OkHttpNetTraceListener() }
         .build()
 
+    /** [T-net-android-phase3] Policy tag (prov:<instanceId>), set by ProviderFactory. */
+    override var netTag: String? = null
+
+    /**
+     * [T-net-android-phase3] The client for this request: [baseClient] itself
+     * unless Settings > Network routes this provider through the local entry
+     * (NetworkHttp). Read per request, so a route change applies to the next
+     * request without rebuilding the provider.
+     */
+    private val client: OkHttpClient get() = com.openminis.app.network.NetworkHttp.client(netTag, baseClient)
+
     /** Detect OpenRouter base URL. */
     private val isOpenRouter: Boolean = basePath.contains("openrouter.ai")
+
+    /**
+     * [T-kimi-native-tool-id] The request goes to a Kimi model: Moonshot's
+     * own endpoint, or a Kimi model id on any OpenAI-compatible host (K2 on
+     * OpenRouter, Groq, ...). Read per request: the model can change.
+     */
+    private val keepsKimiToolIds: Boolean
+        get() = basePath.lowercase().contains("moonshot") || model.id.lowercase().contains("kimi")
 
     /**
      * [OpenMinis#191] OpenRouter does NOT enable Anthropic prompt caching
@@ -833,6 +945,9 @@ class OpenAIProvider private constructor(
         } else {
             buildResponsesAPIBody(messages, systemPrompt, maxTokens, stream = true, imageParts = imageParts, tools = tools, thinkingLevel = thinkingLevel)
         }
+        // [T-speed-tier] What this request asked for, to compare with the tier
+        // response.completed echoes back.
+        val requestedServiceTier = body.optString("service_tier", "").takeIf { it.isNotEmpty() }
         // T302: serialize the request body exactly once. Pre-T302 we called
         // body.toString() three times per request (debug log + OAuth byte
         // build + non-OAuth RequestBody), each materialising a fresh 30+ MB
@@ -862,7 +977,16 @@ class OpenAIProvider private constructor(
                 memBefore, serStartNs, failure = null,
             )
         }
-        val request = buildRequest(bodyStr)
+        // [T-codex-routing-hint] Derived from the FINAL body, so the header can
+        // never disagree with the model / tier actually sent.
+        // [T-android-codex-prompt-cache-headers] The cache key is read back
+        // from the same final body, so the conversation headers can never
+        // disagree with `prompt_cache_key`.
+        val request = buildRequest(
+            bodyStr,
+            codexRoutingHint(body.optString("model"), body.optString("service_tier")),
+            promptCacheKey = body.optString("prompt_cache_key"),
+        )
         val headerMap = mutableMapOf<String, String>()
         for (name in request.headers.names()) {
             headerMap[name] = request.headers[name] ?: ""
@@ -901,7 +1025,17 @@ class OpenAIProvider private constructor(
         // watchdog below can (a) start the TTFB clock only after upload and
         // (b) evict THIS ONE connection on timeout.
         val watchState = CallWatchState()
-        val call = client.newCall(request.newBuilder().tag(CallWatchState::class.java, watchState).build())
+        // [T-sse-idle-timeout] Chat Completions reads the per-provider setting:
+        // it sets the first-byte budget, and raises the socket read timeout when
+        // it is above the client's 600 s so the transport does not end first.
+        val ttfbBudgetMs = if (usesChatCompletionsAPI) responseIdleTimeoutSec * 1000L else STREAM_TTFB_TIMEOUT_MS
+        val raisedReadSec = if (usesChatCompletionsAPI) {
+            com.openminis.app.provider.ResponseIdleTimeoutSetting.readTimeoutSeconds(responseIdleTimeoutSec)
+        } else null
+        val callClient = if (raisedReadSec != null) {
+            client.newBuilder().readTimeout(raisedReadSec.toLong(), TimeUnit.SECONDS).build()
+        } else client
+        val call = callClient.newCall(request.newBuilder().tag(CallWatchState::class.java, watchState).build())
         // [T-android-stale-conn-retry-hang] Time-to-first-byte watchdog. A
         // request written into a dead pooled h2 tunnel (local proxy socket
         // survives a network flap) produces NO further events — no headers,
@@ -935,13 +1069,13 @@ class OpenAIProvider private constructor(
                 } else {
                     // Upload finished — tight TTFB budget measured from that point.
                     val sinceUploadMs = (nowNanos - uploadDoneAt) / 1_000_000L
-                    if (sinceUploadMs >= STREAM_TTFB_TIMEOUT_MS) { timedOutPhase = "ttfb"; break }
+                    if (sinceUploadMs >= ttfbBudgetMs) { timedOutPhase = "ttfb"; break }
                 }
                 delay(pollMs)
             }
             if (timedOutPhase != null && !headersArrived.get()) {
                 ttfbTimedOut.set(true)
-                val budgetS = if (timedOutPhase == "ttfb") STREAM_TTFB_TIMEOUT_MS / 1000 else STREAM_UPLOAD_CAP_MS / 1000
+                val budgetS = if (timedOutPhase == "ttfb") ttfbBudgetMs / 1000 else STREAM_UPLOAD_CAP_MS / 1000
                 com.openminis.app.logging.AppLogger.warning(
                     "OpenAIProvider",
                     "[T-android-ttfb-upload-split] no response headers ($timedOutPhase phase, ${budgetS}s) — cancelling call + evicting connection (stale pooled connection?)",
@@ -962,13 +1096,17 @@ class OpenAIProvider private constructor(
         } catch (e: IOException) {
             if (ttfbTimedOut.get()) {
                 throw LLMError.TransientError(
-                    "no response from server (${STREAM_TTFB_TIMEOUT_MS / 1000}s TTFB) — check network/proxy",
+                    "no response from server (${ttfbBudgetMs / 1000}s TTFB) — check network/proxy",
                 )
             }
             throw e
         } finally {
             headersArrived.set(true)
             ttfbWatchdog.cancel()
+        }
+        // [T-quota-codex-subscription] Codex replies, errors included.
+        if (isOAuth && !forceChatCompletions) {
+            com.openminis.app.quota.QuotaObservationSink.recordCodexResponse(quotaInstanceId, response.headers)
         }
         // T321: response-side diagnostic log (status + select header values).
         run {
@@ -1337,6 +1475,25 @@ class OpenAIProvider private constructor(
                                 ?.optString("reason")?.takeIf { it.isNotEmpty() }
                                 ?: "unknown"
 
+                            // [T-android-model-refusal] The safety system blocked
+                            // the response. A DECLINE, not a truncation and not a
+                            // transport error: finish with content_filter (with or
+                            // without partial text) so the agent loop surfaces
+                            // "the model declined" on the reply instead of a
+                            // truncated-reply mark or a generic incomplete error.
+                            // iOS OpenAIAgentProvider maps incomplete +
+                            // content_filter to .refusal the same way.
+                            if (reason == com.openminis.app.provider.StopReasons.CONTENT_FILTER) {
+                                com.openminis.app.logging.AppLogger.warning(
+                                    "OpenAIProvider",
+                                    "[OpenAIStream] response.incomplete reason=content_filter — " +
+                                        "OpenAI safety system blocked this response (contentLen=$contentLen)"
+                                )
+                                finishReason = com.openminis.app.provider.StopReasons.CONTENT_FILTER
+                                sawFinishReason = true
+                                break
+                            }
+
                             // [T-android-incomplete-keep-partial] Only fail the
                             // turn when there is genuinely nothing to show.
                             //
@@ -1427,18 +1584,24 @@ class OpenAIProvider private constructor(
                             if (!sawFinishReason) {
                                 sawFinishReason = true
                                 // [T-codex-fast-mode] The response object inside
-                                // response.completed echoes the EFFECTIVE
-                                // service_tier — "priority" here is definitive
-                                // proof Fast Mode was honored; "default"/absent
-                                // means requested-but-downgraded (OpenAI silently
-                                // downgrades ineligible accounts). Mirrors iOS
-                                // 63a71146.
-                                val serviceTier = resp?.optString("service_tier", "")
-                                    ?.takeIf { it.isNotEmpty() } ?: "n/a"
+                                // response.completed echoes a service_tier.
+                                // [T-ultrafast-no-false-downgrade] Logged only, never
+                                // read as proof either way: on ChatGPT auth the
+                                // server routes the tier itself and may echo
+                                // "default" while a faster tier was honoured
+                                // (openai/codex issue #14204; CLIProxyAPI #6090).
+                                val echoedTier = resp?.optString("service_tier", "")?.takeIf { it.isNotEmpty() }
+                                val serviceTier = echoedTier ?: "n/a"
                                 com.openminis.app.logging.AppLogger.info(
                                     "OpenAIProvider",
-                                    "[T321] Responses finish_reason=$finishReason status=$status service_tier=$serviceTier contentLen=$contentLen reasoningLen=$reasoningLen toolCallAccumulators=${responsesToolCalls.size}"
+                                    "[T321] Responses finish_reason=$finishReason status=$status service_tier=$serviceTier requested_tier=${requestedServiceTier ?: "none"} contentLen=$contentLen reasoningLen=$reasoningLen toolCallAccumulators=${responsesToolCalls.size}"
                                 )
+                                if (requestedServiceTier != null && echoedTier != requestedServiceTier) {
+                                    com.openminis.app.logging.AppLogger.info(
+                                        "OpenAIProvider",
+                                        "[SpeedTier] requested service_tier=$requestedServiceTier, server echoed service_tier=${echoedTier ?: "n/a"} (not verifiable for ChatGPT auth) model=${model.id}",
+                                    )
+                                }
                             }
                             resp?.optJSONObject("usage")?.let { usage ->
                                 sawUsageBlock = true
@@ -1585,6 +1748,12 @@ class OpenAIProvider private constructor(
                         choice.safeOptString("finish_reason", "").let {
                             if (it.isNotEmpty()) {
                                 finishReason = it
+                                if (it == com.openminis.app.provider.StopReasons.CONTENT_FILTER && !sawFinishReason) {
+                                    com.openminis.app.logging.AppLogger.warning(
+                                        "OpenAIProvider",
+                                        "[OpenAIStream] finish_reason=content_filter — OpenAI safety system blocked this response",
+                                    )
+                                }
                                 if (!sawFinishReason) {
                                     sawFinishReason = true
                                     com.openminis.app.logging.AppLogger.info(
@@ -1815,8 +1984,10 @@ class OpenAIProvider private constructor(
         val token = getToken()
         builder.applyKeyAuth(token)
         builder.header("Content-Type", "application/json")
-        // ctor extraHeaders, then user headers LAST — replace semantics.
-        for ((k, v) in extraHeaders) builder.header(k, v)
+        // [T-android-provider-entry-rules] Provider rules and User-Agent first,
+        // then the caller's headers LAST - replace semantics, as documented.
+        builder.applyProviderHeaders(url, bodyObject?.toString())
+        builder.applyProviderUserAgent()
         for ((k, v) in headers) builder.header(k, v)
 
         com.openminis.app.logging.AppLogger.info(
@@ -1909,15 +2080,14 @@ class OpenAIProvider private constructor(
                 .post(requestBody)
                 .applyKeyAuth(token)
                 .header("Content-Type", "application/json")
-            for ((key, value) in extraHeaders) {
-                builder.header(key, value)
-            }
+            // [T-android-provider-entry-rules] Same provider rules as chat.
+            builder.applyProviderHeaders(url, bodyStr)
             // [T-android-model-use-image-passthrough GH#62] Per-call passthrough
-            // headers, merged after the ctor extraHeaders so they can add/override.
+            // headers, merged after the provider headers so they can add/override.
             for ((key, value) in imageExtraHeaders) {
                 builder.header(key, value)
             }
-            builder.applyUserAgentOverride(customUserAgent)
+            builder.applyProviderUserAgent()
             val request = builder.build()
 
             com.openminis.app.logging.AppLogger.info(
@@ -2035,13 +2205,13 @@ class OpenAIProvider private constructor(
                 .url(url)
                 .post(multipart.build())
                 .applyKeyAuth(token)
-            for ((key, value) in extraHeaders) {
-                builder.header(key, value)
-            }
+            // [T-android-provider-entry-rules] Same provider rules as chat
+            // (multipart body: no body-derived headers).
+            builder.applyProviderHeaders(url, null)
             for ((key, value) in imageExtraHeaders) {
                 builder.header(key, value)
             }
-            builder.applyUserAgentOverride(customUserAgent)
+            builder.applyProviderUserAgent()
             val request = builder.build()
 
             com.openminis.app.logging.AppLogger.info(
@@ -2247,6 +2417,19 @@ class OpenAIProvider private constructor(
             body.put("tool_choice", "auto")
         }
 
+        // [B02] Wire tool ids of this request (wireToolId, at most 40 chars):
+        // a Responses-origin history stores `call_…|fc_…`, which strict
+        // Chat Completions gateways and relays to Anthropic / Bedrock reject.
+        // Replaces capChatToolCallId (T-android-tool-call-id-too-long, 64
+        // chars). The stored history keeps the raw ids.
+        // [T-kimi-native-tool-id] A request to Kimi keeps Kimi's own
+        // `functions.<name>:<idx>` ids (owner decision 2026-10-18); every
+        // other target, and every other id shape, keeps the strict rule.
+        val wireIds = if (keepsKimiToolIds) {
+            WireToolIdMap(keepAsIs = ::isKimiNativeToolId)
+        } else {
+            WireToolIdMap()
+        }
         val messagesArray = JSONArray()
         if (systemPrompt != null) {
             messagesArray.put(JSONObject().apply {
@@ -2324,15 +2507,22 @@ class OpenAIProvider private constructor(
                             }
                         }
                         val textParts = msg.contentParts.filterIsInstance<AgentContentPart.Text>()
-                        if (textParts.isNotEmpty()) {
+                        val toolUseParts = msg.contentParts.filterIsInstance<AgentContentPart.ToolUse>()
+                        // [FIX-261024-04] A tool-only turn still carries
+                        // `content` ("" - TG 95907: some OpenAI-compatible
+                        // servers reject an assistant message without the
+                        // key). Not null: llama.cpp and xAI reject null there,
+                        // while OpenAI, DeepSeek, Qwen, vLLM, Ollama and
+                        // OpenRouter accept "" - which is also what an empty
+                        // stored text part already sent.
+                        if (textParts.isNotEmpty() || toolUseParts.isNotEmpty()) {
                             obj.put("content", textParts.joinToString("") { it.text })
                         }
-                        val toolUseParts = msg.contentParts.filterIsInstance<AgentContentPart.ToolUse>()
                         if (toolUseParts.isNotEmpty()) {
                             val toolCallsArr = JSONArray()
                             for (tu in toolUseParts) {
                                 toolCallsArr.put(JSONObject().apply {
-                                    put("id", capChatToolCallId(tu.id))
+                                    put("id", wireIds.idFor(tu.id))
                                     put("type", "function")
                                     put("function", JSONObject().apply {
                                         put("name", tu.name)
@@ -2382,7 +2572,7 @@ class OpenAIProvider private constructor(
                         for (tr in toolResults) {
                             messagesArray.put(JSONObject().apply {
                                 put("role", "tool")
-                                put("tool_call_id", capChatToolCallId(tr.id))
+                                put("tool_call_id", wireIds.idFor(tr.id))
                                 put("content", tr.content)
                             })
                             // [T-android-toolresult-image-dropped] THE reported bug.
@@ -2419,7 +2609,7 @@ class OpenAIProvider private constructor(
                                             put(
                                                 "text",
                                                 "[Image returned by ${tr.name} " +
-                                                    "(tool_call_id: ${capChatToolCallId(tr.id)})]",
+                                                    "(tool_call_id: ${wireIds.idFor(tr.id)})]",
                                             )
                                         })
                                         put(
@@ -2620,7 +2810,25 @@ class OpenAIProvider private constructor(
         // "Duplicate value for tool_call_id ... in message[N]" whenever
         // any id repeats across the full messages array.
         globallyDedupeToolCallIds(messagesArray)
-        body.put("messages", messagesArray)
+        logWireToolIds("chat", wireIds)
+        // [T-android-chat-tool-adjacency] (#382 / #352) Last gate on the tool
+        // pairing, by POSITION: every tool_calls block is followed at once by
+        // exactly its replies. The layers above pair by id only, so a history
+        // whose results are not adjacent or are duplicated went out as built,
+        // and the same 400 came back on every retry. Runs after the dedupe so
+        // each call id is unique. See ChatCompletionsToolPairing.
+        val paired = ChatCompletionsToolPairing.sanitize(messagesArray)
+        if (paired.changed) {
+            android.util.Log.w(
+                "OpenAIProvider",
+                "[sanitize-chat] repaired outgoing tool pairing: " +
+                    "movedReplies=${paired.movedReplies} " +
+                    "droppedDuplicateReplies=${paired.droppedDuplicateReplies} " +
+                    "droppedOrphanReplies=${paired.droppedOrphanReplies} " +
+                    "placeholderCalls=${paired.placeholderCalls} messages=${messagesArray.length()}",
+            )
+        }
+        body.put("messages", paired.messages)
 
         // [T-android-model-use-passthrough-mode GH#72] Merge user-supplied extra
         // body fields verbatim (no OpenAI→native conversion — callers own the
@@ -2723,7 +2931,8 @@ class OpenAIProvider private constructor(
                             seen[rawId] = 1
                         } else {
                             val next = used + 1
-                            renamedId = "$rawId-$next"
+                            // Within the 40-char wire cap, as iOS renamedId.
+                            renamedId = wireToolIdWithSuffix(rawId, next)
                             seen[rawId] = next
                             renamedCount += 1
                             call.put("id", renamedId)
@@ -2752,7 +2961,8 @@ class OpenAIProvider private constructor(
      * the OAuth byte build, and the OkHttp RequestBody. Per-call peak heap
      * dropped by ~2× the body size (often tens of MB on long agent loops).
      */
-    private suspend fun buildRequest(bodyStr: String): Request {
+    // internal (not private) so tests can inspect the real request headers.
+    internal suspend fun buildRequest(bodyStr: String, routingHint: String? = null, promptCacheKey: String? = null): Request {
         val token = getToken()
 
         if (isOAuth && !forceChatCompletions) {
@@ -2774,6 +2984,21 @@ class OpenAIProvider private constructor(
                 .header("User-Agent", "codex_cli_rs/$CODEX_CLIENT_VERSION (Android; arm64)")
                 .header("Originator", "codex_cli_rs")
             codexAccountId?.let { builder.header("Chatgpt-Account-Id", it) }
+            // [T-codex-routing-hint] The official Codex client sends
+            // `x-codex-routing-hint` on every ChatGPT-backend Responses request
+            // (codex-rs/core/src/client.rs build_routing_hint_header), and
+            // CLIProxyAPI #6090 added it for parity. Aligns our request with
+            // the native client; it is NOT proven to be required for Fast or
+            // Ultrafast to take effect. Only on this Codex OAuth branch, never
+            // on API-key / non-ChatGPT backends.
+            routingHint?.let { builder.header(CODEX_ROUTING_HINT_HEADER, it) }
+            // [T-android-codex-prompt-cache-headers] The ChatGPT backend keys
+            // its prompt cache on the conversation identity in the HEADERS;
+            // `prompt_cache_key` in the body alone hit ~16% in a user's log
+            // (cached_tokens = 0 on most turns seconds apart). Same value as
+            // the body key, as CLIProxyAPI's cacheHelper and iOS bd4ea2975 do.
+            // Only on this Codex OAuth branch.
+            for ((name, value) in codexConversationHeaders(promptCacheKey)) builder.header(name, value)
             // [T-provider-custom-user-agent] Applied last so a non-blank
             // override wins over the Codex default UA. In practice null on
             // this OAuth path (the UI only exposes it for custom-base
@@ -2818,42 +3043,7 @@ class OpenAIProvider private constructor(
             .post(requestBody)
             .applyKeyAuth(token)
             .header("Content-Type", "application/json")
-        for ((key, value) in extraHeaders) {
-            builder.header(key, value)
-        }
-        // [T-android-copilot-per-request-headers] Headers that depend on THIS
-        // request's body (see [perRequestHeaders]). Parsed from the already
-        // serialized string because that is what this function receives; a
-        // malformed body could only come from a builder above, but a sizing
-        // helper must never be the thing that throws, so it degrades to "no
-        // derived headers" rather than failing the send.
-        perRequestHeaders?.let { derive ->
-            val parsed = runCatching { org.json.JSONObject(bodyStr) }.getOrNull()
-            if (parsed != null) {
-                for ((key, value) in derive(parsed)) builder.header(key, value)
-            }
-        }
-        // [T-android-opencode-session-header] Derived per request off the live
-        // [sessionId], so a draft promoted mid-conversation starts sending the
-        // header without the provider being rebuilt. Gated on `requestUrl`
-        // rather than `basePath` because that is the address actually dialled —
-        // an absolute endpoint override or Azure routing can send this request
-        // somewhere other than the configured base, and the id must follow the
-        // real destination, not the nominal one. Empty for every host that is
-        // not OpenCode Go, and for a draft/blank id.
-        for ((key, value) in com.openminis.app.provider.OpenCodeSessionHeader
-            .headersFor(requestUrl, sessionId)) {
-            builder.header(key, value)
-        }
-        // [T-android-model-custom-params] Per-model custom headers. Applied
-        // after the ctor extraHeaders (so a user header can override a provider
-        // default) but BEFORE chatExtraHeaders, so an explicit per-call
-        // passthrough still wins. Authorization/Content-Type are only touched
-        // when the user names them explicitly — otherwise untouched, which is
-        // what keeps API-key and OAuth auth intact.
-        modelOverrides?.customHeaders?.let { headers ->
-            for ((key, value) in headers) builder.header(key, value)
-        }
+        builder.applyProviderHeaders(requestUrl, bodyStr)
         // [T-android-model-use-passthrough-mode] Per-call chat header overrides,
         // applied AFTER the ctor extraHeaders → same-name REPLACE over any
         // default (incl. Authorization/Content-Type). Empty on normal calls.
@@ -2874,41 +3064,77 @@ class OpenAIProvider private constructor(
         // hundred lines above; here it is derived so no provider has to
         // remember. An explicit per-instance override still wins, and for
         // Copilot that cannot happen anyway (supportsCustomUserAgent is false).
-        builder.applyUserAgentOverride(
-            customUserAgent,
-            defaultUserAgent = if (extraHeaders.keys.any { it.equals("User-Agent", true) }) {
-                null
-            } else {
-                com.openminis.app.provider.MinisUserAgent.DEFAULT
-            },
-        )
+        builder.applyProviderUserAgent()
         return builder.build()
     }
 
-    private fun parseChatCompletionsUsage(usage: JSONObject): LLMUsage {
-        val promptTokens = usage.optInt("prompt_tokens", 0)
-        // DeepSeek reports cache hits at `usage.prompt_cache_hit_tokens` instead
-        // of the OpenAI-native `prompt_tokens_details.cached_tokens`. Mirrors
-        // iOS OpenAIProvider.swift:629-630. Without this fallback, DeepSeek V4
-        // looked like it never cached even when it did, masking T122's win.
-        val cacheRead = usage.optJSONObject("prompt_tokens_details")
-            ?.optInt("cached_tokens")?.takeIf { it > 0 }
-            ?: usage.optInt("prompt_cache_hit_tokens", 0).takeIf { it > 0 }
-        // OpenAI/DeepSeek `prompt_tokens` is the FULL input (cached + fresh), so
-        // subtract the cached portion to keep `inputTokens` meaning fresh-only —
-        // matching the Anthropic convention. Otherwise the cached tokens are
-        // counted twice in `input + cacheRead` (deflates the cache-hit rate;
-        // DeepSeek 99% hit showed as ~48%). Guard: only subtract when it stays
-        // non-negative; no cache field (cacheRead == null) → unchanged.
-        // latestContextTokens stays the full prompt (that IS the context size).
-        val freshInput = cacheRead?.let { (promptTokens - it).takeIf { d -> d >= 0 } } ?: promptTokens
-        return LLMUsage(
-            inputTokens = freshInput,
-            outputTokens = usage.optInt("completion_tokens", 0),
-            cacheReadInputTokens = cacheRead,
-            latestContextTokens = promptTokens,
-        )
+    /**
+     * [T-android-provider-entry-rules] The headers EVERY request this provider
+     * sends must carry, in one place, so no endpoint can forget one. The chat
+     * builder, image generation, image edit and the model-use passthrough all
+     * call it; before this, the last three skipped every line below and an
+     * OpenCode Go entry answered them with 400 "missing x-opencode-session".
+     * A source-scan test pins that every `Request.Builder()` in this file that
+     * dials the provider goes through here.
+     *
+     * Order (later wins on a same-name header):
+     *  1. ctor [extraHeaders] - provider identity (OpenRouter, Copilot editor).
+     *  2. [perRequestHeaders] - derived from THIS request's JSON body (Copilot
+     *     X-Initiator / X-Request-Id). Skipped for a non-JSON body (multipart
+     *     image edit); a malformed body degrades to "no derived headers"
+     *     rather than failing the send.
+     *  3. OpenCode Go `x-opencode-session` - off the live [sessionId], gated on
+     *     [requestUrl] (the address actually dialled, which an absolute
+     *     endpoint override or Azure routing can move away from the base).
+     *     Empty for every other host and for a draft/blank id.
+     *  4. [modelOverrides] custom headers - the user's per-model headers, after
+     *     the provider defaults so they can replace one. Authorization /
+     *     Content-Type are only touched when the user names them.
+     * Per-call caller headers and the User-Agent are applied by the caller,
+     * after this, because their position differs per endpoint.
+     */
+    private fun Request.Builder.applyProviderHeaders(requestUrl: String, jsonBody: String?): Request.Builder {
+        for ((key, value) in extraHeaders) header(key, value)
+        if (jsonBody != null) {
+            perRequestHeaders?.let { derive ->
+                val parsed = runCatching { org.json.JSONObject(jsonBody) }.getOrNull()
+                if (parsed != null) for ((key, value) in derive(parsed)) header(key, value)
+            }
+        }
+        for ((key, value) in com.openminis.app.provider.OpenCodeSessionHeader.headersFor(requestUrl, sessionId)) {
+            header(key, value)
+        }
+        modelOverrides?.customHeaders?.let { headers -> for ((key, value) in headers) header(key, value) }
+        return this
     }
+
+    /**
+     * [T-provider-custom-user-agent] The per-instance User-Agent, or the
+     * branded default. [T-android-copilot-editor-ua] No branded default when
+     * [extraHeaders] already carries a User-Agent: then the provider's identity
+     * is part of its PROTOCOL (Copilot rejects requests that do not look like
+     * the editor plugin), not branding.
+     */
+    private fun Request.Builder.applyProviderUserAgent(): Request.Builder = applyUserAgentOverride(
+        customUserAgent,
+        defaultUserAgent = if (extraHeaders.keys.any { it.equals("User-Agent", true) }) {
+            null
+        } else {
+            com.openminis.app.provider.MinisUserAgent.DEFAULT
+        },
+    )
+
+    private fun parseChatCompletionsUsage(usage: JSONObject): LLMUsage =
+        // [T-usage-step1] Shared parser (USAGE_METRICS_SPEC.md 2.1). Still
+        // subtracts the cache read from prompt_tokens (DeepSeek 99% hit used
+        // to show as ~48%) and keeps the never-negative guard, and now also:
+        // takes the LARGEST of cached_tokens / prompt_cache_hit_tokens /
+        // Moonshot's top-level cached_tokens (a reported 0 no longer hides a
+        // real hit), reads the cache write (OpenRouter cache_write_tokens,
+        // relays' cache_creation_input_tokens) and subtracts it too when that
+        // stays non-negative, and records whether any cache key was present.
+        // latestContextTokens stays the full prompt (that IS the context size).
+        com.openminis.app.usage.ProviderUsageParser.openAIChat(usage).toLLMUsage()
 
     /**
      * Inject provider-specific thinking parameters into the request body.
@@ -3439,12 +3665,23 @@ class OpenAIProvider private constructor(
         // behaviour — it just means neither feature can silently overwrite the
         // other if either's routing widens later. Both want the same value
         // anyway, so "first writer wins" loses nothing.
-        if (!body.has("service_tier") &&
-            com.openminis.app.data.FastModePrefs.isEnabled() &&
-            model.id.contains("gpt", ignoreCase = true)
-        ) {
-            body.put("service_tier", "priority")
+        //
+        // [T-speed-tier] Three tiers now: STANDARD omits the key, FAST sends
+        // "priority", ULTRAFAST sends "ultrafast" — but only for an allow-listed
+        // model (SpeedTiers.supportsUltrafast); on any other model a stored
+        // Ultrafast choice falls back to "priority" so a request never carries a
+        // tier its model is not known to take.
+        if (!body.has("service_tier") && model.id.contains("gpt", ignoreCase = true)) {
+            com.openminis.app.data.SpeedTiers
+                .effective(com.openminis.app.data.FastModePrefs.tier(), model)
+                .wireValue
+                ?.let { body.put("service_tier", it) }
         }
+        // [T-android-ultrafast-align] Say so when Ultrafast was chosen but is not
+        // what this model / account supports (iOS ultrafastUnsupportedNote).
+        com.openminis.app.data.SpeedTiers
+            .ultrafastUnsupportedNote(com.openminis.app.data.FastModePrefs.tier(), model)
+            ?.let { com.openminis.app.logging.AppLogger.info("OpenAIProvider", "[SpeedTier] $it") }
 
         if (systemPrompt != null) {
             body.put("instructions", systemPrompt)
@@ -3798,31 +4035,6 @@ class OpenAIProvider private constructor(
         if (id.length <= 64) id else id.substring(0, 64)
 
     /**
-     * [T-android-tool-call-id-too-long] Chat-Completions `tool_calls[].id` /
-     * `tool_call_id` must be ≤64 chars — OpenAI-compatible endpoints reject longer
-     * ids with a 400 ("string too long. Expected a string with maximum length 64").
-     * Two ways an id gets over 64 here:
-     *   - a Responses-origin history turn stores the combined "call_…|fc_…" id
-     *     (splitResponsesAPIIds' form) which is replayed verbatim on a Chat
-     *     Completions request;
-     *   - memory-tool / synthetic ids that are long by construction.
-     * We keep only the call_-id half (before any '|') and, if still >64, replace
-     * it with a deterministic SHA-256-derived id. Determinism matters: the SAME
-     * raw id must map to the SAME capped id so the assistant tool_call and its
-     * matching tool result still pair up (a mismatch is its own 400). The
-     * downstream dedupe pass then guarantees uniqueness within the request.
-     */
-    private fun capChatToolCallId(id: String): String {
-        val callHalf = id.substringBefore('|')
-        if (callHalf.length <= 64) return callHalf
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(callHalf.toByteArray(Charsets.UTF_8))
-        val hex = digest.joinToString("") { "%02x".format(it) }
-        // "call_" + 56 hex chars = 61 chars, safely under 64 and clearly a call id.
-        return "call_${hex.take(56)}"
-    }
-
-    /**
      * Derives a stable per-conversation `prompt_cache_key` for the Responses
      * API. Mirrors iOS derivePromptCacheKey (OpenAIAgentProvider.swift:515).
      * The first user message is re-sent verbatim on every turn → its hash is
@@ -3889,28 +4101,12 @@ class OpenAIProvider private constructor(
     }
 
     /** Parse usage from Responses API format. */
-    private fun parseResponsesAPIUsage(usage: JSONObject): LLMUsage {
-        val inputTokens = usage.optInt("input_tokens", 0)
-        // Responses API reports cache hits at `input_tokens_details.cached_tokens`
-        // (distinct from Chat Completions' `prompt_tokens_details.cached_tokens`).
-        // Mirrors iOS OpenAIProvider.swift:640. Without this, even a perfectly
-        // cached Responses-API request showed cacheRead=0 in usage stats —
-        // making T126's prompt_cache_key wiring look like it had no effect.
-        val cacheRead = usage.optJSONObject("input_tokens_details")
-            ?.optInt("cached_tokens")?.takeIf { it > 0 }
-        // `input_tokens` is the FULL input (cached subset included); subtract the
-        // cached portion so `inputTokens` is fresh-only, matching Anthropic — else
-        // the cache is counted twice in `input + cacheRead` (deflates hit rate).
-        // Guard: only subtract when non-negative; no cache field → unchanged.
-        // latestContextTokens stays the full input (that IS the context size).
-        val freshInput = cacheRead?.let { (inputTokens - it).takeIf { d -> d >= 0 } } ?: inputTokens
-        return LLMUsage(
-            inputTokens = freshInput,
-            outputTokens = usage.optInt("output_tokens", 0),
-            cacheReadInputTokens = cacheRead,
-            latestContextTokens = inputTokens,
-        )
-    }
+    private fun parseResponsesAPIUsage(usage: JSONObject): LLMUsage =
+        // [T-usage-step1] Shared parser. input_tokens is the FULL input, so the
+        // cached part (input_tokens_details.cached_tokens) is subtracted unless
+        // that would go negative; output_tokens_details.reasoning_tokens is now
+        // kept as reasoningTokens. latestContextTokens stays the full input.
+        com.openminis.app.usage.ProviderUsageParser.openAIResponses(usage).toLLMUsage()
 
     private fun mapHttpError(statusCode: Int, body: String): LLMError {
         if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
@@ -3945,6 +4141,9 @@ class OpenAIProvider private constructor(
 
     private fun mapError(error: Throwable): LLMError {
         if (error is LLMError) return error
+        // [T-android-tls-trust-error] A rejected certificate is not a network
+        // blip: named, not retried on the same model, explained to the user.
+        com.openminis.app.provider.TlsFailure.toLLMError(error, basePath)?.let { return it }
         if (error is java.io.IOException) return LLMError.NetworkError(error)
         return LLMError.Unknown(error)
     }

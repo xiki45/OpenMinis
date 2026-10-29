@@ -46,6 +46,10 @@ object AgentTools {
         // would fail to resolve. Empty falls back to the built-in's name so the
         // enum is never an empty list (which some providers reject).
         rosterNames: List<String> = listOf(SubAgentDefinition.BUILT_IN_NAME),
+        // [T-port-user-ask] Decided once per run by UserAskExposure (switch on,
+        // not a sub agent, an interactive run). Not in the list = does not
+        // exist: no schema, no prompt line, no retries on it. Last, as on iOS.
+        userAskExposed: Boolean = false,
     ): List<AgentToolDefinition> = buildList {
         add(shellExecuteDefinition())
         add(FileReadTool.definition())
@@ -62,6 +66,7 @@ object AgentTools {
         if (!isHelper && delegateEnabled) {
             add(subAgentTaskDefinition(rosterNames))
         }
+        if (userAskExposed && !isHelper) add(com.openminis.app.agent.userask.UserAskPromptText.definition())
     }
 
     /**
@@ -86,7 +91,7 @@ object AgentTools {
     private fun subAgentTaskDefinition(rosterNames: List<String>): AgentToolDefinition =
         AgentToolDefinition(
             name = SubAgentDefinition.TOOL_NAME,
-            description = "Delegate a self-contained task to a sub agent — its own isolated context and tool loop, in a hidden child session running concurrently with you — and inspect or stop the ones you started. `action` defaults to `delegate`.\n\nDELEGATE work needing many rounds of exploration (reading lots of files or pages, trial-and-error), producing bulk output you only need a conclusion from, or splitting into independent sub-problems you can run in parallel (several calls in one turn). DO NOT delegate what you can finish in one or two tool calls, what needs the user's confirmation mid-way, or work depending on nuances of this conversation you cannot restate. A sub agent cannot see this conversation and has no memory: write `task` as a complete brief for a capable colleague who just walked in — goal, constraints, where things are, what exactly to return. It costs a full model run, so nothing trivial. Only 3 run at once, but delegate everything you need anyway: extras return status=queued and start as slots free, so never re-delegate a queued task or wait for a slot.\n\nwait=false (default) returns at once with status=running and a job_id; the result arrives later as a NEW MESSAGE prefixed [Background task finished …] (also on cancel/timeout/failure). End your turn when you have nothing else to do — never poll in a loop, never promise to report back. You do NOT need action=status to receive results.",
+            description = "Delegate a self-contained task to a sub agent — its own isolated context and tool loop, in a hidden child session running concurrently with you — and inspect or stop the ones you started. `action` defaults to `delegate`.\n\nDELEGATE work needing many rounds of exploration (reading lots of files or pages, trial-and-error), producing bulk output you only need a conclusion from, or splitting into independent sub-problems you can run in parallel (several calls in one turn). DO NOT delegate what you can finish in one or two tool calls, what needs the user's confirmation mid-way, or work depending on nuances of this conversation you cannot restate. A sub agent cannot see this conversation and has no memory: write `task` as a complete brief for a capable colleague who just walked in — goal, constraints, where things are, what exactly to return. It costs a full model run, so nothing trivial. Only ${com.openminis.app.agent.jobs.AgentJobRegistry.MAX_CONCURRENT_CHILD_JOBS_PER_PARENT} run at once in this conversation, but delegate everything you need anyway: extras return status=queued and start as slots free, so never re-delegate a queued task or wait for a slot.\n\nwait=false (default) returns at once with status=running and a job_id; the result arrives later as a NEW MESSAGE prefixed [Background task finished …] (also on cancel/timeout/failure). End your turn when you have nothing else to do — never poll in a loop, never promise to report back. You do NOT need action=status to receive results.",
             parameters = mapOf(
             "tool_title" to AgentToolParam("string", "A concise 5-10 word summary shown to the user on the block in the tool bar and in the transcript (e.g. 'Survey repo test layout', 'Check on the research agent'). Use the same language as the user."),
             "action" to AgentToolParam("string", "\"delegate\" (default): start a sub agent on `task`. \"status\": report this conversation's sub agents — state (queued/running/done/cancelled/failed/interrupted), current tool, elapsed, model, finished results; `job_id` for one, omit for all. \"steer\": course-correct a RUNNING one without stopping it (see `message`). \"cancel\": stop the one named by `job_id`; its partial result is still posted back. \"resume\": restart runs the app lost when it was killed (they report `interrupted`); `job_id`/`child_session_id` for one, omit both for all.", enumValues = listOf("delegate", "status", "steer", "cancel", "resume")),
@@ -196,7 +201,7 @@ object AgentTools {
             "Each entry is prepended with a timestamp. " +
             "Save: user preferences, recurring patterns, key facts, project conventions, reusable knowledge. " +
             "Avoid saving passwords, API keys, tokens, or secrets unless the user explicitly confirms after being warned. " +
-            "Keep entries concise and general-purpose. GLOBAL.md is read-only (user-maintained via Settings).",
+            "Keep entries concise and general-purpose. GLOBAL.md is writable but not through this tool; update it when the user asks.",
         parameters = mapOf(
             "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this tool call does, shown to the user (e.g. 'Save user preference for Python', 'Note today's project context'). Use the same language as the user."),
             "content" to AgentToolParam("string", "The memory content to write. Use concise Markdown with a short heading (## Topic) and context about what was done/learned."),

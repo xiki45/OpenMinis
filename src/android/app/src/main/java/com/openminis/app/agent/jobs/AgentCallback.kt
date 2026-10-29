@@ -174,12 +174,15 @@ data class AgentCallback(
 object AgentCallbackLabels {
     @Volatile var result: String = "Agent result"
     @Volatile var progress: String = "Agent progress"
+    /** [T-preview-scheduled-tag-leak] Noun for a scheduled fire's preview line. */
+    @Volatile var scheduled: String = "Scheduled task"
     @Volatile var status: Map<String, String> = emptyMap()
 
     fun install(context: android.content.Context) {
         val r = context.applicationContext.resources
         result = r.getString(com.openminis.app.R.string.agent_callback_result)
         progress = r.getString(com.openminis.app.R.string.agent_callback_progress)
+        scheduled = r.getString(com.openminis.app.R.string.scheduled_card_label)
         status = mapOf(
             "running" to r.getString(com.openminis.app.R.string.helper_status_running),
             "done" to r.getString(com.openminis.app.R.string.helper_status_completed),

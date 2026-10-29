@@ -509,7 +509,8 @@ internal suspend fun loadOriginalImage(context: Context, model: Any): OriginalIm
                 is Uri -> readUri(context, model)
                 is String -> when {
                     model.startsWith("http://") || model.startsWith("https://") ->
-                        java.net.URL(model).openStream().use { it.readBytes() }
+                        // [FEAT-261021-16] Follows the default route in Settings > Network.
+                        com.openminis.app.network.NetworkUrlRequest.open(com.openminis.app.network.NetworkHttp.DEFAULT_TAG, model).use { r -> r.body().use { it.readBytes() } }
                     model.startsWith("content://") || model.startsWith("file://") ->
                         readUri(context, Uri.parse(model))
                     model.startsWith("/") -> File(model).takeIf { it.isFile }?.readBytes()

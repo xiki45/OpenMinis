@@ -1,0 +1,254 @@
+{
+  "live": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[199999 chars sha256:83b1bfcdf2cf]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Got it."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Summarise the attached text"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" url=\"minis://attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" size=\"600000\" modified=\"20\u2026[245 chars sha256:7031bc940818]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[199999 chars sha256:83b1bfcdf2cf]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Got it."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Summarise the attached text"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" url=\"minis://attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" size=\"600000\" modified=\"20\u2026[245 chars sha256:7031bc940818]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[199999 chars sha256:83b1bfcdf2cf]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Got it."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Summarise the attached text<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" url=\"minis://attachments/uploads/Pasted_20251009-120000-abcd1234.txt\"\u2026[272 chars sha256:6679036019e3]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[199999 chars sha256:83b1bfcdf2cf]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Got it."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Summarise the attached text<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" url=\"minis://attachments/uploads/Pasted_20251009-120000-abcd1234.txt\"\u2026[272 chars sha256:6679036019e3]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "restart": {
+    "anthropic": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[199999 chars sha256:83b1bfcdf2cf]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Got it."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Summarise the attached text"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" url=\"minis://attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" size=\"600000\" modified=\"20\u2026[245 chars sha256:7031bc940818]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "gemini": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[199999 chars sha256:83b1bfcdf2cf]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Got it."
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Summarise the attached text"
+          },
+          {
+            "kind": "text",
+            "text": "<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" url=\"minis://attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" size=\"600000\" modified=\"20\u2026[245 chars sha256:7031bc940818]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.chat": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[199999 chars sha256:83b1bfcdf2cf]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Got it."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Summarise the attached text<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" url=\"minis://attachments/uploads/Pasted_20251009-120000-abcd1234.txt\"\u2026[272 chars sha256:6679036019e3]"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "openai.responses": [
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 0123456789. Lorem ipsum dolor sit amet, consectetur adipiscing elit 01234567\u2026[199999 chars sha256:83b1bfcdf2cf]"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Got it."
+          }
+        ],
+        "role": "assistant"
+      },
+      {
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Summarise the attached text<user-attached-files>\n  <file path=\"/var/minis/attachments/uploads/Pasted_20251009-120000-abcd1234.txt\" url=\"minis://attachments/uploads/Pasted_20251009-120000-abcd1234.txt\"\u2026[272 chars sha256:6679036019e3]"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="filebrowser_delete_mount_point_refused">„%1$s“ je složka, kterou sem připojuje Minis, takže ji v prohlížeči souborů nelze smazat. Nic nebylo smazáno. Externí složku odeberete v Nastavení › Připojit externí složky.</string>
+</resources>

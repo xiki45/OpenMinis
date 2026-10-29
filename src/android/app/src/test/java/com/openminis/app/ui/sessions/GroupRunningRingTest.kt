@@ -2,7 +2,9 @@ package com.openminis.app.ui.sessions
 
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.db.FolderEntity
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,5 +87,40 @@ class GroupRunningRingTest {
             expandedFolderId = null,
         ).first
         assertFalse(blocks.single().anyActive)
+    }
+
+    // --- [UI-261023-03] The comet's colour --------------------------------
+
+    private fun member(id: String, updatedAt: Long, category: String, parent: String? = null) =
+        ChatSessionEntity(
+            id = id, modelId = "m", createdAt = 0, updatedAt = updatedAt,
+            category = category, folderId = "a", parentSessionId = parent,
+        )
+
+    private fun activeCategoryOf(sessions: List<ChatSessionEntity>, active: Set<String>) =
+        partitionByFolder(
+            sessions = sessions,
+            folders = listOf(folder("a")),
+            expandedFolderId = null,
+            activeSessionIds = active,
+        ).first.single().activeCategory
+
+    @Test
+    fun `the comet takes the newest working member's category`() {
+        val members = listOf(member("old", 1, "code"), member("new", 9, "health"), member("idle", 20, "math"))
+        assertEquals("health", activeCategoryOf(members, active = setOf("old", "new")))
+        assertEquals("code", activeCategoryOf(members, active = setOf("old")))
+    }
+
+    @Test
+    fun `a working chat wins over a newer working sub agent`() {
+        val members = listOf(member("p", 1, "writing"), member("child", 9, "research", parent = "p"))
+        assertEquals("writing", activeCategoryOf(members, active = setOf("p", "child")))
+        assertEquals("research", activeCategoryOf(members, active = setOf("child")))
+    }
+
+    @Test
+    fun `no working member, no comet colour`() {
+        assertNull(activeCategoryOf(listOf(member("a1", 1, "code")), active = emptySet()))
     }
 }

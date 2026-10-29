@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sessionlist_folder_matching_chats">แชทที่ตรงกัน %1$d แชท</string>
+    <string name="sessionlist_folder_matches_hidden">ซ่อนผลลัพธ์ที่ตรงกัน %1$d รายการ</string>
+</resources>

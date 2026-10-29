@@ -201,7 +201,9 @@ internal object ChatMutationMethods {
             put("sessionId", sessionId)
             put("title", s.title ?: JSONObject.NULL)
             put("modelName", resolveDisplay(context, s.modelId))
-            put("isRunning", com.openminis.app.service.SessionActivityTracker.isActive(sessionId))
+            // [T-scheduled-active-session-android] Processing; isStreaming = the loop alone.
+            put("isRunning", com.openminis.app.service.SessionActivityTracker.isProcessing(sessionId))
+            put("isStreaming", com.openminis.app.service.SessionActivityTracker.isActive(sessionId))
             put("messageCount", msgs.size)
             put("lastMessageRole", lastMsg?.role ?: JSONObject.NULL)
             put("updatedAt", s.updatedAt)

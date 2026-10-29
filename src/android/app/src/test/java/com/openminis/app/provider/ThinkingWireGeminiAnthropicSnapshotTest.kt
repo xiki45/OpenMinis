@@ -124,7 +124,7 @@ gemini/gemini-2.5-flash-lite/MAX -> null
 gemini/gemini-2.5-flash-lite/ULTRA -> null
 gemini/gemini-3-pro-preview/OFF -> {thinkingLevel:"low"}
 gemini/gemini-3-pro-preview/LOW -> {includeThoughts:true,thinkingLevel:"low"}
-gemini/gemini-3-pro-preview/MEDIUM -> {includeThoughts:true,thinkingLevel:"medium"}
+gemini/gemini-3-pro-preview/MEDIUM -> {includeThoughts:true,thinkingLevel:"high"}
 gemini/gemini-3-pro-preview/HIGH -> {includeThoughts:true,thinkingLevel:"high"}
 gemini/gemini-3-pro-preview/XHIGH -> {includeThoughts:true,thinkingLevel:"high"}
 gemini/gemini-3-pro-preview/MAX -> {includeThoughts:true,thinkingLevel:"high"}

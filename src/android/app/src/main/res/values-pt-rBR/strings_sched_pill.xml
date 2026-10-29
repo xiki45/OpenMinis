@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [T-port-sched-pill] Scheduled-task pill under the chat's top bar. Translations copied from iOS Localizable.xcstrings. -->
+<resources>
+    <string name="sched_pill_running">Em execução</string>
+    <string name="sched_pill_waiting">Aguardando</string>
+    <string name="sched_pill_run_now">Executar agora</string>
+    <string name="sched_pill_hide">Ocultar esta contagem</string>
+    <string name="sched_pill_cancel_all">Cancelar todas as tarefas agendadas</string>
+    <string name="sched_pill_cancel_all_title">Cancelar todas as tarefas agendadas?</string>
+    <string name="sched_pill_cancel_all_confirm">Cancelar todas</string>
+    <string name="sched_pill_not_now">Agora não</string>
+    <string name="sched_pill_cancel_all_message">Todas as tarefas ainda agendadas nesta conversa serão canceladas.</string>
+    <string name="sched_pill_a11y_title">Próxima tarefa agendada</string>
+    <string name="sched_pill_a11y_running">Execução em andamento</string>
+    <string name="sched_pill_a11y_waiting">Aguardando outra tarefa terminar</string>
+    <string name="sched_pill_a11y_upcoming_left">Próxima execução · faltam %1$d</string>
+    <string name="sched_pill_a11y_upcoming">Próxima execução</string>
+    <string name="sched_pill_a11y_run_of">Execução %1$d de %2$d</string>
+    <string name="sched_pill_a11y_run">Execução %1$d</string>
+    <string name="sched_pill_a11y_next_in">Próxima execução em %1$s</string>
+    <string name="sched_pill_a11y_more">+%1$d mais</string>
+    <string name="sched_pill_a11y_hint">Abre os detalhes da tarefa</string>
+</resources>

@@ -60,23 +60,28 @@ class SessionSearchSqlTest {
         }
     }
 
-    /** (session id, hit_parts_json) rows, in query order. */
-    private fun run(sql: String, q: String): List<Pair<String, String?>> =
-        db.prepareStatement(sql).use { st ->
-            st.setString(1, "%$q%"); st.setString(2, q)
+    /** (session id, hit_parts_json) rows, in query order, for the keywords of [q]. */
+    private fun run(sql: (Int) -> String, q: String): List<Pair<String, String?>> {
+        val terms = SessionSearch.searchTerms(q)
+        return db.prepareStatement(sql(terms.size)).use { st ->
+            SessionSearch.searchArgs(terms).forEachIndexed { i, a -> st.setString(i + 1, a as String) }
             st.executeQuery().use { rs ->
                 buildList { while (rs.next()) add(rs.getString("id") to rs.getString("hit_parts_json")) }
             }
         }
+    }
+
+    private val VISIBLE: (Int) -> String = SessionSearch::visibleSearchSql
+    private val LEGACY: (Int) -> String = SessionSearch::legacySearchSql
 
     @Test fun `old raw-JSON query reproduces the false positives`() {
-        val legacy = run(SessionSearch.LEGACY_SEARCH_SQL, "GPT").map { it.first }.toSet()
+        val legacy = run(LEGACY, "GPT").map { it.first }.toSet()
         assertTrue("tool-call id session was a result", "toolid" in legacy)
         assertTrue("thought-signature session was a result", "sig" in legacy)
     }
 
     @Test fun `visible-field query keeps only real hits`() {
-        val rows = run(SessionSearch.VISIBLE_SEARCH_SQL, "GPT")
+        val rows = run(VISIBLE, "GPT")
         val ids = rows.map { it.first }.toSet()
         assertFalse("a hit only in a tool-call id is not a result", "toolid" in ids)
         assertFalse("a hit only in a thought signature is not a result", "sig" in ids)
@@ -91,14 +96,14 @@ class SessionSearchSqlTest {
 
     @Test fun `LIKE is ASCII case-insensitive like the app`() {
         assertEquals(
-            run(SessionSearch.VISIBLE_SEARCH_SQL, "GPT").map { it.first }.toSet(),
-            run(SessionSearch.VISIBLE_SEARCH_SQL, "gpt").map { it.first }.toSet(),
+            run(VISIBLE, "GPT").map { it.first }.toSet(),
+            run(VISIBLE, "gpt").map { it.first }.toSet(),
         )
     }
 
     @Test fun `older-match look-back uses the same visible rule, newest first`() {
-        val rows = db.prepareStatement(SessionSearch.olderMatchesSql(visibleOnly = true)).use { st ->
-            st.setString(1, "%GPT%"); st.setString(2, "newest"); st.setString(3, "GPT")
+        val rows = db.prepareStatement(SessionSearch.olderMatchesSql(visibleOnly = true, termCount = 1)).use { st ->
+            st.setString(1, "%GPT%"); st.setString(2, "GPT"); st.setString(3, "newest")
             st.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getString("parts_json")) } }
         }
         assertEquals(2, rows.size)
@@ -111,7 +116,7 @@ class SessionSearchSqlTest {
     @Test fun `an oversized hit row comes back as a window around the hit, not whole`() {
         val filler = "x".repeat(SessionSearch.MAX_HIT_JSON_CHARS)
         session("huge", "Big tool output", listOf(listOf(toolResult("t9", filler + "\nfound the NEEDLE here\n" + filler))))
-        for (sql in listOf(SessionSearch.VISIBLE_SEARCH_SQL, SessionSearch.LEGACY_SEARCH_SQL)) {
+        for (sql in listOf(VISIBLE, LEGACY)) {
             val hit = run(sql, "needle").single { it.first == "huge" }.second!!
             assertTrue(hit.startsWith(SessionSearch.WINDOW_MARK))
             assertTrue("capped: ${hit.length}", hit.length <= SessionSearch.WINDOW_MARK.length + SessionSearch.HIT_WINDOW_CHARS)
@@ -122,7 +127,7 @@ class SessionSearchSqlTest {
     }
 
     @Test fun `rows under the cap still come back whole`() {
-        val rows = run(SessionSearch.VISIBLE_SEARCH_SQL, "GPT")
+        val rows = run(VISIBLE, "GPT")
         val hit = rows.single { it.first == "newest" }.second!!
         assertEquals(org.json.JSONArray(hit).length(), 1)
     }
@@ -130,8 +135,8 @@ class SessionSearchSqlTest {
     @Test fun `the look-back pass caps oversized rows too`() {
         val filler = "y".repeat(SessionSearch.MAX_HIT_JSON_CHARS)
         session("huge2", "Log", listOf(listOf(text("GPT " + filler)), listOf(text("tail"))))
-        val rows = db.prepareStatement(SessionSearch.olderMatchesSql(visibleOnly = true)).use { st ->
-            st.setString(1, "%GPT%"); st.setString(2, "huge2"); st.setString(3, "GPT")
+        val rows = db.prepareStatement(SessionSearch.olderMatchesSql(visibleOnly = true, termCount = 1)).use { st ->
+            st.setString(1, "%GPT%"); st.setString(2, "GPT"); st.setString(3, "huge2")
             st.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getString("parts_json")) } }
         }
         assertEquals(1, rows.size)

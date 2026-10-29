@@ -29,6 +29,7 @@ object VoiceOutputState {
     private const val KEY_ENABLED = "readReplies"
     private const val KEY_MUTED = "readReplies.muted"
     private const val KEY_SPEED = "readReplies.speed"
+    private const val KEY_VOLUME = "readReplies.volume"
     private const val KEY_SYSTEM_VOICE = "readReplies.systemVoice"
     private const val KEY_SYSTEM_VOICE_LABEL = "readReplies.systemVoiceLabel"
 
@@ -59,6 +60,25 @@ object VoiceOutputState {
 
     private val _speed = MutableStateFlow(1.0f)
     val speed: StateFlow<Float> = _speed.asStateFlow()
+
+    /**
+     * [T-readaloud-volume] Read-aloud gain, 0..[MAX_VOLUME], applied to BOTH
+     * playback paths (system engine KEY_PARAM_VOLUME and provider
+     * MediaPlayer.setVolume).
+     *
+     * Up to 1.0 (the default, and the pre-slider behaviour) it is a plain gain
+     * on top of the media volume. [T-readaloud-volume-boost] Above 1.0 the
+     * players are at full scale and the rest is a LoudnessEnhancer on the
+     * playback's audio session ([ReadAloudBoost]), so quiet voices can be
+     * read up to 200 %. Values stored by older builds (0..1) mean the same.
+     */
+    private val _volume = MutableStateFlow(DEFAULT_VOLUME)
+    val volume: StateFlow<Float> = _volume.asStateFlow()
+
+    const val DEFAULT_VOLUME = 1.0f
+    const val MAX_VOLUME = 2.0f
+
+    fun clampVolume(v: Float): Float = if (v.isNaN()) DEFAULT_VOLUME else v.coerceIn(0f, MAX_VOLUME)
 
     /**
      * [T-android-tts-capsule-drag] Persisted drag offset in DP from the resting
@@ -175,6 +195,7 @@ object VoiceOutputState {
         _isEnabled.value = p.getBoolean(KEY_ENABLED, false)
         _isMuted.value = p.getBoolean(KEY_MUTED, false)
         _speed.value = p.getFloat(KEY_SPEED, 1.0f)
+        _volume.value = clampVolume(p.getFloat(KEY_VOLUME, DEFAULT_VOLUME))
         _systemVoiceName.value = p.getString(KEY_SYSTEM_VOICE, null)
         _systemVoiceLabel.value = p.getString(KEY_SYSTEM_VOICE_LABEL, null)
         // [T-android-tts-capsule-drag] Both keys must be present: a half-written
@@ -248,6 +269,21 @@ object VoiceOutputState {
         if (_speed.value == value) return
         _speed.value = value
         prefs?.edit()?.putFloat(KEY_SPEED, value)?.apply()
+    }
+
+    /**
+     * [T-readaloud-volume] Update the live volume. With [persist] = false
+     * (slider drag) only the flow changes, so an in-flight provider utterance
+     * follows the thumb without a SharedPreferences write per frame; the
+     * drag's end calls [persistVolume].
+     */
+    fun setVolume(value: Float, persist: Boolean = true) {
+        _volume.value = clampVolume(value)
+        if (persist) persistVolume()
+    }
+
+    fun persistVolume() {
+        prefs?.edit()?.putFloat(KEY_VOLUME, _volume.value)?.apply()
     }
 
     /** Cycle 1× → 1.25× → 1.5× → 2× → 1×. */

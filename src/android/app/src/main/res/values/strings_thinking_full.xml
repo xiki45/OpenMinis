@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [#467] "Show full thinking" viewer. Copy All / Copied reuse terminal_copy_all / terminal_copied_all. -->
+<resources>
+    <string name="thinking_show_full">Show full thinking</string>
+    <string name="thinking_full_title">Full Thinking</string>
+    <string name="thinking_full_char_count">%1$s characters</string>
+    <string name="thinking_full_load_more">Load more</string>
+    <string name="thinking_full_copy_failed">Too long to copy</string>
+</resources>
