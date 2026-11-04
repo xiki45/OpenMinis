@@ -5,6 +5,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
+ * Monotonic clock in milliseconds.
+ *
+ * Deliberately not `SystemClock.elapsedRealtime()` and not
+ * `System.currentTimeMillis()`: this keeps [DeepLinkCoordinator] free of Android
+ * imports (so the freshness rule is plain-JVM unit-testable), and a wall-clock
+ * jump must never resurrect an already-stale screen context.
+ */
+internal fun monotonicNowMs(): Long = System.nanoTime() / 1_000_000L
+
+/**
  * Holds pending deep-link side-effects that outlive a single navigation event.
  * Mirrors iOS DeepLinkCoordinator.
  */
@@ -97,14 +107,56 @@ object DeepLinkCoordinator {
      * Mirrors the `pendingChatAction` pattern — the VoiceInteraction flow
      * (App→agent direction) rides the same "deep-link + pending side-effect"
      * mechanism the existing quick-actions use.
+     *
+     * [createdAtMs]: monotonic timestamp of the write, so a consumer can tell a
+     * live invocation from leftover state. Without it, a failed launch (or any
+     * later "new chat" entry that re-uses the same route) would inject context
+     * captured minutes ago from a completely different screen.
      */
-    data class PendingAssist(val text: String?, val screenshotPath: String? = null)
+    data class PendingAssist(
+        val text: String?,
+        val screenshotPath: String? = null,
+        val createdAtMs: Long = monotonicNowMs(),
+    )
+
+    /**
+     * How long a stashed screen context stays valid. An assistant invocation
+     * lands in chat within a second or two; anything older is stale state left
+     * behind by a path that never consumed it.
+     */
+    const val ASSIST_CONTEXT_TTL_MS = 10_000L
 
     private val _pendingAssist = MutableStateFlow<PendingAssist?>(null)
     val pendingAssist: StateFlow<PendingAssist?> = _pendingAssist.asStateFlow()
 
-    fun setPendingAssist(text: String?, screenshotPath: String? = null) {
-        _pendingAssist.value = PendingAssist(text, screenshotPath)
+    internal fun isAssistFresh(
+        createdAtMs: Long,
+        nowMs: Long = monotonicNowMs(),
+        ttlMs: Long = ASSIST_CONTEXT_TTL_MS,
+    ): Boolean = nowMs >= createdAtMs && nowMs - createdAtMs <= ttlMs
+
+    fun setPendingAssist(
+        text: String?,
+        screenshotPath: String? = null,
+        createdAtMs: Long = monotonicNowMs(),
+    ) {
+        _pendingAssist.value = PendingAssist(text, screenshotPath, createdAtMs)
+    }
+
+    /**
+     * Drop the "this new chat came from an assist entry" latch without
+     * clobbering real context.
+     *
+     * Both assist entry points (cold start and onNewIntent) used to call
+     * [setPendingAssist]`(null)` unconditionally. On ROMs that deliver both the
+     * VoiceInteraction route and an ASSIST activity intent for a single
+     * invocation, whichever landed second erased the screen context the other
+     * had just captured.
+     */
+    fun latchAssistEntry() {
+        val current = _pendingAssist.value
+        if (current != null && isAssistFresh(current.createdAtMs)) return
+        _pendingAssist.value = PendingAssist(text = null, screenshotPath = null)
     }
 
     fun consumePendingAssist(): PendingAssist? {

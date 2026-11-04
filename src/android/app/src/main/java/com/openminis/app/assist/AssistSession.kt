@@ -109,6 +109,9 @@ class AssistSession(context: android.content.Context) :
             context.startActivity(intent)
         } catch (t: Throwable) {
             AppLogger.warning(TAG, "launch minis chat failed: ${t.message}")
+            // [T-assist-context-ttl] 拉起失败时立刻清掉刚写入的上下文。否则它
+            // 会留在进程级单例里，被下一次"新会话"入口当成本次输入注入。
+            DeepLinkCoordinator.consumePendingAssist()
         }
     }
 }

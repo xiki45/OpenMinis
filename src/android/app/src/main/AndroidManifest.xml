@@ -700,11 +700,25 @@
              com.xiaomi.voiceassistant.VoiceService（一个被系统 startService
              的服务）；改写为指向本服务后，系统以 startService 唤起它，再由它
              打开 MainActivity 的 ACTION_ASSIST 入口（新会话）。
-             exported=true 且不加任何权限：系统进程要以 startService 方式调用，
-             签名权限会挡住系统；风险仅为第三方也可唤起 Minis 界面，属可接受。 -->
+             LSPosed 方案同理：hook 注入到宿主进程里执行，调用方 uid 是宿主
+             （SystemUI / 桌面 / voiceassist）而不是模块自身的 uid。
+
+             [T-assist-trigger-permission] 必须限定调用方：不加权限时任意第三方
+             App 都能 startService 到这里，而本服务会 startActivity 把 Minis 拉到
+             前台（本 App 持有 SYSTEM_ALERT_WINDOW，有后台启动豁免），可被用于
+             UI 劫持；同时会顺带触发无障碍截屏。
+             选 START_ANY_ACTIVITY 是因为实测这三类调用方都持有它：
+               com.android.systemui      granted=true
+               com.miui.home             granted=true
+               com.miui.voiceassist      granted=true
+             而普通第三方 App 与 shell（uid 2000）不持有 —— 实测
+             `adb shell am startservice` 会得到 Permission Denial。
+             （此前注释里"签名权限会挡住系统"的说法是错的：系统正是持有该权限的
+             一方；真正会被挡住的是普通应用。） -->
         <service
             android:name=".assist.AssistTriggerService"
-            android:exported="true" />
+            android:exported="true"
+            android:permission="android.permission.START_ANY_ACTIVITY" />
 
     </application>
 </manifest>

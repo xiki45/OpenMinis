@@ -1213,18 +1213,31 @@ fun ChatScreen(
     //  - 标准路线的屏幕文本上下文 → 保持自动发送（轻量、即时，与原设计一致）；
     //  - 纯手势唤起（无文本无截图）→ 只打开新会话，不打扰。
     LaunchedEffect(sessionId) {
-        val pending = com.openminis.app.deeplink.DeepLinkCoordinator
-            .pendingAssist.value ?: return@LaunchedEffect
+        val coord = com.openminis.app.deeplink.DeepLinkCoordinator
+        val pending = coord.pendingAssist.value ?: return@LaunchedEffect
+        // [T-assist-context-ttl] 只消费"新鲜"的屏幕上下文。pendingAssist 是进程
+        // 级单例，写入方失败（例如 startActivity 抛异常）时不会自动清理；没有
+        // 时效性的话，几分钟前另一块屏幕的内容会被下一个新会话当成"用户此刻
+        // 在看什么"自动发给 agent。
+        if (!coord.isAssistFresh(pending.createdAtMs)) {
+            coord.consumePendingAssist()
+            com.openminis.app.logging.AppLogger.warning(
+                "AssistInject", "stale assist context dropped (age>${com.openminis.app.deeplink.DeepLinkCoordinator.ASSIST_CONTEXT_TTL_MS}ms)",
+            )
+            return@LaunchedEffect
+        }
         // HyperOS 路线在入口发射了无障碍截屏，这里等它落盘（有界超时，失败得 null）。
         val shot = pending.screenshotPath?.let { p -> java.io.File(p).takeIf { it.exists() } }
             ?: com.openminis.app.assist.AssistCapture.awaitPendingShot()
-        com.openminis.app.deeplink.DeepLinkCoordinator.consumePendingAssist()
+        coord.consumePendingAssist()
         if (shot != null) {
             val attached = viewModel.addAttachmentFromStagedShare(shot) != null
             com.openminis.app.logging.AppLogger.info(
                 "AssistInject", "screenshot staged as attachment (attached=$attached) file=${shot.name}",
             )
-            shot.delete()  // addAttachmentFromStagedShare 内部已拷入私有目录，源文件可删
+            // 只有确认已拷入私有目录（attached）才删源文件：拷贝失败时这张截图
+            // 是唯一副本，删掉就永久丢了。
+            if (attached) shot.delete()
         } else {
             com.openminis.app.logging.AppLogger.info(
                 "AssistInject", "no screenshot available; text-only or empty",

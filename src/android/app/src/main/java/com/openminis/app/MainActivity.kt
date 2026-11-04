@@ -552,7 +552,11 @@ class MainActivity : ComponentActivity() {
             // [T-assist-screenshot] HyperOS 路线没有 AssistSession 写 pendingAssist，
             // 这里放一个空占位作为"本次新会话是 assist 唤起"的消费门闩：
             // ChatScreen 见到它才会去等在途截图并注入，普通手开会话不受影响。
-            com.openminis.app.deeplink.DeepLinkCoordinator.setPendingAssist(null)
+            // [T-assist-context-ttl] 用 latch 而不是无条件 setPendingAssist(null)：
+            // 某些 ROM 对同一次唤起会先后投递 VIS 与 ACTION_ASSIST 两条路，
+            // 后者冷启动到这里时，前者的真实屏幕上下文可能已经写好了 —— 无条件
+            // 覆盖会让本次会话只剩空占位。
+            com.openminis.app.deeplink.DeepLinkCoordinator.latchAssistEntry()
             DeepLinkAction.OpenAssist
         } else {
             restoredChatSessionId
@@ -828,8 +832,8 @@ class MainActivity : ComponentActivity() {
         // [T-assist-screenshot] 热启动 assist 入口同样尽早发射截屏（窗口上屏前）。
         if (isAssistEntry) {
             com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
-            // 空占位门闩，语义同冷启动路径。
-            com.openminis.app.deeplink.DeepLinkCoordinator.setPendingAssist(null)
+            // 空占位门闩，语义同冷启动路径（不覆盖仍新鲜的真实上下文）。
+            com.openminis.app.deeplink.DeepLinkCoordinator.latchAssistEntry()
         }
         // [T-system-assist] A VOICE_ASSIST / ASSIST activity entry carries no
         // minis:// data; fold it into OpenAssist so it reuses the exact same

@@ -54,18 +54,19 @@ object AssistContext {
         // ---- 2. 当前屏幕的视图树 ----
         if (structure != null) {
             val nodes = StringBuilder()
-            var count = 0
+            val budget = NodeBudget(MAX_NODES)
             try {
                 structure.getWindowNodeCount().let { winCount ->
                     for (w in 0 until winCount) {
-                        if (count >= MAX_NODES) break
+                        if (budget.exhausted) break
                         val node = structure.getWindowNodeAt(w).rootViewNode
-                        count += walk(node, 0, nodes, count)
+                        walk(node, 0, nodes, budget)
                     }
                 }
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "flatten structure failed: ${t.message}")
             }
+            AppLogger.info(TAG, "structure flattened: ${budget.used}/$MAX_NODES nodes, ${nodes.length} chars")
 
             val treeText = nodes.toString().trim()
             if (treeText.isNotEmpty()) {
@@ -77,15 +78,36 @@ object AssistContext {
         return sb.toString().trim()
     }
 
-    /** 深度优先遍历 ViewNode，返回遍历到的节点数（用于全局计数）。 */
+    /**
+     * 节点预算。
+     *
+     * 原实现靠 `walk` 的返回值链式传计数，但函数体里从来没自增过 —— 于是
+     * `MAX_NODES` 变成永不成立的条件，整棵树会被完整遍历（长列表/网页可达
+     * 数千节点，且发生在 `onHandleAssist` 的主线程上）。把"取一个节点"收敛到
+     * 单一入口后，计数不再可能被漏掉：`walk` 必须先成功 [take]，才能继续。
+     */
+    internal class NodeBudget(private val max: Int) {
+        var used = 0
+            private set
+
+        val exhausted: Boolean get() = used >= max
+
+        fun take(): Boolean {
+            if (used >= max) return false
+            used++
+            return true
+        }
+    }
+
+    /** 深度优先遍历 ViewNode，消耗 [budget]。 */
     private fun walk(
         node: AssistStructure.ViewNode,
         depth: Int,
         out: StringBuilder,
-        count: Int,
-    ): Int {
-        var c = count
-        if (depth > MAX_DEPTH || c >= MAX_NODES) return c
+        budget: NodeBudget,
+    ) {
+        if (depth > MAX_DEPTH) return
+        if (!budget.take()) return
 
         val text = node.text?.toString()?.trim()
         val desc = node.contentDescription?.toString()?.trim()
@@ -105,10 +127,9 @@ object AssistContext {
 
         val childCount = node.childCount.coerceAtMost(64) // 防恶意超大树
         for (i in 0 until childCount) {
-            if (c >= MAX_NODES) break
+            if (budget.exhausted) break
             val child = try { node.getChildAt(i) } catch (t: Throwable) { null } ?: continue
-            c = walk(child, depth + 1, out, c)
+            walk(child, depth + 1, out, budget)
         }
-        return c
     }
 }
