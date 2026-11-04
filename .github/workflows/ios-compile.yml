@@ -74,14 +74,24 @@ jobs:
           fi
 
           mkdir -p deps/include/ish
-          if [ -d deps/ish ]; then
-            # 保留目录结构，只要 .h（对应 build_ish.sh 的 stage_headers 段）
+          if [ -d deps/ish ] && [ -n "$(ls -A deps/ish 2>/dev/null)" ]; then
+            # 保留目录结构，只要 .h（对应 build_ish.sh 的 copy_outputs 段）
             rsync -a --include='*/' --include='*.h' --exclude='*' deps/ish/ deps/include/ish/
             echo "staged $(find deps/include/ish -name '*.h' | wc -l | tr -d ' ') iSH headers"
           else
             echo "::error::deps/ish submodule is empty — cannot satisfy the bridging header"
             exit 1
           fi
+
+          # ish/ish.h 不是子模块里的文件，而是 build_ish.sh 用 heredoc 生成的伞头。
+          # 这里从脚本里原样抽取，避免把同一份内容复制进 workflow 造成漂移。
+          awk '/cat > "\$OUTPUT_INCLUDE\/ish\/ish\.h" << .EOF./{grab=1; next} grab && /^EOF$/{exit} grab{print}' \
+            deps/build_ish.sh > deps/include/ish/ish.h
+          if ! grep -q '#define ISH_H' deps/include/ish/ish.h; then
+            echo "::error::could not extract the iSH umbrella header from deps/build_ish.sh (its heredoc format changed?)"
+            exit 1
+          fi
+          echo "umbrella header: $(wc -l < deps/include/ish/ish.h) lines"
 
           mkdir -p deps/frameworks
           stub=$(mktemp -d)
