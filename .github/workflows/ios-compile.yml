@@ -20,6 +20,13 @@ name: iOS compile check
 on:
   push:
     branches: [feature/system-assist, main]
+    # 纯文档改动不编译：省一个 macOS runner 名额（这个池子经常排队十几分钟）。
+    # 注意只加在 push 上，不加在 pull_request 上 —— 该 check 是分支保护的必需项，
+    # 若文档-only PR 被 paths-ignore 跳过，check 永远不会出现，PR 反而合不进去。
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
   workflow_dispatch:
     inputs:
