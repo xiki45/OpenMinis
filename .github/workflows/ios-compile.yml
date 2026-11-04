@@ -49,6 +49,67 @@ jobs:
           git fetch --no-tags origin main:refs/remotes/origin/main 2>/dev/null || true
           bash scripts/check_ios_sources.sh origin/main
 
+      # 让构建能走到 Swift 编译阶段。这一层不是要产出可用的 App，只补齐
+      # xcodebuild 在加载工程和解析桥接头时才需要的东西：
+      #
+      #  1) ProviderCustomization.xcconfig —— 仓库只提交 .example，真体被
+      #     gitignore，缺了它工程在加载时就报 "Unable to open base
+      #     configuration reference file"。
+      #  2) deps/include/ish/** —— 桥上头的 #include "ish/ish.h" 与
+      #     "fs/devices.h" 是编译期依赖；build_ish.sh 会把 deps/ish 的头文件
+      #     摊进 deps/include/ish，这里做同样的搬运，但跳过库与 VDSO 的编译
+      #     （那是链接期的事）。
+      #  3) deps/frameworks/*.xcframework —— 8 个预编译产物同样只在链接期
+      #     使用（全仓没有任何 Swift/ObjC 源 import FFmpeg / Rclone 模块），
+      #     所以用空壳静态库占位即可让工程加载通过；真正的链接失败留到后面
+      #     由"编译过但链接失败算通过"那条规则放行。
+      - name: Prepare build inputs (config, iSH headers, framework stubs)
+        run: |
+          set -euo pipefail
+
+          cfg=src/ios/Configs/ProviderCustomization.xcconfig
+          if [ ! -f "$cfg" ]; then
+            cp src/ios/Configs/ProviderCustomization.xcconfig.example "$cfg"
+            echo "created $cfg from the committed .example"
+          fi
+
+          mkdir -p deps/include/ish
+          if [ -d deps/ish ]; then
+            # 保留目录结构，只要 .h（对应 build_ish.sh 的 stage_headers 段）
+            rsync -a --include='*/' --include='*.h' --exclude='*' deps/ish/ deps/include/ish/
+            echo "staged $(find deps/include/ish -name '*.h' | wc -l | tr -d ' ') iSH headers"
+          else
+            echo "::error::deps/ish submodule is empty — cannot satisfy the bridging header"
+            exit 1
+          fi
+
+          mkdir -p deps/frameworks
+          stub=$(mktemp -d)
+          printf 'int __minis_link_stub;\n' > "$stub/stub.c"
+          xcrun --sdk iphoneos clang -arch arm64 -c "$stub/stub.c" -o "$stub/stub.o"
+          ar rcs "$stub/libstub.a" "$stub/stub.o"
+          for fw in FFmpeg Rclone libavcodec libavformat libavutil libavfilter libswresample libswscale; do
+            if [ ! -d "deps/frameworks/$fw.xcframework" ]; then
+              xcodebuild -create-xcframework -library "$stub/libstub.a" \
+                -output "deps/frameworks/$fw.xcframework" >/dev/null
+            fi
+          done
+          echo "framework stubs: $(ls deps/frameworks | tr '\n' ' ')"
+
+          # 拷贝阶段同样在读这些产物；给空的合法占位，避免拷贝阶段先于编译
+          # 阶段报错（那会让门禁误判成"没进到编译"）。
+          mkdir -p deps/resources/RootfsPatch.bundle
+          if [ ! -f deps/resources/RootfsPatch.bundle/Info.plist ]; then
+            printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.openminis.rootfspatch</string><key>CFBundlePackageType</key><string>BNDL</string></dict></plist>\n' \
+              > deps/resources/RootfsPatch.bundle/Info.plist
+          fi
+          if [ ! -f deps/resources/alpine-rootfs.zip ]; then
+            z=$(mktemp -d)
+            printf 'placeholder\n' > "$z/README"
+            ( cd "$z" && zip -q -r "$OLDPWD/deps/resources/alpine-rootfs.zip" README )
+          fi
+          ls -l deps/resources | head
+
       - name: xcodebuild — Swift compile is the gate
         run: |
           set +e
