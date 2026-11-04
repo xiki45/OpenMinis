@@ -170,14 +170,23 @@ struct BackupDestinationDetailView: View {
 
     /// [T-backup-folder-delete] List the packages in a folder destination.
     ///
-    /// Detached because enumerating a mounted directory is real I/O — the
-    /// folder may be a NAS or a cloud provider that has to be woken — and this
-    /// used to run synchronously inside `body`, blocking the main thread on
+    /// Was meant to detach because enumerating a mounted directory is real I/O —
+    /// the folder may be a NAS or a cloud provider that has to be woken — and
+    /// this used to run synchronously inside `body`, blocking the main thread on
     /// every redraw of the screen.
+    ///
+    /// [T-backup-listpackages-mainactor] It does not actually leave the main
+    /// actor: `BackupDestinations` is `@MainActor`, so the `await` inside the
+    /// detached closure hops straight back onto it. This compiled nowhere before
+    /// (the call was missing its `await` and no iOS build had ever run), so the
+    /// mistake went unnoticed. Making it genuinely off-main needs a
+    /// `nonisolated` listing entry point that takes the selected folders as a
+    /// parameter instead of reading the actor's state; that is a behaviour
+    /// change for the backup screens and is tracked separately.
     private func loadFolderPackages(_ f: MountedFolderEntry) async {
         let id = f.id
         folderPackages = await Task.detached(priority: .userInitiated) {
-            BackupDestinations.listPackages(folderId: id)
+            await BackupDestinations.listPackages(folderId: id)
         }.value
     }
 

@@ -985,11 +985,17 @@ struct FolderPackageListView: View {
     private func reload() async {
         loading = true
         // Enumerating a mounted share can block on I/O (it may be a NAS that
-        // has to be woken), so it is kept off the main actor — the same reason
-        // the server list detaches its rclone calls.
+        // has to be woken), so the call is written as detached — the same shape
+        // the server list uses for its rclone calls.
+        //
+        // [T-backup-listpackages-mainactor] `BackupDestinations` is `@MainActor`,
+        // so the `await` inside the closure hops back onto the main actor and the
+        // work never actually leaves it. This is the shape that never compiled
+        // before (the `await` was simply missing) rather than a considered
+        // design; moving it off-main needs a `nonisolated` listing entry point.
         let id = folder.id
         let found = await Task.detached(priority: .userInitiated) {
-            BackupDestinations.listPackages(folderId: id)
+            await BackupDestinations.listPackages(folderId: id)
         }.value
         packages = found
         loading = false
