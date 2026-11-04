@@ -29,7 +29,10 @@ concurrency:
 
 jobs:
   swift-compile:
-    runs-on: macos-15
+    # 项目用了 AlarmKit（iOS 26），且大量代码在 #if canImport(AlarmKit) 里。
+    # macos-15 只有 Xcode 16.x / iOS 18 SDK，那段会被条件编译掉，使用处就报
+    # "cannot find ... in scope" —— 那是 SDK 版本造成的假错误，必须用 26 的镜像。
+    runs-on: macos-26
     timeout-minutes: 45
     env:
       # 钉住 go.mod 要求的工具链，别让 go 自动升级绕过去。
@@ -59,6 +62,10 @@ jobs:
           xcodebuild -version
           swift --version
           go version
+          echo "--- installed Xcodes ---"
+          ls /Applications | grep -i '^xcode' || true
+          echo "--- iOS SDKs ---"
+          xcodebuild -showsdks | grep -i iphoneos || true
 
       # 真编 rclone 很贵（Go c-archive × 2 个 slice），但它是编译期硬依赖，
       # 不能像 ffmpeg 那样用空壳糊过去 —— 头文件是构建产物。按 go.sum 缓存。
