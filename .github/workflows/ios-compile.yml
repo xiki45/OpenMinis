@@ -87,10 +87,12 @@ jobs:
           stub=$(mktemp -d)
           printf 'int __minis_link_stub;\n' > "$stub/stub.c"
           xcrun --sdk iphoneos clang -arch arm64 -c "$stub/stub.c" -o "$stub/stub.o"
-          ar rcs "$stub/libstub.a" "$stub/stub.o"
           for fw in FFmpeg Rclone libavcodec libavformat libavutil libavfilter libswresample libswscale; do
             if [ ! -d "deps/frameworks/$fw.xcframework" ]; then
-              xcodebuild -create-xcframework -library "$stub/libstub.a" \
+              # 每个桩必须用不同的库名：拷贝阶段按 basename 生成输出路径，同名会被
+              # 判成 duplicate output file 而直接失败。
+              ar rcs "$stub/lib$fw.a" "$stub/stub.o"
+              xcodebuild -create-xcframework -library "$stub/lib$fw.a" \
                 -output "deps/frameworks/$fw.xcframework" >/dev/null
             fi
           done
