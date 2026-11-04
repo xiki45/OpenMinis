@@ -203,14 +203,24 @@ jobs:
           # 除链接期以外的任何 error: 都算失败。这一条是为了堵住一类假绿：
           # 之前的规则只看"有没有编译标记"，于是当构建在 ObjC 的依赖扫描阶段
           # 就挂掉（Swift 只编了 677/1042 个文件）时，它仍然放行了。
-          non_link_errors=$(grep -E 'error:' build.log \
-            | grep -vE 'Undefined symbol|linker command failed|ld: (warning|symbol)|Undefined symbols' \
-            | grep -c . || true)
+          # 判定口径：
+          #   - 只认真正的诊断格式（`path:line:col: error: ` 或行首 `error: `），
+          #     否则源码回显（`123 | /// ... error:{code}`）会被当成编译错误 ——
+          #     这个误报真的发生过一次。
+          #   - 链接期的连带失败放行：排除掉 C/ObjC 源文件后，`Ld` 必然缺符号、
+          #     也会报 "Build input files cannot be found"（cmark-gfm.o、
+          #     libish_aot.a 等），那是我们主动排除的结果，不是代码错误。
+          is_link_ish() {
+            grep -vE 'Undefined symbol|linker command failed|ld: (warning|symbol)|Undefined symbols|Build input files cannot be found'
+          }
+          diagnostics() {
+            grep -E '(: (fatal )?error: |^error: )' build.log \
+              | grep -vE '^[[:space:]]*[0-9]+ \||^[[:space:]]*///|^[[:space:]]*//'
+          }
+          non_link_errors=$(diagnostics | is_link_ish | grep -c . || true)
           if [ "$non_link_errors" -gt 0 ]; then
             echo "::group::非链接期错误"
-            grep -E 'error:' build.log \
-              | grep -vE 'Undefined symbol|linker command failed|ld: (warning|symbol)|Undefined symbols' \
-              | head -40 || true
+            diagnostics | is_link_ish | head -40 || true
             echo "::endgroup::"
             echo "::error::编译期有 $non_link_errors 处错误（不是链接失败）"
             exit 1
