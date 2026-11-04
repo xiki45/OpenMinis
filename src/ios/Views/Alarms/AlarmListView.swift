@@ -121,8 +121,13 @@ class AlarmListViewModel: ObservableObject {
         _loadImpl()
     }
 
+    // [T-alarmkit-guard] AlarmOffloadBridge 整个类型定义在 #if canImport(AlarmKit)
+    // 里，所以在没有 AlarmKit 的 SDK（Xcode 16 / iOS 18）上这里会找不到符号。
+    // AlarmKit 只在 iOS 26 才有，下面的 canImport 与 @available / alarmkit_is_usable()
+    // 是同一件事的编译期与运行期两半：Xcode 26 下行为完全不变。
     @available(iOS 26.0, *)
     private func _loadImpl() {
+        #if canImport(AlarmKit)
         AlarmOffloadBridge.listAlarms { [weak self] arr, err in
             DispatchQueue.main.async {
                 self?.isLoading = false
@@ -137,6 +142,7 @@ class AlarmListViewModel: ObservableObject {
                 self?.alarms = dicts.map { AlarmItem(dict: $0) }
             }
         }
+        #endif
     }
 
     func delete(id: String) {
@@ -147,7 +153,9 @@ class AlarmListViewModel: ObservableObject {
 
     @available(iOS 26.0, *)
     private func _cancelImpl(id: String) {
+        #if canImport(AlarmKit)
         AlarmOffloadBridge.cancelAlarm(withId: id) { _, _ in }
+        #endif
     }
 
     func clearAll() {
@@ -159,9 +167,11 @@ class AlarmListViewModel: ObservableObject {
 
     @available(iOS 26.0, *)
     private func _clearAllImpl(ids: [String]) {
+        #if canImport(AlarmKit)
         for id in ids {
             AlarmOffloadBridge.cancelAlarm(withId: id) { _, _ in }
         }
+        #endif
     }
 
     /// Group alarms by week for sectioned display.

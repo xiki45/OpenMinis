@@ -22,6 +22,11 @@ on:
     branches: [feature/system-assist, main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner label. macos-15 (default, queues fast, no AlarmKit in the SDK) or macos-26 (full iOS 26 SDK, scarce and often cancelled in the queue).'
+        required: false
+        default: 'macos-15'
 
 concurrency:
   group: ios-compile-${{ github.ref }}
@@ -29,10 +34,12 @@ concurrency:
 
 jobs:
   swift-compile:
-    # 项目用了 AlarmKit（iOS 26），且大量代码在 #if canImport(AlarmKit) 里。
-    # macos-15 只有 Xcode 16.x / iOS 18 SDK，那段会被条件编译掉，使用处就报
-    # "cannot find ... in scope" —— 那是 SDK 版本造成的假错误，必须用 26 的镜像。
-    runs-on: macos-26
+    # 默认跑 macos-15：队列秒级，容量充足。它只有 Xcode 16.x / iOS 18 SDK，
+    # 所以 AlarmKit（iOS 26）相关代码在 #if canImport(AlarmKit) 处被编译掉 ——
+    # 与 ObjC 一样，属于本门禁明确不覆盖的一小块，日志里会写清楚。
+    # 需要连 AlarmKit 一起验时，手动触发并在 runner 输入里填 macos-26（SDK 完整，
+    # 但该镜像池子很小，实测经常排队十几分钟后被取消）。
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     timeout-minutes: 45
     env:
       # 钉住 go.mod 要求的工具链，别让 go 自动升级绕过去。
