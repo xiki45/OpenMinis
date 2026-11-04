@@ -167,6 +167,12 @@ jobs:
       - name: xcodebuild — Swift compile is the gate
         run: |
           set +e
+          # 只验证 Swift 层：排除 C/ObjC 源文件。
+          #   ObjC 的 ISHKernel.m 需要 ish/cpu-offsets.h，那是 iSH 的 meson
+          #   构建产物（要 brew 装 llvm/meson/ninja/libarchive 再编十几分钟）。
+          #   为了一个 ObjC 文件把整套原生依赖搬进 CI 不划算，所以这里把范围
+          #   收窄成"Swift 能不能编过"，并把这条边界写进日志和 workflow 说明。
+          #   代价：C/ObjC/C++ 的编译错误这套门禁看不到，仍需完整原生环境验证。
           xcodebuild \
             -project src/ios/Minis.xcodeproj \
             -scheme Minis \
@@ -174,6 +180,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            EXCLUDED_SOURCE_FILE_NAMES='*.m *.mm *.c *.cpp *.cc' \
             build > build.log 2>&1
           status=$?
           set -e
@@ -193,14 +200,30 @@ jobs:
             exit 1
           fi
 
+          # 除链接期以外的任何 error: 都算失败。这一条是为了堵住一类假绿：
+          # 之前的规则只看"有没有编译标记"，于是当构建在 ObjC 的依赖扫描阶段
+          # 就挂掉（Swift 只编了 677/1042 个文件）时，它仍然放行了。
+          non_link_errors=$(grep -E 'error:' build.log \
+            | grep -vE 'Undefined symbol|linker command failed|ld: (warning|symbol)|Undefined symbols' \
+            | grep -c . || true)
+          if [ "$non_link_errors" -gt 0 ]; then
+            echo "::group::非链接期错误"
+            grep -E 'error:' build.log \
+              | grep -vE 'Undefined symbol|linker command failed|ld: (warning|symbol)|Undefined symbols' \
+              | head -40 || true
+            echo "::endgroup::"
+            echo "::error::编译期有 $non_link_errors 处错误（不是链接失败）"
+            exit 1
+          fi
+
           if [ "$status" -eq 0 ]; then
             echo "✓ 完整构建通过"
             exit 0
           fi
 
           if [ "$compile_markers" -gt 0 ]; then
-            echo "::group::构建尾部日志（失败发生在编译之后，通常缺原生依赖）"
-            tail -40 build.log
+            echo "::group::构建尾部日志（失败发生在编译之后，通常是排除掉的 C/ObjC 造成链接失败）"
+            tail -30 build.log
             echo "::endgroup::"
             echo "✓ Swift 层零 error（后续阶段失败不计入门禁）"
             exit 0
