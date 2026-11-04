@@ -437,6 +437,8 @@
 		E5SHV0004 /* MountDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5SHV0104 /* MountDetailView.swift */; };
 		E5SOUL001 /* SoulStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5SOUL101 /* SoulStore.swift */; };
 		E5SOUL002 /* SoulSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5SOUL102 /* SoulSettingsView.swift */; };
+		E5SPPS001 /* SystemPromptProseStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5SPPS101 /* SystemPromptProseStore.swift */; };
+		E5SPSV001 /* SystemPromptSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5SPSV101 /* SystemPromptSettingsView.swift */; };
 		E5SPDT0001 /* SpeedTier.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5SPDT0011 /* SpeedTier.swift */; };
 		E5SPT0001 /* ScheduledPresetToolCall.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5SPT0011 /* ScheduledPresetToolCall.swift */; };
 		E5SRS0001 /* SessionRefreshScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5SRS0011 /* SessionRefreshScheduler.swift */; };
@@ -1260,6 +1262,8 @@
 		E5SHV0104 /* MountDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountDetailView.swift; sourceTree = "<group>"; };
 		E5SOUL101 /* SoulStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulStore.swift; sourceTree = "<group>"; };
 		E5SOUL102 /* SoulSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulSettingsView.swift; sourceTree = "<group>"; };
+		E5SPPS101 /* SystemPromptProseStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemPromptProseStore.swift; sourceTree = "<group>"; };
+		E5SPSV101 /* SystemPromptSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemPromptSettingsView.swift; sourceTree = "<group>"; };
 		E5SPDT0011 /* SpeedTier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedTier.swift; sourceTree = "<group>"; };
 		E5SPT0011 /* ScheduledPresetToolCall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduledPresetToolCall.swift; sourceTree = "<group>"; };
 		E5SRS0011 /* SessionRefreshScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRefreshScheduler.swift; sourceTree = "<group>"; };
@@ -2466,6 +2470,7 @@
 				F1CPCONST /* CopilotConstants.swift */,
 				F1CPSHEET /* CopilotDeviceLoginSheet.swift */,
 				E5SOUL101 /* SoulStore.swift */,
+				E5SPPS101 /* SystemPromptProseStore.swift */,
 			);
 			path = Session;
 			sourceTree = "<group>";
@@ -2621,6 +2626,7 @@
 				E5SHV0103 /* SharedFoldersSettingsView.swift */,
 				E5SHV0104 /* MountDetailView.swift */,
 				E5SOUL102 /* SoulSettingsView.swift */,
+				E5SPSV101 /* SystemPromptSettingsView.swift */,
 				E5CVSET0000000000000A011 /* SettingsSheet.swift */,
 				E5CVSET0000000000000A012 /* AppearanceSettingsView.swift */,
 				E5SCH0014 /* HelperSettingsView.swift */,
@@ -3493,7 +3499,9 @@
 				F1VMCPB4 /* SessionMCPsView.swift in Sources */,
 				E5LOCK001 /* SessionLockStore.swift in Sources */,
 				E5SOUL001 /* SoulStore.swift in Sources */,
+				E5SPPS001 /* SystemPromptProseStore.swift in Sources */,
 				E5SOUL002 /* SoulSettingsView.swift in Sources */,
+				E5SPSV001 /* SystemPromptSettingsView.swift in Sources */,
 				E5CVSET0000000000000A001 /* SettingsSheet.swift in Sources */,
 				E5CVSET0000000000000A002 /* AppearanceSettingsView.swift in Sources */,
 				E5LOCK002 /* FaceIDProtectionSettingsView.swift in Sources */,

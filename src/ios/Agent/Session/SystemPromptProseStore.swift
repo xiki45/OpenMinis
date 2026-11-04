@@ -29,6 +29,35 @@ enum SystemPromptProseStore {
 
     private static let fileName = "SYSTEM_PROMPT.md"
 
+    /// The Settings-owned switches that select between fragment variants
+    /// *inside* the prose: the `--target child-of-current` delivery option and
+    /// the `minis-browser-use` paragraph.
+    ///
+    /// They are passed in explicitly rather than read from
+    /// `AIChatViewModel.toolEnabled(_:)` / `isHelper` here. Those two live in
+    /// `extension AIChatViewModel` (ToolsSettingsView.swift / HelperRunner.swift),
+    /// so referring to them from inside this enum was a hard compile error —
+    /// `Self` is this enum, not the view model — which is what kept this file
+    /// out of the project for so long.
+    struct Gates: Equatable {
+        /// True in a helper (child-of-current) sub-session. Helpers are not
+        /// offered the child-of-current target, which would recurse.
+        var isHelper: Bool
+        var agentsEnabled: Bool
+        var browserEnabled: Bool
+
+        /// The rendering the Settings editor and the `system_prompt.prose`
+        /// config field use: a normal session's view. A helper is an internal
+        /// sub-session and is never what the user is editing.
+        static var fromSettings: Gates {
+            Gates(
+                isHelper: false,
+                agentsEnabled: AIChatViewModel.toolEnabled(.agents),
+                browserEnabled: AIChatViewModel.toolEnabled(.browser)
+            )
+        }
+    }
+
     static var fileURL: URL {
         AIChatViewModel.minisMemoryPersistentDir.appendingPathComponent(fileName)
     }
@@ -45,7 +74,12 @@ enum SystemPromptProseStore {
     /// `AIChatViewModel.baseSystemPrompt` (the `Available tools:` bullet lines,
     /// the browser/delegation/minis-url/memory toggles and the inline
     /// `\(…)` interpolations removed, since the app supplies those).
-    static let defaultContent: String =
+    ///
+    /// Rendered for [gates] because two fragments inside the prose depend on
+    /// Settings: the `--target child-of-current` option (Agents switch on, not a
+    /// helper) and the `minis-browser-use` paragraph (Browser switch on). Every
+    /// other character is identical across all gate combinations.
+    static func defaultContent(gates: Gates) -> String {
         "You should proactively use shell commands to accomplish the user's tasks — installing packages (apk add), "
         + "writing and running scripts, managing files, networking, and any other operations a Linux terminal can perform.\n\n"
         + "Available tools:\n"
@@ -135,7 +169,7 @@ enum SystemPromptProseStore {
         + "overlap <img1> <img2> [img3...] (detect vertical overlapping regions between consecutive image pairs — uses anchor row scan + multi-row verification to find exact stitch points; returns overlap_px, confidence, and region coordinates). Both similarity and overlap accept --threshold 0.0-1.0 (default 0.9). overlap also accepts --skip-top <px> and --skip-bottom <px> to exclude fixed UI (status bar, tab bar) that would cause false matches.\n"
         + "minis-open <url-or-path>: Opens a resource inside Minis without leaving the chat. Accepts http/https URLs (→ built-in WebKit preview) and chat-resource file paths under /var/minis/** (→ built-in file preview, routed by extension: images to the image viewer, .md to markdown preview, .html to HTML preview, .pdf/office docs to QuickLook, audio/video to the media player, else share sheet). Examples: `minis-open https://example.com`, `minis-open /var/minis/workspace/report.md`, `minis-open /var/minis/attachments/chart.png`. Prefer this over `apple-open` for anything that can be previewed in-app so the user doesn't lose conversation context. Run `apple-open` via shell_execute for non-web schemes (tel:, mailto:, maps://, settings, etc.) or when the user explicitly wants the system handler.\n"
         + "minis-sessions-cli: Manage chat sessions. `list` recent or by date range, `search --keywords` cross-session, `messages --id` to read (add `--tools` for each tool call's exact input, e.g. the shell command, and its output), `send` to create/continue a session, `retry` to re-run, `status` to check, `open` to navigate the app UI. Run --help for full options.\n"
-        + "minis-scheduled: Schedule a prompt to run LATER as a new turn — `create --prompt \"…\" --after 30m` (once), `--interval 10m --count 6` (loop; each fire is prefixed with its round number so you can stop when done), `--time 09:00 --repeat daily|weekdays|custom --days mon,fri` (calendar), `--trigger on-completion --of <jobId>` (chain). `--target follow-up` (DEFAULT when you run it: each fire is a new turn in THIS chat, so the result comes back here) | `new` (each fire opens a separate new chat and the result does NOT come back here — use it only when the user explicitly wants a separate chat)" + (Self.toolEnabled(.agents) && !isHelper ? " | `child-of-current` (a hidden helper whose answer is posted back here)" : "") + ". `create` prints a `delivery` line naming where the fires will land — read it, and if it is not what the user asked for, `delete --id` and create again with the right --target. When every fire starts with the same shell command, add `--command \"<shell command>\"` (or the general `--tool shell_execute --tool-args '{\"command\":\"…\"}'`): the command runs automatically at each fire and you receive its real output as an already-completed tool call, so you only summarise/act on it instead of deciding to run it. `list`, `delete --id`, `enable/disable --id`, `run --id`. Best effort: timers live only while the app process is alive (a reminder notification is registered as insurance and says the task was due, not that it ran); for guaranteed execution after the app is killed the user needs an Apple Shortcuts automation. Run --help for details.\n"
+        + "minis-scheduled: Schedule a prompt to run LATER as a new turn — `create --prompt \"…\" --after 30m` (once), `--interval 10m --count 6` (loop; each fire is prefixed with its round number so you can stop when done), `--time 09:00 --repeat daily|weekdays|custom --days mon,fri` (calendar), `--trigger on-completion --of <jobId>` (chain). `--target follow-up` (DEFAULT when you run it: each fire is a new turn in THIS chat, so the result comes back here) | `new` (each fire opens a separate new chat and the result does NOT come back here — use it only when the user explicitly wants a separate chat)" + (gates.agentsEnabled && !gates.isHelper ? " | `child-of-current` (a hidden helper whose answer is posted back here)" : "") + ". `create` prints a `delivery` line naming where the fires will land — read it, and if it is not what the user asked for, `delete --id` and create again with the right --target. When every fire starts with the same shell command, add `--command \"<shell command>\"` (or the general `--tool shell_execute --tool-args '{\"command\":\"…\"}'`): the command runs automatically at each fire and you receive its real output as an already-completed tool call, so you only summarise/act on it instead of deciding to run it. `list`, `delete --id`, `enable/disable --id`, `run --id`. Best effort: timers live only while the app process is alive (a reminder notification is registered as insurance and says the task was due, not that it ran); for guaranteed execution after the app is killed the user needs an Apple Shortcuts automation. Run --help for details.\n"
         + "minis-model-use: Invoke other LLM models pre-configured by the user. "
         + "This is a single, tool-less request to one specific model. "
         + "Run `minis-model-use list` via shell_execute to see them (includes each model's modality capabilities like image_output, audio_output, etc.), "
@@ -155,7 +189,7 @@ enum SystemPromptProseStore {
         + "IMPORTANT: image generation is SLOW (typically 1-5 min) — a single long blocking call with a large timeout (e.g. timeout: 600) is correct here (one render, one wait); use `delay` chains only when repeatedly CHECKING on something, not for one slow command. "
         + "Run with --help for full usage.\n"
                     // [T-tools-master-switch] The CLI is the same capability; hidden with the tool.
-        + (!Self.toolEnabled(.browser) ? ""
+        + (!gates.browserEnabled ? ""
                        : "minis-browser-use: a shell command that accepts the same actions and parameters as the browser_use tool, exposed as `<action> --flag value` pairs (or `--json '<obj>'`). "
                        + "Run `minis-browser-use` with no arguments (or --help) for the full action list. "
                        + "Example: `minis-browser-use navigate --url https://example.com`. "
@@ -193,6 +227,12 @@ enum SystemPromptProseStore {
         + "For follow-ups and recurring prompts that only need to fire while Minis stays open, run `minis-scheduled create …` via shell_execute (it is best effort and dies with the app process). "
         + "For recurring tasks that must fire even after the app is killed, tell the user to set up an automation in Apple Shortcuts — that is the only guaranteed way to trigger periodic execution on iOS. "
         + "(Waiting or polling WITHIN the current turn is different — that is what shell_execute `delay` chains are for, per the shell_execute notes above.)"
+    }
+
+    /// The default rendered under the current Settings toggles. This is what the
+    /// Settings editor displays, what the dirty check compares against, and what
+    /// "writing the built-in default back" is matched to.
+    static var defaultContent: String { Self.defaultContent(gates: .fromSettings) }
 
     // MARK: - Filesystem
 
@@ -203,12 +243,18 @@ enum SystemPromptProseStore {
         return !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// The override when present, `defaultContent` otherwise. Never nil.
-    static func load() -> String {
+    /// The override when present, the default rendered for [gates] otherwise.
+    /// Never nil.
+    ///
+    /// Callers that already know the session tier and the Settings toggles pass
+    /// `gates:` so a helper session gets the variant without the
+    /// `child-of-current` option. Everything else (the Settings editor, the
+    /// `system_prompt.prose` config field) keeps the `fromSettings` rendering.
+    static func load(gates: Gates = .fromSettings) -> String {
         if let raw = loadRaw(), !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return raw
         }
-        return defaultContent
+        return Self.defaultContent(gates: gates)
     }
 
     /// Raw override text, or nil when the file is absent/unreadable.
@@ -223,12 +269,12 @@ enum SystemPromptProseStore {
     /// Write the override through a `.tmp` sibling + rename, mirroring
     /// `SoulStore.save`. Injection patterns are scrubbed first so the text on
     /// disk is clean even when a writer forgets to validate; blank text (or a
-    /// value identical to `defaultContent`) clears the override instead of
+    /// value identical to the default) clears the override instead of
     /// storing a redundant copy of the default.
-    static func save(_ text: String) throws {
+    static func save(_ text: String, gates: Gates = .fromSettings) throws {
         let cleaned = scrubInjections(text)
         if cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || cleaned == defaultContent {
+            || cleaned == Self.defaultContent(gates: gates) {
             reset()
             return
         }
@@ -247,11 +293,24 @@ enum SystemPromptProseStore {
 
     // MARK: - Validation
 
-    /// Language-aware cap, identical to `soul.body` (and to the Settings UI's
-    /// Save-button gate): a unified token count (CJK glyph / punctuation = 1,
-    /// Latin word = 1). Delegates so there is exactly one rule.
+    /// Token cap for this block.
+    ///
+    /// Deliberately NOT `SoulStore.bodyTokenLimit` (2000). That cap governs the
+    /// user-authored SOUL.md personality body; this block is a verbatim slice of
+    /// the shipped prompt and measures ~3.1k tokens on its own, so sharing the
+    /// 2000 cap meant the *built-in default itself* was "over limit". Two
+    /// consequences, both observed: the editor's Save button was permanently
+    /// disabled (any edit stayed over the cap), and the config writer's
+    /// "writing the default back resets it" branch was unreachable because the
+    /// over-limit check threw first.
+    ///
+    /// 4000 = the built-in default (~3.1k) plus ~25% headroom for user additions.
+    static let tokenLimit = 4000
+
+    /// Language-aware cap (a unified token count: CJK glyph / punctuation = 1,
+    /// Latin word = 1). Delegates so there is exactly one counting rule.
     static func isOverLimit(_ text: String) -> SoulBodyLimitCheck {
-        SoulStore.isOverLimit(text)
+        SoulStore.isOverLimit(text, cap: tokenLimit)
     }
 
     /// Drop lines matching the same prompt-injection patterns `SOUL.md` gets

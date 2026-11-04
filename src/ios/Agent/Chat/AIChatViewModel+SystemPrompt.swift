@@ -180,7 +180,10 @@ extension AIChatViewModel {
             // `Available tools:` anchor so it is never lost regardless of the
             // prose the user writes.
             + Self.spliceToolBullets(
-                prose: SystemPromptProseStore.load(),
+                prose: SystemPromptProseStore.load(gates: SystemPromptProseStore.Gates(
+                    isHelper: isHelper,
+                    agentsEnabled: Self.toolEnabled(.agents),
+                    browserEnabled: Self.toolEnabled(.browser))),
                 bullets: toolBulletsBlock(),
                 timeBlock: timeLanguagesBlock()
             )

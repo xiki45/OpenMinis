@@ -108,7 +108,7 @@ struct SystemPromptSettingsView: View {
 
     private func countText(_ body: String) -> String {
         let count = SoulStore.tokenCount(body)
-        return AppLocalized("\(count) / \(SoulStore.bodyTokenLimit) tokens")
+        return AppLocalized("\(count) / \(SystemPromptProseStore.tokenLimit) tokens")
     }
 
     private var isOverLimit: Bool {

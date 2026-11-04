@@ -804,14 +804,22 @@ enum SoulStore {
         return count
     }
 
-    /// Classify [body] under the unified 2000-token rule. Empty /
-    /// whitespace-only bodies always return `.ok`.
-    static func isOverLimit(_ body: String) -> SoulBodyLimitCheck {
+    /// Classify [body] under the unified token rule, using [cap] as the limit.
+    ///
+    /// Empty / whitespace-only bodies always return `.ok`. The cap is a
+    /// parameter because not every editable block shares the SOUL.md body cap:
+    /// `SystemPromptProseStore` carries a much larger built-in default (the
+    /// static slice of the shipped prompt) and supplies its own
+    /// `tokenLimit` here.
+    static func isOverLimit(
+        _ body: String,
+        cap: Int = SoulStore.bodyTokenLimit
+    ) -> SoulBodyLimitCheck {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .ok }
         let count = tokenCount(trimmed)
-        return count > Self.bodyTokenLimit
-            ? .overLimit(count: count, cap: Self.bodyTokenLimit)
+        return count > cap
+            ? .overLimit(count: count, cap: cap)
             : .ok
     }
 
