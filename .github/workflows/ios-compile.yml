@@ -178,13 +178,16 @@ jobs:
           status=$?
           set -e
 
-          swift_errors=$(grep -cE '\.swift:[0-9]+:[0-9]+: (fatal )?error:' build.log)
-          compile_markers=$(grep -cE '(SwiftDriver|SwiftCompile|CompileSwift|CompileC )' build.log)
+          # 注意 `|| true`：`grep -c` 无匹配时退出码是 1，而上面刚恢复的
+          # `set -e` 会让这个赋值语句直接终止步骤 —— 结果就是"代码零错误时
+          # 反而判失败"，且连诊断行都打印不出来。
+          swift_errors=$(grep -cE '\.swift:[0-9]+:[0-9]+: (fatal )?error:' build.log || true)
+          compile_markers=$(grep -cE '(SwiftDriver|SwiftCompile|CompileSwift|CompileC )' build.log || true)
           echo "xcodebuild status=$status  swift_errors=$swift_errors  compile_markers=$compile_markers"
 
           if [ "$swift_errors" -gt 0 ]; then
             echo "::group::Swift errors"
-            grep -nE '\.swift:[0-9]+:[0-9]+: (fatal )?error:' build.log | head -80
+            grep -nE '\.swift:[0-9]+:[0-9]+: (fatal )?error:' build.log | head -80 || true
             echo "::endgroup::"
             echo "::error::Swift 编译错误 $swift_errors 处"
             exit 1
