@@ -43,6 +43,18 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
+          go version
+
+      # 真编 rclone 很贵（Go c-archive × 2 个 slice），但它是编译期硬依赖，
+      # 不能像 ffmpeg 那样用空壳糊过去 —— 头文件是构建产物。按 go.sum 缓存。
+      - name: Cache Rclone.xcframework
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps/frameworks/Rclone.xcframework
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: rclone-${{ runner.os }}-${{ hashFiles('deps/rclone-mobile/go.sum', 'deps/build_rclone_ios.sh') }}
 
       - name: Source pre-check (membership + parse)
         run: |
@@ -94,10 +106,18 @@ jobs:
           echo "umbrella header: $(wc -l < deps/include/ish/ish.h) lines"
 
           mkdir -p deps/frameworks
+          # Rclone 不能造假：桥接头 #import "librclone.h"，而该头是
+          # `go build -buildmode=c-archive` 的产物，必须跟库一起生成。runner
+          # 自带 Go，真编一次后由 cache 摊掉后续成本。
+          if [ ! -d deps/frameworks/Rclone.xcframework ]; then
+            go version
+            ./deps/build_rclone_ios.sh
+          fi
+
           stub=$(mktemp -d)
           printf 'int __minis_link_stub;\n' > "$stub/stub.c"
           xcrun --sdk iphoneos clang -arch arm64 -c "$stub/stub.c" -o "$stub/stub.o"
-          for fw in FFmpeg Rclone libavcodec libavformat libavutil libavfilter libswresample libswscale; do
+          for fw in FFmpeg libavcodec libavformat libavutil libavfilter libswresample libswscale; do
             if [ ! -d "deps/frameworks/$fw.xcframework" ]; then
               # 每个桩必须用不同的库名：拷贝阶段按 basename 生成输出路径，同名会被
               # 判成 duplicate output file 而直接失败。
@@ -106,7 +126,7 @@ jobs:
                 -output "deps/frameworks/$fw.xcframework" >/dev/null
             fi
           done
-          echo "framework stubs: $(ls deps/frameworks | tr '\n' ' ')"
+          echo "frameworks: $(ls deps/frameworks | tr '\n' ' ')"
 
           # 拷贝阶段同样在读这些产物；给空的合法占位，避免拷贝阶段先于编译
           # 阶段报错（那会让门禁误判成"没进到编译"）。
