@@ -31,6 +31,9 @@ jobs:
   swift-compile:
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      # 钉住 go.mod 要求的工具链，别让 go 自动升级绕过去。
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,7 +47,11 @@ jobs:
       - name: Set up Go (for the rclone archive)
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          # 必须跟 deps/rclone-mobile/go.mod 的 `go 1.25.5` 对齐。用 'stable'
+          # 会拿到 1.27，此时 go-json-experiment/json 的 alias 找不到
+          # json.SkipFunc / json.DiscardUnknownMembers，rclone 编不出来。
+          # GOTOOLCHAIN=local 防止 go 自己升级把这条钉住又绕过去。
+          go-version: '1.25.5'
           cache: false
 
       - name: Toolchain
