@@ -1,0 +1,104 @@
+name: iOS compile check
+
+# 目的：在没有 Xcode 的机器上也能知道 iOS 代码能不能编译。
+#
+# 仓库是公开仓，GitHub 的 macOS runner 不额外计费。这里只买一个结论：
+# **Swift 层零 error**。
+#
+# 为什么不追求完整构建：iOS 的原生依赖（ish / rclone / ffmpeg / lame / talloc）
+# 要从源码编，代价很大，而且与业务代码回归无关。而 xcodebuild 的编译顺序是
+# 「先编 Swift，再链接」，所以即使链接阶段因为缺依赖失败，Swift 的编译错误也
+# 已经全部出现在日志里了 —— 这正是之前那类
+# `Cannot find 'SystemPromptProseStore' in scope` 的捕获点。
+#
+# 判定规则：
+#   - 日志里有 *.swift:N:M: error:            → 失败
+#   - 构建成功                                → 通过
+#   - 构建失败，但日志出现过编译阶段标记        → 通过（链接失败属预期）
+#   - 构建失败且根本没进到编译阶段              → 失败（无法验证，不能假绿）
+
+on:
+  push:
+    branches: [feature/system-assist, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-compile:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 桥接头 MinisApp-Bridging-Header.h 直接 #include "ish/ish.h"，
+          # 所以编 Swift 就必须有 deps/ish 等子模块。
+          submodules: recursive
+          fetch-depth: 0 # 下面的成员检查需要 merge-base
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Source pre-check (membership + parse)
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main 2>/dev/null || true
+          bash scripts/check_ios_sources.sh origin/main
+
+      - name: xcodebuild — Swift compile is the gate
+        run: |
+          set +e
+          xcodebuild \
+            -project src/ios/Minis.xcodeproj \
+            -scheme Minis \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build > build.log 2>&1
+          status=$?
+          set -e
+
+          swift_errors=$(grep -cE '\.swift:[0-9]+:[0-9]+: (fatal )?error:' build.log)
+          compile_markers=$(grep -cE '(SwiftDriver|SwiftCompile|CompileSwift|CompileC )' build.log)
+          echo "xcodebuild status=$status  swift_errors=$swift_errors  compile_markers=$compile_markers"
+
+          if [ "$swift_errors" -gt 0 ]; then
+            echo "::group::Swift errors"
+            grep -nE '\.swift:[0-9]+:[0-9]+: (fatal )?error:' build.log | head -80
+            echo "::endgroup::"
+            echo "::error::Swift 编译错误 $swift_errors 处"
+            exit 1
+          fi
+
+          if [ "$status" -eq 0 ]; then
+            echo "✓ 完整构建通过"
+            exit 0
+          fi
+
+          if [ "$compile_markers" -gt 0 ]; then
+            echo "::group::构建尾部日志（失败发生在编译之后，通常缺原生依赖）"
+            tail -40 build.log
+            echo "::endgroup::"
+            echo "✓ Swift 层零 error（后续阶段失败不计入门禁）"
+            exit 0
+          fi
+
+          echo "::group::构建尾部日志"
+          tail -80 build.log
+          echo "::endgroup::"
+          echo "::error::构建在编译 Swift 之前就失败，无法验证代码 —— 这不是通过"
+          exit 1
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log-${{ github.run_id }}
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
