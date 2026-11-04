@@ -48,13 +48,16 @@
    │
    ├─ 标准路线（角色解析的 ROM）
    │    系统 → AssistSession.onHandleAssist(结构/网页) + onHandleScreenshot(位图)
+   │    只有这条路线会带来屏幕【文本】上下文
    │
    ├─ HyperOS 路线（hook 改道 / OEM startService）
    │    AssistCapture：入口用无障碍服务抢在窗口上屏前截一帧
+   │    只有截图，没有屏幕文本
    │
    ▼
-① DeepLinkCoordinator.pendingAssist（文本 + 截图路径）
-② 打开新 chat 会话 → 截图作为附件 + 上下文文本作为首条消息
+① DeepLinkCoordinator.latchAssistEntry()：放空门闩表示"本次是 assist 唤起"，
+   但不覆盖仍新鲜的真实上下文；超过 10s 的陈旧上下文在消费处直接丢弃
+② 打开新 chat 会话 → 截图作为待发附件（不自动发送）+ 上下文文本作为首条消息
    ▼
 agent 循环正常处理（多模态读图 / shell / 技能 / 无障碍读屏…）
 ```
