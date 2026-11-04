@@ -39,6 +39,14 @@ jobs:
           submodules: recursive
           fetch-depth: 0 # 下面的成员检查需要 merge-base
 
+      # rclone 用 go build -buildmode=c-archive 产出库和 librclone.h。
+      # macOS runner 上没有可直接调用的 go，得显式装。
+      - name: Set up Go (for the rclone archive)
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
       - name: Toolchain
         run: |
           xcodebuild -version
