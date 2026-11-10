@@ -28,7 +28,22 @@ object AssistCapture {
     private const val KEY_ATTACH_SCREEN = "assist_attach_screen"
     private const val CAPTURE_TIMEOUT_MS = 1_500L
     private const val AWAIT_TIMEOUT_MS = 3_000L
-    private const val SERVICE_WAIT_MS = 1_200L
+    /**
+     * [T-assist-capture-settle] 等待无障碍服务"连上"的总预算。
+     *
+     * 以前是 1200ms 且只判 `getInstance() != null` —— 但 `_instance` 是在
+     * `onCreate()` 里赋的，早于 `onServiceConnected()`：实例存在 ≠ 可截图。
+     * 实测在刚连上的同一秒调 `takeScreenshot` 会稳定失败
+     * `TAKE_SCREENSHOT_FAILED error code=1`。窗口上屏只需 200-400ms，
+     * 所以这个预算必须小：拿不到就放弃，绝不能在窗口起来之后补拍一张错的。
+     */
+    private const val SERVICE_WAIT_MS = 450L
+
+    /** 连接建立后还要等这么久才允许 takeScreenshot（避开 error code=1）。 */
+    private const val CONNECT_SETTLE_MS = 150L
+
+    /** 请求到落盘超过这个时长，说明窗口早已上屏，这张图不是"唤起时的屏幕"，丢掉。 */
+    private const val MAX_SHOT_AGE_MS = 800L
     private const val SHOT_DIR = "assist_shots"
     private const val MAX_EDGE = 1600
     private const val KEEP_SHOTS = 3
@@ -66,7 +81,8 @@ object AssistCapture {
             AppLogger.info(TAG, "trigger source opted out of screenshot (EXTRA_ATTACH_SCREEN=false)")
             return false
         }
-        val now = System.currentTimeMillis()
+        // 用单调时钟：墙上时钟回跳会让去重窗口失效（review 的 minor 项一起修掉）。
+        val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastRequestAt < REQUEST_DEDUPE_MS) return false  // 冷/热启动双入口与手势双击去重
         // [T-assist-screenshot] 判定放宽为「settings 认账 或 服务实例在手」：
         // HyperOS 上 root 重写 enabled_accessibility_services 后，服务可能仍以
@@ -89,26 +105,41 @@ object AssistCapture {
         Thread({
             var out: File? = null
             try {
-                // 重装/冷启动时服务绑定与 Activity onCreate 存在竞态：
-                // 设置里已启用但实例还没连上时，短暂轮询等待。
+                val requestedAt = now
+                val deadline = requestedAt + SERVICE_WAIT_MS
+                // 等"真正连上"，而不是只等实例出现：_instance 在 onCreate() 就有了，
+                // 那时 takeScreenshot 必然失败（error code=1）。
                 var svc = MinisAccessibilityService.getInstance()
-                var waited = 0
-                while (svc == null && waited < SERVICE_WAIT_MS) {
-                    Thread.sleep(100)
-                    waited += 100
+                while ((svc == null || !svc.isConnected())
+                    && android.os.SystemClock.elapsedRealtime() < deadline
+                ) {
+                    Thread.sleep(50)
                     svc = MinisAccessibilityService.getInstance()
                 }
-                if (svc == null) {
-                    AppLogger.warning(TAG, "a11y service not connected after ${SERVICE_WAIT_MS}ms; skip")
+                if (svc == null || !svc.isConnected()) {
+                    AppLogger.warning(
+                        TAG,
+                        "a11y not connected within ${SERVICE_WAIT_MS}ms; skip (no post-window frame)",
+                    )
+                } else if (!awaitSettled(svc, deadline)) {
+                    AppLogger.warning(TAG, "a11y connected too late to be the invocation screen; skip")
+                } else if (MinisAccessibilityService.getInstance() !== svc) {
+                    // 等待期间服务被销毁/重建（保活重绑、系统回收）：这一帧不可信
+                    AppLogger.warning(TAG, "a11y instance replaced mid-capture; skip")
                 } else {
                     val shot = svc.captureScreenshot(timeoutMs = CAPTURE_TIMEOUT_MS)
                     val bmp = shot.bitmap
-                    if (bmp != null) {
+                    val age = android.os.SystemClock.elapsedRealtime() - requestedAt
+                    if (bmp == null) {
+                        AppLogger.warning(TAG, "assist screenshot failed: ${shot.errorCode} ${shot.errorMessage}")
+                    } else if (age > MAX_SHOT_AGE_MS) {
+                        // 窗口早已上屏：这张图拍到的是 Minis 自己或用户已经切走的画面
+                        bmp.recycle()
+                        AppLogger.warning(TAG, "late frame (${age}ms > ${MAX_SHOT_AGE_MS}ms); dropped")
+                    } else {
                         out = saveBitmap(appContext, bmp)
                         bmp.recycle()
                         if (out == null) AppLogger.warning(TAG, "save assist screenshot failed")
-                    } else {
-                        AppLogger.warning(TAG, "assist screenshot failed: ${shot.errorCode} ${shot.errorMessage}")
                     }
                 }
             } catch (t: Throwable) {
@@ -118,6 +149,19 @@ object AssistCapture {
             }
         }, "assist-capture").start()
         AppLogger.info(TAG, "assist screenshot capture started")
+        return true
+    }
+
+    /**
+     * [T-assist-capture-settle] 等连接稳定 [CONNECT_SETTLE_MS]；若为此刻意等待会超出
+     * 总预算 [SERVICE_WAIT_MS]，则直接放弃（宁可没图，也不要一张窗口起来之后的图）。
+     */
+    private fun awaitSettled(svc: MinisAccessibilityService, deadline: Long): Boolean {
+        val stableFor = android.os.SystemClock.elapsedRealtime() - svc.connectedAtElapsedMs()
+        if (stableFor >= CONNECT_SETTLE_MS) return true
+        val wait = CONNECT_SETTLE_MS - stableFor
+        if (android.os.SystemClock.elapsedRealtime() + wait > deadline) return false
+        Thread.sleep(wait)
         return true
     }
 

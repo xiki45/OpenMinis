@@ -46,6 +46,20 @@ class MinisAccessibilityService : AccessibilityService() {
         val timestamp: Long,
     )
 
+    /**
+     * [T-assist-capture-settle] `onServiceConnected()` 的时刻（elapsedRealtime）。
+     *
+     * `_instance` 在 `onCreate()` 就赋值了，而那时连接还没建立 —— 拿它当"可用"去调
+     * `takeScreenshot` 会稳定失败 `error code=1`。截图路径改用 [isConnected] 判定，
+     * 并且要求连接已稳定 [AssistCapture.CONNECT_SETTLE_MS] 才允许截。
+     */
+    @Volatile
+    private var connectedAtMs: Long = 0L
+
+    fun isConnected(): Boolean = connectedAtMs > 0L
+
+    fun connectedAtElapsedMs(): Long = connectedAtMs
+
     private val eventRing = ConcurrentLinkedQueue<RecordedEvent>()
     private val eventListeners = CopyOnWriteArrayList<(RecordedEvent) -> Unit>()
 
@@ -60,6 +74,7 @@ class MinisAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         _instance = this
+        connectedAtMs = android.os.SystemClock.elapsedRealtime()
         // [T-android-a11y-miui-service-failure] Breadcrumb on (re)bind. On OEM
         // ROMs (MIUI etc.) the system kills + rebinds this service repeatedly,
         // surfacing "此服务出现故障"; a connect log lets us correlate a degraded
@@ -101,6 +116,7 @@ class MinisAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        connectedAtMs = 0L
         if (_instance === this) _instance = null
         eventRing.clear()
         nodeRegistry.clear()
