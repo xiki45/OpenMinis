@@ -386,12 +386,17 @@ fun SystemPermissionsScreen(onBack: () -> Unit) {
 }
 
 private fun isAccessibilityEnabled(context: Context): Boolean {
-    val expected = "${context.packageName}/${MinisAccessibilityService::class.java.name}"
+    // [T-assist-a11y-name-form] 系统里保存的通常是缩写形式 pkg/.Class，而 Class.name 是全限定
+    // 形式；只比后者会让本页永远显示"未开启"。用同一套双写法匹配。
     val enabled = Settings.Secure.getString(
         context.contentResolver,
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
     ) ?: return false
-    return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
+    return !com.openminis.app.accessibility.AccessibilityRecoveryManager.isRevokedIn(
+        enabled,
+        context.packageName,
+        MinisAccessibilityService::class.java.name,
+    )
 }
 
 private fun openAccessibilitySettings(context: Context) {

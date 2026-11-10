@@ -74,6 +74,22 @@ class MainActivity : ComponentActivity() {
         private const val ASSIST_ENTRY_DEDUPE_MS = 1_500L
 
         /**
+         * [T-assist-trigger-id] 配套 hook v2.4+ 给每次手势生成的唯一标记
+         * （elapsedRealtime）。有它时按 id 去重，只丢弃"同一次唤起的重复投递"；
+         * 没有它（旧模块 / 标准 VIS 路线）才退回上面的时间窗。
+         */
+        private const val EXTRA_TRIGGER_ID = "com.openminis.hook.trigger_id"
+
+        /**
+         * [T-assist-trigger-id] 已经处理过的那次唤起的 id（进程级）。
+         *
+         * 冷启动路径也要写它：否则同一次唤起先走 onCreate（冷）再补一条
+         * onNewIntent（热）时，热的那条会被当成新手势，叠出第二个草稿会话。
+         */
+        @Volatile
+        private var lastAssistTriggerId = -1L
+
+        /**
          * [T-assist-entry-dedupe] elapsedRealtime() of the last ASSIST /
          * VOICE_ASSIST delivery dispatched into a new chat. Process-scoped: the
          * duplicates ride an Activity re-creation, so an instance field would
@@ -557,6 +573,7 @@ class MainActivity : ComponentActivity() {
             // 后者冷启动到这里时，前者的真实屏幕上下文可能已经写好了 —— 无条件
             // 覆盖会让本次会话只剩空占位。
             com.openminis.app.deeplink.DeepLinkCoordinator.latchAssistEntry()
+            rememberAssistTriggerId(intent)
             DeepLinkAction.OpenAssist
         } else {
             restoredChatSessionId
@@ -809,7 +826,22 @@ class MainActivity : ComponentActivity() {
      * Called before DeepLinkCoordinator.pendingAssist is touched so a duplicate
      * cannot wipe screen context the VoiceInteractionSession hand-off wrote first.
      */
-    private fun isDuplicateAssistEntryDelivery(): Boolean {
+    private fun isDuplicateAssistEntryDelivery(intent: Intent?): Boolean {
+        // [T-assist-trigger-id] 新模块给了 id：同一次唤起的重复投递只处理一次，
+        // 不同 id 的手势永远处理（哪怕只隔 50ms），彻底消掉 1200/1500ms 双吞区。
+        val triggerId = intent?.getLongExtra(EXTRA_TRIGGER_ID, -1L) ?: -1L
+        if (triggerId > 0L) {
+            if (triggerId == lastAssistTriggerId) {
+                AppLogger.info(
+                    "AssistEntry",
+                    "duplicate delivery of triggerId=$triggerId - keeping the current draft",
+                )
+                return true
+            }
+            lastAssistTriggerId = triggerId
+            lastAssistEntryDispatchedAtMs = android.os.SystemClock.elapsedRealtime()
+            return false
+        }
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastAssistEntryDispatchedAtMs < ASSIST_ENTRY_DEDUPE_MS) {
             AppLogger.info(
@@ -823,12 +855,18 @@ class MainActivity : ComponentActivity() {
         return false
     }
 
+    /** [T-assist-trigger-id] 冷启动路径登记 id（不做去重判断，只记下来）。 */
+    private fun rememberAssistTriggerId(intent: Intent?) {
+        val id = intent?.getLongExtra(EXTRA_TRIGGER_ID, -1L) ?: -1L
+        if (id > 0L) lastAssistTriggerId = id
+    }
+
     private fun handleDeepLink(intent: Intent?) {
         val nav = navController ?: return
         val isAssistEntry = isAssistEntryIntent(intent)
         // [T-assist-entry-dedupe] Collapse the burst of intents one system
         // invocation produces BEFORE touching any state.
-        if (isAssistEntry && isDuplicateAssistEntryDelivery()) return
+        if (isAssistEntry && isDuplicateAssistEntryDelivery(intent)) return
         // [T-assist-screenshot] 热启动 assist 入口同样尽早发射截屏（窗口上屏前）。
         if (isAssistEntry) {
             com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)

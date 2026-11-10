@@ -523,6 +523,16 @@ fun AppNavigation(
     // its first LaunchedEffect tick. Mirrors the htmlShortcut path —
     // avoids a sessions-list flash and a duplicate back-stack entry.
     val quickActionStart: String? = when (initialDeepLink) {
+        // [T-assist-entry-cold-start] VOICE_ASSIST / ASSIST 冷启动（HyperOS
+        // hook 路线，以及标准 VIS 路线失败后回落的那条）以前在这里没有分支：
+        // MainActivity 已经把入口折叠成 OpenAssist 并写好了 pendingAssist 门闩，
+        // 但 NavHost 仍从 SESSION_LIST 起步 —— 没有任何 ChatScreen 被组合，
+        // 门闩永远不被消费，用户看到的是会话列表（"手势唤起没进新会话"）。
+        // 直接以草稿会话作为 startDestination：首帧就是 ChatScreen，
+        // 它的 LaunchedEffect(sessionId) 会在第一次组合时消费门闩与截图。
+        // 不能改用 safeNavigate：首帧 SESSION_LIST 的 entry 还没到 RESUMED，
+        // safeNavigate 会静默丢弃（见 SafeNavigate.kt）。
+        is DeepLinkAction.OpenAssist -> Routes.chat("__new__${java.util.UUID.randomUUID()}")
         is DeepLinkAction.NewVoiceChat -> {
             DeepLinkCoordinator.setPendingChatAction(
                 DeepLinkCoordinator.ChatAction.START_VOICE,

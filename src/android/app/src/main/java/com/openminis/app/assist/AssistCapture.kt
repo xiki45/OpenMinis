@@ -3,6 +3,7 @@ package com.openminis.app.assist
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
+import com.openminis.app.accessibility.AccessibilityRecoveryManager
 import com.openminis.app.accessibility.MinisAccessibilityService
 import com.openminis.app.logging.AppLogger
 import kotlinx.coroutines.CompletableDeferred
@@ -120,15 +121,28 @@ object AssistCapture {
         return true
     }
 
-    /** 系统设置里是否启用了本应用的无障碍服务（与 SystemPermissionsScreen 同一判定口径）。 */
+    /**
+     * 系统设置里是否启用了本应用的无障碍服务（与 SystemPermissionsScreen 同一判定口径）。
+     *
+     * [T-assist-a11y-name-form] 必须同时接受两种写法：框架/系统设置里保存的通常是
+     * 缩写形式 `pkg/.Class`（实测本机就是 `com.openminis.app/.accessibility.MinisAccessibilityService`），
+     * 而 `Class.name` 拼出来的是全限定形式 `pkg/pkg.Class`。只比全限定形式会让这个判定
+     * **永远为 false** —— 每次唤起都打一条 "a11y missing in settings"，且在冷启动
+     * （无障碍实例还没连上）时直接跳过截图，哪怕服务其实是启用的。
+     * 与 AccessibilityRecoveryManager.isRevokedIn 的匹配规则保持一致。
+     */
     private fun isA11yServiceEnabled(context: Context): Boolean {
         return try {
-            val expected = "${context.packageName}/${MinisAccessibilityService::class.java.name}"
             val enabled = android.provider.Settings.Secure.getString(
                 context.contentResolver,
                 android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
             ) ?: return false
-            enabled.split(':').any { it.equals(expected, ignoreCase = true) }
+            // 复用同一套"全限定 / 缩写"双写法匹配（AccessibilityRecoveryManager 有单测）。
+            !AccessibilityRecoveryManager.isRevokedIn(
+                enabled,
+                context.packageName,
+                MinisAccessibilityService::class.java.name,
+            )
         } catch (_: Throwable) {
             false
         }
