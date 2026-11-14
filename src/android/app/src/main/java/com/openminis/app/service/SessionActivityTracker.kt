@@ -1043,6 +1043,26 @@ object SessionActivityTracker {
     private var serviceWanted = false
 
     /**
+     * [T-fgs-stop-guard] A stop that was decided while the record had not
+     * promoted yet, handed to the service instead of dispatched. See
+     * [stopWouldStrandAnInFlightStart].
+     */
+    @Volatile
+    private var deferredStop = false
+
+    /** elapsedRealtime of the last start the system accepted; 0 = none yet. */
+    @Volatile
+    private var lastStartAcceptedAt = 0L
+
+    /**
+     * [T-fgs-stop-guard] How long an accepted start may exist without a live
+     * instance before we treat it as "never materialised". Matches the
+     * framework's own ~5 s startForeground window, so a record that is still on
+     * its way is always inside it.
+     */
+    private const val PROMOTE_DEADLINE_MS = 5_000L
+
+    /**
      * [T-fgs-start-not-allowed-guard] The last start was refused by the system
      * (background, no exemption). [onAppForegrounded] retries it.
      */
@@ -1058,7 +1078,14 @@ object SessionActivityTracker {
             statusForNotification(),
         )
         startRefused = !started
-        if (!started) serviceWanted = false
+        if (!started) {
+            serviceWanted = false
+            return
+        }
+        // [T-fgs-stop-guard] This is a fresh start: whatever stop an earlier
+        // record was holding is moot, and the promote deadline restarts here.
+        deferredStop = false
+        lastStartAcceptedAt = SystemClock.elapsedRealtime()
     }
 
     /**
@@ -1173,8 +1200,60 @@ object SessionActivityTracker {
         }
         synchronized(serviceLock) {
             serviceWanted = false
+            // [T-fgs-stop-guard] A stop must never land between
+            // startForegroundService() and the instance's startForeground().
+            if (stopWouldStrandAnInFlightStart()) {
+                deferredStop = true
+                Log.d(
+                    TAG,
+                    "stop deferred: a start is still in flight " +
+                        "(unpromoted=${AgentForegroundService.unpromotedInstanceCount()})",
+                )
+                return
+            }
+            deferredStop = false
             AgentForegroundService.stopService(context)
             Log.d(TAG, "All sessions complete, service stopped")
         }
+    }
+
+    /**
+     * [T-fgs-stop-guard] True when dispatching `stopService()` right now could
+     * bring down a ServiceRecord whose `fgRequired` is still set.
+     *
+     * crash-2026-11-14_12-59-47.log: the assist entry mounted a draft, the
+     * duplicate delivery immediately replaced it, so presence went
+     * set → cleared → set inside ~15 ms (`Presence set` / `Presence cleared` /
+     * `All sessions complete, service stopped` in the logcat). The stop reached
+     * AMS while the record was still waiting for its `startForeground()`; the
+     * promote that followed hit a torn-down record, `fgRequired` stayed set, and
+     * the framework killed the process with
+     * `ForegroundServiceDidNotStartInTimeException: ... did not then call
+     * Service.startForeground()` ~250 ms later — which is the crash log, and
+     * why the user saw Minis and the previous app bounce: every kill popped the
+     * assist task and the hook/gesture brought it back.
+     *
+     * Deferring is safe in every case:
+     *  - an unpromoted instance is between onCreate and startForeground(): it
+     *    consumes the deferral right after promoting and stops itself;
+     *  - a start accepted moments ago but not yet materialised as an instance
+     *    either becomes one (same hand-off) or was refused outright, in which
+     *    case there is nothing to stop.
+     */
+    private fun stopWouldStrandAnInFlightStart(): Boolean {
+        if (AgentForegroundService.unpromotedInstanceCount() > 0) return true
+        if (AgentForegroundService.isAlive) return false
+        val sinceStart = SystemClock.elapsedRealtime() - lastStartAcceptedAt
+        return lastStartAcceptedAt > 0L && sinceStart < PROMOTE_DEADLINE_MS
+    }
+
+    /**
+     * [T-fgs-stop-guard] Consumed by [AgentForegroundService.onStartCommand]
+     * once the record has promoted: promotion first, teardown second.
+     */
+    internal fun consumeDeferredStop(): Boolean {
+        if (!deferredStop) return false
+        deferredStop = false
+        return true
     }
 }

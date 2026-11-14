@@ -2,6 +2,9 @@
 .gradle/
 build/
 
+# Kotlin 2.x compiler session output (src/android/.kotlin/{sessions,errors})
+.kotlin/
+
 # Local configuration file (sdk path, etc)
 local.properties
 

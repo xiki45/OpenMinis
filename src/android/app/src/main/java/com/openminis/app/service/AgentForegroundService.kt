@@ -140,6 +140,29 @@ class AgentForegroundService : Service() {
             private set
 
         /**
+         * [T-fgs-stop-guard] Instance accounting for the "start in flight" window.
+         *
+         * A `startForegroundService()` request only becomes safe once the created
+         * instance reaches `startForeground()`. If [SessionActivityTracker] stops
+         * the service in between, AMS brings the ServiceRecord down with
+         * `fgRequired` still set; the instance that was already scheduled then
+         * `startForeground()`s into a dead record, and the framework reports
+         * `ForegroundServiceDidNotStartInTimeException` ("did not then call
+         * Service.startForeground()") on the main thread — killing the process.
+         * That is the crash in crash-2026-11-14_12-59-47.log: the assist entry
+         * mounted/disposed a draft chat twice inside ~15 ms, so a stop landed
+         * while the start was still in flight.
+         *
+         * [unpromotedInstanceCount] is the number of live instances that have not
+         * promoted yet — > 0 means "a start is mid-flight, do not stop".
+         */
+        private val liveInstances = java.util.concurrent.atomic.AtomicInteger(0)
+        private val promotedInstances = java.util.concurrent.atomic.AtomicInteger(0)
+
+        fun unpromotedInstanceCount(): Int =
+            (liveInstances.get() - promotedInstances.get()).coerceAtLeast(0)
+
+        /**
          * Start or refresh the service. Returns false when the system refused
          * the start.
          *
@@ -234,9 +257,40 @@ class AgentForegroundService : Service() {
     private var hasCompletionPending = false
     private var wasBusy = false
 
+    /**
+     * [T-fgs-stop-guard] Whether THIS instance has reached startForeground(),
+     * i.e. whether AMS cleared `fgRequired` for the record it belongs to.
+     */
+    private var selfPromoted = false
+
+    /**
+     * [T-fgs-stop-guard] The one promote call every path goes through, so no
+     * branch can forget to account for it (there are four: safe-mode stub,
+     * nothing-to-run stub, the normal update, and onTaskRemoved's re-anchor).
+     */
+    private fun promoteToForeground(notification: Notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        if (!selfPromoted) {
+            selfPromoted = true
+            promotedInstances.incrementAndGet()
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         isAlive = true
+        // [T-fgs-stop-guard] Register the instance BEFORE anything can throw:
+        // from here until startForeground() this record is "in flight" and the
+        // tracker must not stop it.
+        liveInstances.incrementAndGet()
         // Safe-mode bail-out. When CrashFrequencyDetector tripped in
         // MinisApp.onCreate, the Application skipped its lateinit init
         // for repositories — but a sticky FG service that was running
@@ -291,15 +345,7 @@ class AgentForegroundService : Service() {
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
                     .setOngoing(false)
                     .build()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        stub,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, stub)
-                }
+                promoteToForeground(stub)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                 } else {
@@ -345,15 +391,7 @@ class AgentForegroundService : Service() {
             Log.d(TAG, "start with nothing to run — satisfying the FG contract, then stopping")
             try {
                 val stub = buildNotification(0, "Idle")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        stub,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, stub)
-                }
+                promoteToForeground(stub)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                 } else {
@@ -381,6 +419,18 @@ class AgentForegroundService : Service() {
             // scheduled tasks keeping chats active: otherwise their hold keeps
             // shouldRunService() true and the next refresh restarts the service.
             SessionActivityTracker.stopAllByUser()
+            // [T-fgs-stop-guard] Never leave without promoting: the Stop action
+            // itself arrives through a start (notification PendingIntent), so a
+            // record created by it would otherwise be brought down with
+            // fgRequired set — the "did not then call Service.startForeground()"
+            // process kill.
+            if (!selfPromoted) {
+                try {
+                    promoteToForeground(buildNotification(0, "Idle"))
+                } catch (t: Throwable) {
+                    Log.w(TAG, "ACTION_STOP promote failed: ${t.message}")
+                }
+            }
             stopSelf()
             return START_NOT_STICKY
         }
@@ -392,16 +442,27 @@ class AgentForegroundService : Service() {
 
         val notification = buildNotification(sessionCount, toolStatus)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        promoteToForeground(notification)
         ensureChipTicker()
+
+        // [T-fgs-stop-guard] A stop that the tracker decided while this record
+        // was still unpromoted waits here instead of being dispatched early
+        // (see SessionActivityTracker.stopService). Promotion is done, so
+        // unwinding now is contract-legal: promote + demote inside one
+        // main-thread message, nothing to see for the user.
+        if (SessionActivityTracker.consumeDeferredStop() &&
+            !SessionActivityTracker.shouldRunServiceNow()
+        ) {
+            Log.d(TAG, "deferred stop honoured after promotion")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         return START_STICKY
     }
@@ -445,6 +506,16 @@ class AgentForegroundService : Service() {
             SessionActivityTracker.scheduledSessions.value.isEmpty()
         ) {
             Log.d(TAG, "onTaskRemoved with no active or scheduled sessions, stopping self")
+            // [T-fgs-stop-guard] Same contract as every other exit: promote
+            // first when this instance has not reached startForeground() yet,
+            // otherwise the record is brought down with fgRequired set.
+            if (!selfPromoted) {
+                try {
+                    promoteToForeground(buildNotification(0, "Idle"))
+                } catch (t: Throwable) {
+                    Log.w(TAG, "onTaskRemoved promote failed: ${t.message}")
+                }
+            }
             stopSelf()
             return
         }
@@ -457,15 +528,7 @@ class AgentForegroundService : Service() {
             SessionActivityTracker.sessionCountForNotification(),
             SessionActivityTracker.statusForNotification(),
         )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        promoteToForeground(notification)
     }
 
     // [T-android-overlay-landscape-width-rotation-drift] A Service receives
@@ -481,6 +544,14 @@ class AgentForegroundService : Service() {
 
     override fun onDestroy() {
         isAlive = false
+        // [T-fgs-stop-guard] Drop this instance from the in-flight accounting
+        // BEFORE anything else can throw; an unpromoted instance that dies
+        // without startForeground() is exactly the record AMS reports on.
+        liveInstances.decrementAndGet()
+        if (selfPromoted) {
+            selfPromoted = false
+            promotedInstances.decrementAndGet()
+        }
         releaseWakeLock()
         try {
             overlayController?.hide()

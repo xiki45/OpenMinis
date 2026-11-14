@@ -562,19 +562,34 @@ class MainActivity : ComponentActivity() {
         val launchDeepLink = if (explicitDeepLink !is DeepLinkAction.Unknown) {
             explicitDeepLink
         } else if (isAssistEntryIntent(intent)) {
-            // [T-assist-screenshot] HyperOS 路线冷启动入口：窗口尚未上屏，
-            // 在此尽早发射无障碍截屏，供 ChatScreen 首条消息附带。
-            com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
-            // [T-assist-screenshot] HyperOS 路线没有 AssistSession 写 pendingAssist，
-            // 这里放一个空占位作为"本次新会话是 assist 唤起"的消费门闩：
-            // ChatScreen 见到它才会去等在途截图并注入，普通手开会话不受影响。
-            // [T-assist-context-ttl] 用 latch 而不是无条件 setPendingAssist(null)：
-            // 某些 ROM 对同一次唤起会先后投递 VIS 与 ACTION_ASSIST 两条路，
-            // 后者冷启动到这里时，前者的真实屏幕上下文可能已经写好了 —— 无条件
-            // 覆盖会让本次会话只剩空占位。
-            com.openminis.app.deeplink.DeepLinkCoordinator.latchAssistEntry()
-            rememberAssistTriggerId(intent)
-            DeepLinkAction.OpenAssist
+            // [T-assist-entry-dedupe-cold] 冷启动入口也要过一遍去重。
+            //
+            // 一次手势在这台 HyperOS 上会先后投递两条 assist intent（hook 拉起
+            // MainActivityVoiceAssist → onCreate 走到这里；随后系统/另一条路线再补
+            // 一条落到 onNewIntent）。以前这里只 rememberAssistTriggerId()，没有把
+            // 时间窗 lastAssistEntryDispatchedAtMs 打上 —— 于是紧跟的第二条（不带
+            // trigger_id，走的正是时间窗分支）永远不算重复，两个 __new__ 草稿接连
+            // 组合：前一个 ChatScreen 立刻 dispose、presence set→cleared，FGS 在 15ms
+            // 内 start→stop→start（crash-2026-11-14_12-59-47.log）。
+            if (isDuplicateAssistEntryDelivery(intent)) {
+                // 保留现有的草稿/上次会话，不再另开一个。
+                restoredChatSessionId?.let { DeepLinkAction.OpenSession(it) }
+                    ?: DeepLinkAction.Unknown
+            } else {
+                // [T-assist-screenshot] HyperOS 路线冷启动入口：窗口尚未上屏，
+                // 在此尽早发射无障碍截屏，供 ChatScreen 首条消息附带。
+                com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
+                // [T-assist-screenshot] HyperOS 路线没有 AssistSession 写 pendingAssist，
+                // 这里放一个空占位作为"本次新会话是 assist 唤起"的消费门闩：
+                // ChatScreen 见到它才会去等在途截图并注入，普通手开会话不受影响。
+                // [T-assist-context-ttl] 用 latch 而不是无条件 setPendingAssist(null)：
+                // 某些 ROM 对同一次唤起会先后投递 VIS 与 ACTION_ASSIST 两条路，
+                // 后者冷启动到这里时，前者的真实屏幕上下文可能已经写好了 —— 无条件
+                // 覆盖会让本次会话只剩空占位。
+                com.openminis.app.deeplink.DeepLinkCoordinator.latchAssistEntry()
+                rememberAssistTriggerId(intent)
+                DeepLinkAction.OpenAssist
+            }
         } else {
             restoredChatSessionId
                 ?.let { DeepLinkAction.OpenSession(it) }

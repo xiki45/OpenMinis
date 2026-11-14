@@ -67,7 +67,16 @@ class FgsStartGuardTest {
         assertTrue(start.contains("context.startForegroundService(intent)"))
         // Nothing else in the app calls the raw start for this service.
         val raw = ProductionSources.allKotlinFiles().filter { f ->
-            val t = f.readText()
+            // Strip comment lines first: prose about the API is not a call.
+            // MinisApp's FGS-timeout note spells `startForegroundService()` out
+            // in a comment next to a legitimate `stopService(intent)`, which used
+            // to trip this guard.
+            val t = f.readText().lineSequence()
+                .filterNot { line ->
+                    val l = line.trimStart()
+                    l.startsWith("//") || l.startsWith("*") || l.startsWith("/*")
+                }
+                .joinToString("\n")
             t.contains("Intent(") && t.contains("AgentForegroundService::class.java") &&
                 (t.contains("startForegroundService(") && !f.name.endsWith("AgentForegroundService.kt"))
         }
@@ -84,7 +93,13 @@ class FgsStartGuardTest {
         assertFalse(tracker.contains("AgentForegroundService.startService(\n                context,\n                sessionCountForNotification(),\n                statusForNotification(),\n            )\n        }\n    }\n\n    private fun updateService"))
         val dispatch = tracker.substringAfter("private fun dispatchStart(context: Context) {").substringBefore("\n    }\n")
         assertTrue(dispatch.contains("startRefused = !started"))
-        assertTrue(dispatch.contains("if (!started) serviceWanted = false"))
+        // [T-fgs-stop-guard] a refusal also drops the deferred-stop bookkeeping
+        // for later in the same function; accept either the one-liner (old) or
+        // the early-return block (current).
+        assertTrue(
+            dispatch.contains("if (!started) serviceWanted = false") ||
+                (dispatch.contains("if (!started) {") && dispatch.contains("serviceWanted = false")),
+        )
         val retry = tracker.substringAfter("fun onAppForegrounded() {").substringBefore("\n    }\n")
         assertTrue(retry.contains("if (shouldRunService() && !AgentForegroundService.isAlive)"))
         assertTrue(retry.contains("startServiceIfNeeded()"))
