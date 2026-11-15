@@ -39,6 +39,7 @@ import com.openminis.app.logging.AppLogger
 import com.openminis.app.service.SessionActivityTracker
 import com.openminis.app.ui.navigation.AppNavigation
 import com.openminis.app.ui.navigation.Routes
+import com.openminis.app.ui.navigation.newDraftSessionId
 import com.openminis.app.ui.navigation.safeNavigate
 import com.openminis.app.ui.NewerDatabaseGuidanceScreen
 import com.openminis.app.ui.settings.KEY_FONT_APP_BASE
@@ -108,6 +109,17 @@ class MainActivity : ComponentActivity() {
      * initial deep-link so the user lands back where they were.
      */
     private var currentChatSessionId: String? = null
+
+    /**
+     * [T-assist-draft-id] Draft chat route owned by this assist entry.
+     *
+     * Computed once per Activity instance in [onCreate] and handed to
+     * [AppNavigation], so a recomposition (or an Activity re-create of the
+     * same delivery) reuses it instead of minting another draft — which would
+     * remount ChatScreen and churn SessionActivityTracker into a
+     * startForegroundService()/stopService() pair.
+     */
+    private var assistDraftSessionId: String? = null
 
     /**
      * T166: id of the chat to re-open on first composition after a
@@ -571,11 +583,12 @@ class MainActivity : ComponentActivity() {
             // trigger_id，走的正是时间窗分支）永远不算重复，两个 __new__ 草稿接连
             // 组合：前一个 ChatScreen 立刻 dispose、presence set→cleared，FGS 在 15ms
             // 内 start→stop→start（crash-2026-11-14_12-59-47.log）。
-            if (isDuplicateAssistEntryDelivery(intent)) {
-                // 保留现有的草稿/上次会话，不再另开一个。
-                restoredChatSessionId?.let { DeepLinkAction.OpenSession(it) }
-                    ?: DeepLinkAction.Unknown
-            } else {
+            //
+            // 现在重复投递不再另开会话，而是复用下面算出的同一个草稿路由：
+            // 不闪会话列表，也不会叠出第二个草稿。
+            val triggerId = intent?.getLongExtra(EXTRA_TRIGGER_ID, -1L) ?: -1L
+            val duplicate = isDuplicateAssistEntryDelivery(intent)
+            if (!duplicate) {
                 // [T-assist-screenshot] HyperOS 路线冷启动入口：窗口尚未上屏，
                 // 在此尽早发射无障碍截屏，供 ChatScreen 首条消息附带。
                 com.openminis.app.assist.AssistCapture.requestIfEnabled(this, intent)
@@ -588,8 +601,15 @@ class MainActivity : ComponentActivity() {
                 // 覆盖会让本次会话只剩空占位。
                 com.openminis.app.deeplink.DeepLinkCoordinator.latchAssistEntry()
                 rememberAssistTriggerId(intent)
-                DeepLinkAction.OpenAssist
             }
+            // 身份：手势的纯函数，绝不由组合时的随机数决定 ——
+            // 重组 / Activity 重建都复用同一个草稿路由；重复投递则留在当前会话。
+            assistDraftSessionId = com.openminis.app.assist.resolveAssistDraftSessionId(
+                triggerId,
+                restoredChatSessionId ?: currentChatSessionId,
+                duplicate,
+            ) ?: newDraftSessionId()
+            DeepLinkAction.OpenAssist
         } else {
             restoredChatSessionId
                 ?.let { DeepLinkAction.OpenSession(it) }
@@ -686,6 +706,7 @@ class MainActivity : ComponentActivity() {
                     memoryRepository = app.memoryRepository,
                     navController = navController,
                     initialDeepLink = launchDeepLink,
+                    assistDraftSessionId = assistDraftSessionId,
                 )
 
                 // T-config: root-level minis-config confirm dialog.
@@ -878,6 +899,8 @@ class MainActivity : ComponentActivity() {
 
     private fun handleDeepLink(intent: Intent?) {
         val nav = navController ?: return
+        // [T-assist-draft-id] The gesture id this delivery carries, read once.
+        val triggerId = intent?.getLongExtra(EXTRA_TRIGGER_ID, -1L) ?: -1L
         val isAssistEntry = isAssistEntryIntent(intent)
         // [T-assist-entry-dedupe] Collapse the burst of intents one system
         // invocation produces BEFORE touching any state.
@@ -950,7 +973,19 @@ class MainActivity : ComponentActivity() {
                         .setPendingChatAction(DeepLinkCoordinator.ChatAction.OPEN_CAMERA)
                     else -> {}
                 }
-                val newRoute = Routes.chat("__new__${java.util.UUID.randomUUID()}")
+                // [T-assist-draft-id] Assist resolves the gesture-stable route
+                // here (a duplicate already returned early above); every other
+                // quick action mints a fresh draft.
+                val newRoute = when (action) {
+                    is DeepLinkAction.OpenAssist -> Routes.chat(
+                        com.openminis.app.assist.resolveAssistDraftSessionId(
+                            triggerId,
+                            currentChatSessionId,
+                            duplicate = false,
+                        ) ?: newDraftSessionId()
+                    )
+                    else -> Routes.chat(newDraftSessionId())
+                }
                 nav.navigate(newRoute) {
                     popUpTo(Routes.SESSION_LIST) { inclusive = false }
                     launchSingleTop = true

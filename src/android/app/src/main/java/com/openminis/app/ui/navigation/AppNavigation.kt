@@ -265,6 +265,13 @@ fun AppNavigation(
     memoryRepository: MemoryRepository? = null,
     navController: NavHostController = rememberNavController(),
     initialDeepLink: DeepLinkAction? = null,
+    /**
+     * [T-assist-draft-id] Draft route for an assist entry. MainActivity
+     * computes this in `onCreate` (never in composition) and is the only
+     * caller; the `?: newDraftSessionId()` fallback only guards a future call
+     * site.
+     */
+    assistDraftSessionId: String? = null,
 ) {
     val context = LocalContext.current
 
@@ -532,7 +539,7 @@ fun AppNavigation(
         // 它的 LaunchedEffect(sessionId) 会在第一次组合时消费门闩与截图。
         // 不能改用 safeNavigate：首帧 SESSION_LIST 的 entry 还没到 RESUMED，
         // safeNavigate 会静默丢弃（见 SafeNavigate.kt）。
-        is DeepLinkAction.OpenAssist -> Routes.chat("__new__${java.util.UUID.randomUUID()}")
+        is DeepLinkAction.OpenAssist -> Routes.chat(assistDraftSessionId ?: newDraftSessionId())
         is DeepLinkAction.NewVoiceChat -> {
             DeepLinkCoordinator.setPendingChatAction(
                 DeepLinkCoordinator.ChatAction.START_VOICE,
