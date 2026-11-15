@@ -284,6 +284,35 @@ class AgentForegroundService : Service() {
         }
     }
 
+    /**
+     * [T-fgs-promote-early] The cheapest possible `startForeground()`.
+     *
+     * Deliberately not [buildNotification]: that builds RemoteViews, PendingIntents
+     * and localized strings and takes longer than the 5 ms AMS can give us
+     * between CREATE and a queued teardown (crash-2026-11-15_12-50-47.log).
+     * This one is a plain notification on the existing channel, replaced a
+     * message later by the real one under the same id.
+     */
+    private fun promoteContractStub() {
+        if (selfPromoted) return
+        try {
+            val stub = androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Minis")
+                .setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setOngoing(true)
+                .build()
+            promoteToForeground(stub)
+        } catch (t: Throwable) {
+            // The contract stub is the last line of defence: if even it cannot
+            // promote (background start refused, SecurityException), the record
+            // will be torn down with `fgRequired` set unless we bail out here.
+            // stopSelf() on an unpromoted record is the sanctioned exit; waiting
+            // for onStartCommand to promote would just spend the 5 s window.
+            Log.w(TAG, "contract stub promote failed: ${t.message} — bailing out")
+            stopSelf()
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         isAlive = true
@@ -291,6 +320,24 @@ class AgentForegroundService : Service() {
         // from here until startForeground() this record is "in flight" and the
         // tracker must not stop it.
         liveInstances.incrementAndGet()
+        // [T-fgs-promote-early] Satisfy the foreground-service contract as the
+        // FIRST thing this record does, before any state read or notification
+        // build.
+        //
+        // crash-2026-11-15_12-50-47.log: presence churned every 10-60 ms, so
+        // the tracker emitted stop() and start() 0-1 ms apart on the same
+        // component. AMS collapsed the pair onto one ServiceRecord - CREATE at
+        // .798, START at .799, queued teardown at .804. That is 5 ms, less than
+        // `buildNotification()` in onStartCommand needs, so the record was
+        // brought down with `fgRequired` still set and the framework killed the
+        // process: `ForegroundServiceDidNotStartInTimeException`.
+        //
+        // A minimal notification here (no RemoteViews, no PendingIntents, ~1 ms)
+        // clears `fgRequired` before that teardown can be delivered;
+        // onStartCommand then replaces it with the real one through the same
+        // notification id.
+        createNotificationChannel()
+        promoteContractStub()
         // Safe-mode bail-out. When CrashFrequencyDetector tripped in
         // MinisApp.onCreate, the Application skipped its lateinit init
         // for repositories — but a sticky FG service that was running
@@ -303,10 +350,8 @@ class AgentForegroundService : Service() {
         // onStartCommand satisfy the FG-deadline + stopSelf.
         if (com.openminis.app.crash.CrashFrequencyDetector.isSafeMode()) {
             Log.w(TAG, "safe-mode ON — skipping overlay/wake-lock bring-up")
-            createNotificationChannel()
             return
         }
-        createNotificationChannel()
         startTimeMs = SystemClock.elapsedRealtime()
         acquireWakeLock()
         startOverlayObserver()
@@ -450,8 +495,11 @@ class AgentForegroundService : Service() {
         // (see SessionActivityTracker.stopService). Promotion is done, so
         // unwinding now is contract-legal: promote + demote inside one
         // main-thread message, nothing to see for the user.
-        if (SessionActivityTracker.consumeDeferredStop() &&
-            !SessionActivityTracker.shouldRunServiceNow()
+        // The service is wanted again (a presence/session re-entry landed
+        // between the deferral and this promote): do NOT consume the deferral,
+        // it belongs to the next real stop decision.
+        if (!SessionActivityTracker.shouldRunServiceNow() &&
+            SessionActivityTracker.consumeDeferredStop()
         ) {
             Log.d(TAG, "deferred stop honoured after promotion")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {

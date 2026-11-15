@@ -1,6 +1,8 @@
 package com.openminis.app.service
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.openminis.app.agent.jobs.AgentJobRegistry
@@ -1063,6 +1065,40 @@ object SessionActivityTracker {
     private const val PROMOTE_DEADLINE_MS = 5_000L
 
     /**
+     * [T-fgs-stop-settle] How long after an accepted start even a *promoted*
+     * instance keeps a stop back.
+     *
+     * crash-2026-11-15_12-50-47.log: the assist entry churns presence
+     * ("Presence set" / "Presence cleared" for a new `__new__` draft every
+     * 10-60 ms), so the tracker emitted stop() and start() **0-1 ms apart** on
+     * the same component - nine times in 17 s. A live promoted instance at the
+     * moment of the stop says nothing about the start that is about to follow:
+     * AMS collapses the pair onto one ServiceRecord, the record that survives
+     * is the new one, and the queued teardown reaches it before its
+     * `startForeground()` (5 ms in production, less than `buildNotification()`
+     * takes). `fgRequired` was still set at teardown -> process kill.
+     *
+     * So "a start was accepted moments ago" alone is enough to wait: the stop
+     * is retried by [scheduleStopRetry] once the pair has settled.
+     */
+    private const val STOP_SETTLE_MS = 300L
+
+    /** [T-fgs-stop-settle] How long [scheduleStopRetry] waits before retrying. */
+    private const val STOP_RETRY_MS = STOP_SETTLE_MS + 50L
+
+    /**
+     * [T-fgs-stop-settle] Bumped by every start / stop so a stale retry no-ops.
+     *
+     * Written under [serviceLock] and read under it by the retry callback; the
+     * volatile is belt-and-braces for readers outside the lock (there is
+     * exactly one today: a frozen test snapshot).
+     */
+    @Volatile
+    private var stopRetryToken = 0L
+
+    private val stopRetryHandler = Handler(Looper.getMainLooper())
+
+    /**
      * [T-fgs-start-not-allowed-guard] The last start was refused by the system
      * (background, no exemption). [onAppForegrounded] retries it.
      */
@@ -1086,6 +1122,9 @@ object SessionActivityTracker {
         // record was holding is moot, and the promote deadline restarts here.
         deferredStop = false
         lastStartAcceptedAt = SystemClock.elapsedRealtime()
+        // [T-fgs-stop-settle] Any stop retry scheduled for the previous
+        // presence cycle belongs to a service we just asked for again.
+        stopRetryToken++
     }
 
     /**
@@ -1204,6 +1243,10 @@ object SessionActivityTracker {
             // startForegroundService() and the instance's startForeground().
             if (stopWouldStrandAnInFlightStart()) {
                 deferredStop = true
+                // [T-fgs-stop-settle] Nothing may consume this deferral if no
+                // further start arrives, so the stop is retried once the
+                // start/stop pair has settled instead of being dropped.
+                scheduleStopRetry(context)
                 Log.d(
                     TAG,
                     "stop deferred: a start is still in flight " +
@@ -1242,18 +1285,61 @@ object SessionActivityTracker {
      */
     private fun stopWouldStrandAnInFlightStart(): Boolean {
         if (AgentForegroundService.unpromotedInstanceCount() > 0) return true
-        if (AgentForegroundService.isAlive) return false
+        if (lastStartAcceptedAt <= 0L) return false
         val sinceStart = SystemClock.elapsedRealtime() - lastStartAcceptedAt
-        return lastStartAcceptedAt > 0L && sinceStart < PROMOTE_DEADLINE_MS
+        // [T-fgs-stop-settle] No instance yet: the record may still be on its
+        // way, so the framework's own ~5 s promote window is the deadline.
+        if (!AgentForegroundService.isAlive) return sinceStart < PROMOTE_DEADLINE_MS
+        // A live instance is NOT enough on its own - see STOP_SETTLE_MS. A
+        // start accepted inside the settle window means presence is churning,
+        // and the stop we are about to send would race the start that follows
+        // it 0-1 ms later onto the same ServiceRecord.
+        return sinceStart < STOP_SETTLE_MS
+    }
+
+    /**
+     * [T-fgs-stop-settle] Re-run a deferred stop after the settle window.
+     *
+     * Keeps the "promote first, teardown second" ordering while guaranteeing
+     * the service does stop: a deferral nobody consumes would otherwise leave a
+     * foreground service running with nothing to do. [stopRetryToken] makes a
+     * newer start or stop cancel this retry, so retries cannot pile up during a
+     * presence storm.
+     */
+    private fun scheduleStopRetry(context: Context) {
+        val token = ++stopRetryToken
+        stopRetryHandler.postDelayed({
+            synchronized(serviceLock) {
+                if (token != stopRetryToken) return@synchronized
+                if (shouldRunService()) return@synchronized
+                // The settle window is long enough for another start to have
+                // been accepted and its instance created without promoting
+                // (a sticky restart or a refused-then-retried start does not
+                // bump the token). Same rule as stopService(): never dispatch
+                // a stop onto an unpromoted record.
+                if (stopWouldStrandAnInFlightStart()) {
+                    scheduleStopRetry(context)
+                    Log.d(TAG, "deferred stop re-armed: a start is still in flight")
+                    return@synchronized
+                }
+                deferredStop = false
+                AgentForegroundService.stopService(context)
+                Log.d(TAG, "deferred stop retried after the settle window")
+            }
+        }, STOP_RETRY_MS)
     }
 
     /**
      * [T-fgs-stop-guard] Consumed by [AgentForegroundService.onStartCommand]
      * once the record has promoted: promotion first, teardown second.
+     *
+     * Under [serviceLock] because it clears a flag the dispatch paths write
+     * under the same lock: a load-then-clear outside it could race a
+     * concurrent `deferredStop = true` and drop the deferral.
      */
-    internal fun consumeDeferredStop(): Boolean {
-        if (!deferredStop) return false
+    internal fun consumeDeferredStop(): Boolean = synchronized(serviceLock) {
+        if (!deferredStop) return@synchronized false
         deferredStop = false
-        return true
+        true
     }
 }
