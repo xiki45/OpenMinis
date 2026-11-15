@@ -777,10 +777,20 @@ class MainActivity : ComponentActivity() {
      * release any presence we held. Pause / Home / lock-screen do NOT
      * trigger this — those are exactly the cases the FG service exists
      * to bias OOM through.
+     *
+     * [T-assist-draft-id] A configuration change (font size, rotation,
+     * dark-mode switch) tears this instance down but re-creates it ~600 ms
+     * later on the same route. Releasing presence there stops the FG service
+     * and starts it again on the next frame — one start/stop pair per config
+     * change, measured 2026-11-15 on dali. The route is carried over by
+     * `onSaveInstanceState`, so hold the presence and let the new instance
+     * keep it; only a real teardown (back out of the chat, finish) releases.
      */
     override fun onDestroy() {
-        currentChatSessionId?.let { SessionActivityTracker.setAbsent(it) }
-        currentChatSessionId = null
+        if (!isChangingConfigurations) {
+            currentChatSessionId?.let { SessionActivityTracker.setAbsent(it) }
+            currentChatSessionId = null
+        }
         super.onDestroy()
     }
 

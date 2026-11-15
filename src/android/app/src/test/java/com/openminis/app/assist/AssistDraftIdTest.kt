@@ -106,4 +106,26 @@ class AssistDraftIdTest {
             source.lineSequence().none { it.contains("OpenAssist") && it.contains("randomUUID") },
         )
     }
+
+    /**
+     * A config change re-creates the Activity on the same route. Releasing
+     * presence in `onDestroy` there made the FG service stop and start again
+     * ~600 ms apart for every font-size/rotation change (measured on dali,
+     * 2026-11-15): two stop/start pairs for one font_scale round trip.
+     */
+    @Test
+    fun activityRecreateDoesNotReleasePresence() {
+        val source = ProductionSources.read("MainActivity.kt")
+        val onDestroy = source.substringAfter("override fun onDestroy() {")
+            .substringBefore("super.onDestroy()")
+        assertTrue(
+            "onDestroy must keep presence across a configuration change",
+            onDestroy.contains("if (!isChangingConfigurations)"),
+        )
+        assertTrue(
+            "the release itself must stay inside that guard",
+            onDestroy.indexOf("if (!isChangingConfigurations)") <
+                onDestroy.indexOf("setAbsent("),
+        )
+    }
 }
