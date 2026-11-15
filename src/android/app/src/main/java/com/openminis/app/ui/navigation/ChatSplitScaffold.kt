@@ -344,6 +344,23 @@ fun ChatSplitScaffold(
     // selection is hoisted here at all.
     var selectedSessionId by rememberSaveable { mutableStateOf(initialSessionId) }
 
+    // [T-android-chat-route-follows] The route argument this scaffold last
+    // acted on.
+    //
+    // `selectedSessionId` is seeded from `initialSessionId` exactly once, and
+    // the detail pane then renders the PANE navigator's contentKey, so a warm
+    // navigation to another `chat/{id}` (assist entry, notification, share)
+    // rebuilt this scaffold while re-showing the chat that was already open:
+    // measured on dali, 10 assist entries in 500 ms left the screen on the same
+    // session although ten `chat/__new__assist-…` routes went by, remounting
+    // ChatScreen nine times.
+    //
+    // Saveable on purpose: a configuration change or a process restore passes
+    // the SAME argument, so comparing against the restored value keeps the user
+    // on the chat they had switched to inside the pane instead of yanking them
+    // back to the route's one.
+    var seenRouteSession by rememberSaveable { mutableStateOf(initialSessionId) }
+
     // [T-android-tablet-sidebar-collapse] Whether the list pane is hidden.
     //
     // Persisted like the width: a user who collapsed the sidebar to give a long
@@ -437,6 +454,19 @@ fun ChatSplitScaffold(
             },
         )
         val scope = rememberCoroutineScope()
+
+        // [T-android-chat-route-follows] The outer route's chat argument wins
+        // when it CHANGES. Guarded by the saveable `seenRouteSession` above, so
+        // this fires only for a real argument change: a rebuild of the pane
+        // navigator (breakpoint, configuration change) re-runs the effect with
+        // the same argument and does nothing.
+        LaunchedEffect(initialSessionId) {
+            val target = routeArgumentToOpen(initialSessionId, seenRouteSession)
+                ?: return@LaunchedEffect
+            seenRouteSession = target
+            selectedSessionId = target
+            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, target)
+        }
 
         val currentSessionId = navigator.currentDestination
             ?.takeIf { it.pane == ListDetailPaneScaffoldRole.Detail }
@@ -1010,3 +1040,23 @@ fun ChatSplitScaffoldRoute(
         },
     )
 }
+
+/**
+ * [T-android-chat-route-follows] The chat a route-argument change should open,
+ * or null when there is nothing to do.
+ *
+ * `ChatSplitScaffold` seeds its selection from the route argument once, and the
+ * detail pane then renders the PANE navigator's contentKey. Without this rule a
+ * warm navigation to another `chat/{id}` (assist entry, notification, share)
+ * rebuilt the scaffold and re-showed the previous chat while ten new routes
+ * went by - measured on dali, 2026-11-15.
+ *
+ * Compares against the argument this scaffold last acted on rather than against
+ * the current selection: a configuration change or process restore passes the
+ * same argument, and a user who switched chats inside the pane must stay where
+ * they are.
+ */
+internal fun routeArgumentToOpen(
+    currentRouteSessionId: String?,
+    lastSeenRouteSessionId: String?,
+): String? = currentRouteSessionId?.takeIf { it != lastSeenRouteSessionId }

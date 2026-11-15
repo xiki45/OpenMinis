@@ -795,6 +795,15 @@ fun ChatScreen(
     // is a non-composable scope so we lift the read up here.
     val tHangDiagAppContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     androidx.compose.runtime.DisposableEffect(sessionId) {
+        // [T-chat-presence] Presence belongs to the composed chat, not to the
+        // NavHost route. `sessions` and `chat/{id}` both render the
+        // list/detail scaffold, and Back from a chat only pops the PANE
+        // navigator: the route stays `chat/{id}` while the session list is on
+        // screen, so the route-based owner (MainActivity's back-stack
+        // collector) kept the FG service and its notification alive on the
+        // list. Measured on dali: back arrow → list, `Presence cleared` never
+        // logged, notification stayed.
+        com.openminis.app.service.SessionActivityTracker.setPresent(sessionId)
         ChatViewModelStore.setActiveSession(sessionId)
         // [OpenMinis#433] On screen again (back from a pushed page, or reopened
         // by New Chat): no other New Chat may take this draft now.
@@ -835,8 +844,15 @@ fun ChatScreen(
             // Skip cleanup on configuration changes (e.g. rotation) — the
             // composable is about to re-mount with the same session and its
             // pending attachments would be lost if we released the ViewModel.
-            val activity = context as? android.app.Activity
-            if (activity?.isChangingConfigurations != true) {
+            //
+            // [T-chat-presence] Same condition releases presence: leaving for
+            // the session list / a settings screen drops the FG service (and
+            // its notification) now; a configuration change keeps it, because
+            // the same chat re-mounts on the next frame and re-stamping it
+            // would cost a start/stop pair.
+            val recreating = context.findActivity()?.isChangingConfigurations == true
+            if (!recreating) {
+                com.openminis.app.service.SessionActivityTracker.setAbsent(sessionId)
                 viewModel.cleanupIfEmptyOnExit()
             }
         }
@@ -8803,3 +8819,20 @@ private fun SpeedTierNavBadge(tier: com.openminis.app.data.SpeedTier, textSize: 
  */
 internal fun hasMovableShareContent(inputText: String, attachmentCount: Int): Boolean =
     inputText.isNotBlank() || attachmentCount > 0
+
+/**
+ * [T-chat-presence] The hosting Activity behind a Compose `LocalContext`.
+ *
+ * `LocalContext` is usually the Activity but can be a `ContextThemeWrapper`
+ * depending on the host, and `isChangingConfigurations` is what separates a
+ * rotation (chat re-mounts on the next frame — keep presence and the FG
+ * service) from a real exit (release both).
+ */
+private fun android.content.Context.findActivity(): android.app.Activity? {
+    var c: android.content.Context? = this
+    while (c != null) {
+        if (c is android.app.Activity) return c
+        c = (c as? android.content.ContextWrapper)?.baseContext
+    }
+    return null
+}

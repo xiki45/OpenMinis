@@ -96,8 +96,11 @@ class AgentForegroundService : Service() {
          * intent); neither may keep an idle service alive. Only Stop is exempt -
          * it has its own branch.
          */
-        internal fun startHasNothingToRun(action: String?, shouldRun: Boolean): Boolean =
-            action != ACTION_STOP && !shouldRun
+        internal fun startHasNothingToRun(
+            action: String?,
+            shouldRun: Boolean,
+            idleWindowElapsed: Boolean = true,
+        ): Boolean = action != ACTION_STOP && !shouldRun && idleWindowElapsed
 
         // [T-bg-overlay phase 2 fix] Separate channel + notification id
         // for the SYSTEM_ALERT_WINDOW permission nudge so it can have a
@@ -432,7 +435,17 @@ class AgentForegroundService : Service() {
         // "0 sessions | Idle" notification and returned START_STICKY again -
         // an ongoing notification and status-bar chip that nothing would ever
         // stop, reported as "the Agent is running" with no chat open.
-        if (startHasNothingToRun(intent?.action, SessionActivityTracker.shouldRunServiceNow())) {
+        // [T-fgs-idle-settle] `idleWindowElapsed()` keeps this backstop from
+        // tearing the instance down during the presence gap of a chat switch
+        // (the outgoing screen's dispose reaches us before the incoming one's
+        // first composition). The tracker's retry stops it for real once the
+        // idleness lasts.
+        if (startHasNothingToRun(
+                intent?.action,
+                SessionActivityTracker.shouldRunServiceNow(),
+                SessionActivityTracker.idleWindowElapsed(),
+            )
+        ) {
             Log.d(TAG, "start with nothing to run — satisfying the FG contract, then stopping")
             try {
                 val stub = buildNotification(0, "Idle")

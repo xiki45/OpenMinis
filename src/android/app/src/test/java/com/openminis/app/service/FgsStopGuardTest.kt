@@ -57,8 +57,15 @@ class FgsStopGuardTest {
             return sinceStart < settleMs
         }
 
+        /** [T-fgs-idle-settle] Mirrors IDLE_SETTLE_MS. */
+        private val idleMs = 300L
+
+        /** First stop request of the current idle stretch; null = service wanted. */
+        private var idleSince: Long? = null
+
         fun startAccepted() {
             lastStartAcceptedAt = now
+            idleSince = null
             deferred = false
             retryAt = null
         }
@@ -93,11 +100,16 @@ class FgsStopGuardTest {
         fun promoted() = promotedInstances++
 
         fun stopRequested() {
-            if (wouldStrandAnInFlightStart()) {
+            val first = idleSince ?: now.also { idleSince = it }
+            // Mirrors stopService(): the guard, and the idle window that keeps
+            // a chat switch (presence empty for 40-120 ms) from cycling the
+            // service.
+            if (wouldStrandAnInFlightStart() || now - first < idleMs) {
                 deferred = true
                 retryAt = now + retryMs
                 return
             }
+            idleSince = null
             deferred = false
             retryAt = null
             stops++
@@ -105,6 +117,10 @@ class FgsStopGuardTest {
 
         fun consumeDeferredStop(): Boolean {
             if (!deferred) return false
+            // Mirrors the production gate: a deferral younger than the idle
+            // window is not honoured by the promote path.
+            val first = idleSince ?: return false
+            if (now - first < idleMs) return false
             deferred = false
             retryAt = null
             return true
@@ -145,31 +161,36 @@ class FgsStopGuardTest {
     }
 
     @Test
-    fun `the deferred stop is honoured only after promotion`() {
+    fun `promotion alone does not honour a deferral younger than the idle window`() {
         val t = Guarded()
         t.startAccepted()
         t.instanceCreated()
         t.stopRequested()
-        // The service reaches startForeground(), then consumes the deferral.
+        t.now += 50L
+        // The service reaches startForeground() and asks to consume the
+        // deferral, but it has only just gone idle: a chat switch looks exactly
+        // like this, and stopping here is what cycled the service.
         t.promoted()
-        assertTrue(t.consumeDeferredStop())
-        // Promoting is what makes unwinding legal; once the start/stop pair has
-        // settled the second request goes out.
+        assertFalse(t.consumeDeferredStop())
+        // The retry fires once the idle window has passed and finishes the job.
         t.now += 400L
-        t.stopRequested()
+        t.retryFires()
         assertEquals(1, t.stops)
         assertFalse(t.consumeDeferredStop())
     }
 
     @Test
-    fun `a stop on a long-lived promoted instance is dispatched immediately`() {
+    fun `a stop on a long-lived promoted instance is dispatched after the idle window`() {
         val t = Guarded()
         t.startAccepted()
         t.instanceCreated()
         t.promoted()
         t.now += 600L
         t.stopRequested()
-        assertEquals("a settled service stops at once", 1, t.stops)
+        assertEquals("the idle window opens on the first request", 0, t.stops)
+        assertTrue(t.deferred)
+        t.retryFires()
+        assertEquals("a settled, unwanted service stops", 1, t.stops)
         assertFalse(t.deferred)
     }
 
@@ -223,6 +244,7 @@ class FgsStopGuardTest {
         // No instance ever appears (the start was accepted but nothing ran).
         t.now += 5_001L
         t.stopRequested()
+        t.retryFires()
         assertEquals("past the promote deadline the stop goes out", 1, t.stops)
     }
 
@@ -258,12 +280,40 @@ class FgsStopGuardTest {
         assertEquals(1, t.stops)
     }
 
+    /**
+     * The regression this test exists for: with the app showing chat A, ten
+     * assist entries 250 ms apart destroyed and recreated
+     * AgentForegroundService nine times. Each switch empties presence for the
+     * few frames between the outgoing ChatScreen's dispose and the incoming
+     * one's composition; the stop must wait for the idle window and be
+     * cancelled by the start that follows.
+     */
     @Test
-    fun `a refused start leaves nothing to defer`() {
+    fun `a brief presence gap during a chat switch does not cycle the service`() {
         val t = Guarded()
-        // dispatchStart() never records a start when the system refused it.
+        t.startAccepted()
+        t.instanceCreated()
+        t.promoted()
+        t.now += 5_000L
+        t.stopRequested()          // outgoing chat disposed
+        t.now += 80L
+        t.startAccepted()          // incoming chat composed
+        assertEquals("no stop may be dispatched inside the gap", 0, t.stops)
+        assertFalse(t.deferred)
+        assertFalse("the start path cancels the retry", t.hasPendingRetry())
+        t.retryFires()
+        assertEquals(0, t.stops)
+    }
+
+    @Test
+    fun `a refused start still waits out the idle window before stopping`() {
+        val t = Guarded()
+        // dispatchStart() never records a start when the system refused it, so
+        // there is no record to strand - only the idle window applies.
         t.stopRequested()
-        assertEquals("nothing was started, so nothing needs deferring", 1, t.stops)
+        assertEquals(0, t.stops)
+        t.retryFires()
+        assertEquals("nothing was started, so the stop goes out on the retry", 1, t.stops)
         assertFalse(t.deferred)
     }
 
@@ -305,6 +355,12 @@ class FgsStopGuardTest {
         // [T-fgs-stop-settle] The live-instance shortcut is gone and a deferred
         // stop is retried instead of dropped.
         assertTrue(tracker.contains("STOP_SETTLE_MS"))
+        // [T-fgs-idle-settle] A stop waits for the service to have been
+        // unwanted for the settle window, and the promote path honours the
+        // same gate.
+        assertTrue(tracker.contains("IDLE_SETTLE_MS"))
+        assertTrue(tracker.contains("idleFor < IDLE_SETTLE_MS"))
+        assertTrue(tracker.contains("SystemClock.elapsedRealtime() - idleSinceElapsed"))
         assertTrue(tracker.contains("scheduleStopRetry(context)"))
         assertTrue(
             "a live instance must no longer wave the stop through by itself",
@@ -334,6 +390,14 @@ class FgsStopGuardTest {
             "the cold-start entry must dedupe like onNewIntent does",
             2,
             Regex("isDuplicateAssistEntryDelivery\\(intent\\)").findAll(activity).count(),
+        )
+        // [T-chat-presence] Presence follows the composed chat, not the route.
+        val chat = ProductionSources.read("ui/chat/ChatScreen.kt")
+        assertTrue(chat.contains("SessionActivityTracker.setPresent(sessionId)"))
+        assertTrue(chat.contains("SessionActivityTracker.setAbsent(sessionId)"))
+        assertFalse(
+            "the route-based owner must not set presence again",
+            activity.contains("SessionActivityTracker.setPresent("),
         )
     }
 }

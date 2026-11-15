@@ -673,6 +673,13 @@ class MainActivity : ComponentActivity() {
                 // the moment Home is pressed and a Pixel 4a will
                 // reclaim within a couple of minutes (see
                 // docs/parity/android-keep-alive-audit.md).
+                // [T-chat-presence] Presence itself is NOT driven from here
+                // any more: `sessions` and `chat/{id}` both render the
+                // list/detail scaffold, and Back from a chat only pops the
+                // PANE navigator, so this route stayed `chat/{id}` while the
+                // list was on screen -- the FG service (and its notification)
+                // never went away. ChatScreen owns presence now, because it
+                // is composed exactly when a conversation is visible.
                 DisposableEffect(navController) {
                     val job = lifecycleScope.launch {
                         navController.currentBackStackEntryFlow.collect { entry ->
@@ -681,17 +688,8 @@ class MainActivity : ComponentActivity() {
                             com.openminis.app.diagnostics.HangDetector.noteScreen(entry.destination.route)
                             com.openminis.app.diagnostics.JankDiag.setScreen(entry.destination.route)
                             val isChatRoute = entry.destination.route == Routes.CHAT
-                            val sid = entry.arguments?.getString("sessionId").takeIf { isChatRoute }
-                            val previous = currentChatSessionId
-                            if (sid != previous) {
-                                if (previous != null) {
-                                    SessionActivityTracker.setAbsent(previous)
-                                }
-                                if (sid != null) {
-                                    SessionActivityTracker.setPresent(sid)
-                                }
-                                currentChatSessionId = sid
-                            }
+                            currentChatSessionId =
+                                entry.arguments?.getString("sessionId").takeIf { isChatRoute }
                         }
                     }
                     onDispose { job.cancel() }

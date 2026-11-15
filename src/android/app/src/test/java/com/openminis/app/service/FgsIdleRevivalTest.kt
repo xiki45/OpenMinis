@@ -39,6 +39,33 @@ class FgsIdleRevivalTest {
         assertTrue(AgentForegroundService.startHasNothingToRun(action = null, shouldRun = false))
     }
 
+    /**
+     * [T-fgs-idle-settle] Switching chats empties presence for the frames
+     * between the outgoing ChatScreen's dispose and the incoming one's
+     * composition. A start landing in that gap must not read as "idle".
+     */
+    @Test
+    fun `a momentary empty presence during a chat switch is not an idle start`() {
+        assertFalse(
+            AgentForegroundService.startHasNothingToRun(
+                action = null,
+                shouldRun = false,
+                idleWindowElapsed = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `an idle start still stops once the idle window has elapsed`() {
+        assertTrue(
+            AgentForegroundService.startHasNothingToRun(
+                action = null,
+                shouldRun = false,
+                idleWindowElapsed = true,
+            ),
+        )
+    }
+
     @Test
     fun `a start that still has a chat to keep runs normally`() {
         assertFalse(AgentForegroundService.startHasNothingToRun(action = null, shouldRun = true))
@@ -72,7 +99,12 @@ class FgsIdleRevivalTest {
         )
         assertTrue(
             "the backstop decides through startHasNothingToRun, null intent included",
-            svc.contains("if (startHasNothingToRun(intent?.action, SessionActivityTracker.shouldRunServiceNow())) {"),
+            svc.contains("if (startHasNothingToRun(") &&
+                svc.contains("SessionActivityTracker.shouldRunServiceNow(),"),
+        )
+        assertTrue(
+            "the teardown must wait out the idle window a chat switch creates",
+            svc.contains("SessionActivityTracker.idleWindowElapsed(),"),
         )
     }
 }

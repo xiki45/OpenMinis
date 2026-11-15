@@ -1099,6 +1099,39 @@ object SessionActivityTracker {
     private val stopRetryHandler = Handler(Looper.getMainLooper())
 
     /**
+     * [T-fgs-idle-settle] How long the service must have been unwanted before a
+     * stop is dispatched at all.
+     *
+     * Switching chats empties presence for the few frames between the outgoing
+     * ChatScreen's dispose and the incoming one's first composition (40-120 ms
+     * measured on dali). A stop sent into that gap destroys the instance and
+     * the next session starts it again - one create/destroy pair per switch,
+     * nine of them for ten assist entries 250 ms apart. Waiting the same window
+     * the start guard already uses costs at most 300 ms on a real teardown.
+     */
+    private const val IDLE_SETTLE_MS = 300L
+
+    /**
+     * [T-fgs-idle-settle] elapsedRealtime of the first stop request in the
+     * current idle stretch; 0 while the service is wanted.
+     */
+    private var idleSinceElapsed = 0L
+
+    /**
+     * [T-fgs-idle-settle] True once the service has been unwanted for at least
+     * [IDLE_SETTLE_MS].
+     *
+     * `idleSinceElapsed == 0` means nothing has marked the service unwanted
+     * since the last start (a sticky restart with an empty tracker, say), so
+     * there is nothing to wait for and the answer is true: the caller's
+     * teardown decision stands.
+     */
+    internal fun idleWindowElapsed(): Boolean = synchronized(serviceLock) {
+        idleSinceElapsed == 0L ||
+            SystemClock.elapsedRealtime() - idleSinceElapsed >= IDLE_SETTLE_MS
+    }
+
+    /**
      * [T-fgs-start-not-allowed-guard] The last start was refused by the system
      * (background, no exemption). [onAppForegrounded] retries it.
      */
@@ -1121,6 +1154,9 @@ object SessionActivityTracker {
         // [T-fgs-stop-guard] This is a fresh start: whatever stop an earlier
         // record was holding is moot, and the promote deadline restarts here.
         deferredStop = false
+        // [T-fgs-idle-settle] Something wants the service again; the idle
+        // window starts over on the next stop request.
+        idleSinceElapsed = 0L
         lastStartAcceptedAt = SystemClock.elapsedRealtime()
         // [T-fgs-stop-settle] Any stop retry scheduled for the previous
         // presence cycle belongs to a service we just asked for again.
@@ -1239,9 +1275,20 @@ object SessionActivityTracker {
         }
         synchronized(serviceLock) {
             serviceWanted = false
+            val now = SystemClock.elapsedRealtime()
+            // [T-fgs-idle-settle] Start the "nothing wants me" clock on the
+            // first stop request of an idle stretch.
+            if (idleSinceElapsed == 0L) idleSinceElapsed = now
             // [T-fgs-stop-guard] A stop must never land between
             // startForegroundService() and the instance's startForeground().
-            if (stopWouldStrandAnInFlightStart()) {
+            // [T-fgs-idle-settle] Nor while the service has been unwanted for
+            // less than the settle window: every chat-to-chat switch empties
+            // presence for 40-120 ms (the old ChatScreen disposes before the new
+            // one composes), and stopping there cost one destroy/create pair
+            // per switch - measured on dali, 10 assist entries 250 ms apart
+            // produced 9 of them while presence was otherwise continuous.
+            val idleFor = now - idleSinceElapsed
+            if (stopWouldStrandAnInFlightStart() || idleFor < IDLE_SETTLE_MS) {
                 deferredStop = true
                 // [T-fgs-stop-settle] Nothing may consume this deferral if no
                 // further start arrives, so the stop is retried once the
@@ -1249,11 +1296,17 @@ object SessionActivityTracker {
                 scheduleStopRetry(context)
                 Log.d(
                     TAG,
-                    "stop deferred: a start is still in flight " +
-                        "(unpromoted=${AgentForegroundService.unpromotedInstanceCount()})",
+                    "stop deferred: " +
+                        if (idleFor < IDLE_SETTLE_MS) {
+                            "idle for ${idleFor}ms, waiting for ${IDLE_SETTLE_MS}ms"
+                        } else {
+                            "a start is still in flight " +
+                                "(unpromoted=${AgentForegroundService.unpromotedInstanceCount()})"
+                        },
                 )
                 return
             }
+            idleSinceElapsed = 0L
             deferredStop = false
             AgentForegroundService.stopService(context)
             Log.d(TAG, "All sessions complete, service stopped")
@@ -1339,6 +1392,18 @@ object SessionActivityTracker {
      */
     internal fun consumeDeferredStop(): Boolean = synchronized(serviceLock) {
         if (!deferredStop) return@synchronized false
+        // [T-fgs-idle-settle] The deferral may only be honoured once the
+        // service has been unwanted for the settle window. A chat switch sets
+        // `deferredStop` at the outgoing screen's dispose and clears it ~40-120
+        // ms later at the incoming one's first composition; stopping here would
+        // destroy the instance in that gap and the next session would start it
+        // again. Leaving the flag set lets scheduleStopRetry() finish the job
+        // when the idleness is real.
+        if (idleSinceElapsed != 0L &&
+            SystemClock.elapsedRealtime() - idleSinceElapsed < IDLE_SETTLE_MS
+        ) {
+            return@synchronized false
+        }
         deferredStop = false
         true
     }
